@@ -1,0 +1,41 @@
+# ---- Credentials & secrets - never commit ----
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+key.properties
+local.properties
+google-services.json
+GoogleService-Info.plist
+*serviceAccount*.json
+*service-account*.json
+*credentials*.json
+*secret*.json
+*.secret
+*.secrets
+id_rsa
+id_ed25519
+.npmrc
+.pypirc
+.netrc
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+
+# Local data exports
+contacts_*.json
+professionals_*.json
