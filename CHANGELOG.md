@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-10-05 — `48b3df0` (branch `phase1`)
+
+**Add verified / unverified filter to contacts**
+
+Author: sajad yoosuf
+Previous commit on this side: `d39dc1b` Add verified / unverified status to contacts (2026-10-05)
+
+### Summary
+`GET /contacts` accepts `verified=true|false`, filtered in SQL so totals and paging stay correct. Notes: [docs/changes/2026-10-05-contact-verification.md](docs/changes/2026-10-05-contact-verification.md).
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Modified | `verification.py` | Adds `verified_clause()`, the SQL twin of `missing_fields()` |
+| Modified | `routes/contacts.py` | New `verified` query parameter on the list route |
+| Modified | `docs/changes/2026-10-05-contact-verification.md` | Notes updated |
+
+### Notes
+No migration. `verified_clause()` and `missing_fields()` must be changed together. Checked on an in-memory SQLite database (216 contacts, same result as the Python rule); not run against MySQL. The same commit also touched web and `API.md`.
+
 ## 2026-10-05 — `d39dc1b` (branch `phase1`)
 
 **Add verified / unverified status to contacts**
