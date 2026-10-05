@@ -113,6 +113,8 @@ class ContactResponse(ContactBase):
     lead_source: LeadSourceSummary | None = None
     referred_by: ContactSummary | None = None
     referrals_count: int = 0
+    is_verified: bool = False
+    missing_fields: list[str] = []
     current_stage: LeadStageResponse | None = None
     consumer_profile: ConsumerProfileResponse | None = None
     partner_profile: PartnerProfileResponse | None = None
@@ -134,6 +136,9 @@ class ContactListItem(BaseModel):
     assigned_to: NameRef
     created_by: NameRef | None = None
     created_at: datetime.datetime
+    # Computed on read: verified once no required detail is pending
+    is_verified: bool = False
+    missing_fields: list[str] = []
 
 
 class ContactListResponse(BaseModel):

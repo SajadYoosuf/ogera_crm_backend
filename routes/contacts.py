@@ -3,6 +3,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, aliased, joinedload
 from auth import get_current_user
 from database import get_db
+from verification import missing_fields
 from models import Contact, ConsumerProfile, Employee, LeadSource, LeadStage, PartnerProfile
 from schemas import (
     ContactCreate,
@@ -131,6 +132,7 @@ def list_contacts(
             joinedload(Contact.assigned_employee),
             joinedload(Contact.creator),
             joinedload(Contact.partner_profile),
+            joinedload(Contact.consumer_profile),
         )
         .order_by(Contact.created_at.desc(), Contact.id.desc())
         .offset(skip)
@@ -140,6 +142,7 @@ def list_contacts(
 
     items = []
     for contact, current_stage in rows:
+        pending = missing_fields(contact)
         item = ContactListItem.model_validate(
             {
                 "id": contact.id,
@@ -154,6 +157,8 @@ def list_contacts(
                 "assigned_to": contact.assigned_employee,
                 "created_by": contact.creator,
                 "created_at": contact.created_at,
+                "is_verified": not pending,
+                "missing_fields": pending,
             },
             from_attributes=True,
         )
@@ -178,6 +183,9 @@ def get_contact(contact_id: int, db: Session = Depends(get_db)):
         .filter(Contact.referred_by_id == contact_id)
         .scalar() or 0
     )
+
+    response.missing_fields = missing_fields(contact)
+    response.is_verified = not response.missing_fields
 
     # Populate current_stage
     if contact.lead_stages:
