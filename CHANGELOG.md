@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-10-05 — `d39dc1b` (branch `phase1`)
+
+**Add verified / unverified status to contacts**
+
+Author: sajad yoosuf
+Previous commit on this side: `c93ee92` docs: update changelog for 2ce70d2 (2026-10-03)
+
+### Summary
+Contacts now report `is_verified` and `missing_fields`, computed on read. Notes: [docs/changes/2026-10-05-contact-verification.md](docs/changes/2026-10-05-contact-verification.md).
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Added | `verification.py` | `missing_fields(contact)` holds the rules: name, phone, district, address, lead source; offline leads also GPS and creator; consumers need house stage, partners need work area |
+| Modified | `schemas/contact.py` | `is_verified` and `missing_fields` added to `ContactListItem` and `ContactResponse` |
+| Modified | `routes/contacts.py` | Fills the two fields in `GET /contacts` and `GET /contacts/{id}`; the list also eager-loads `consumer_profile` |
+| Added | `docs/changes/2026-10-05-contact-verification.md` | Change notes |
+
+### Notes
+No migration or new column. `API.md` at the repo root documents the fields. The same commit also touched web. The route itself was not run against a live database; the rules were checked with sample contacts.
+
 ## 2026-10-02 — `2ce70d2` (branch `phase1`)
 
 **Restructure repo into backend / web / mobile folders**
