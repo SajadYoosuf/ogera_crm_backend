@@ -12,9 +12,12 @@ Salespeople need to see at a glance which contacts are complete and which still 
 - `GET /contacts` also eager-loads `consumer_profile`.
 - `API.md` documents the two new response fields.
 
+## Added later
+- `GET /contacts?verified=true|false`: `verified_clause()` in `verification.py` is the SQL twin of `missing_fields()`, so no stored column is needed. Keep the two in sync.
+- Web: a Status dropdown in the filter bar.
+
 ## Out of scope
 - Manual "mark as verified" override.
-- Filtering the list by verified status (it is computed in Python, so a SQL filter would need a stored column).
 - Mobile app; dealer-specific fields (no dealer profile exists yet).
 
 ## Verification

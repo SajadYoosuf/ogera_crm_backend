@@ -1,4 +1,5 @@
-from models import Contact
+from sqlalchemy import and_, exists, func, or_, select
+from models import ConsumerProfile, Contact, LeadSource, PartnerProfile
 
 
 def missing_fields(contact: Contact) -> list[str]:
@@ -25,3 +26,47 @@ def missing_fields(contact: Contact) -> list[str]:
         if contact.partner_profile is None or not contact.partner_profile.work_area:
             missing.append("work_area")
     return missing
+
+
+def _filled(column):
+    return func.length(func.trim(func.coalesce(column, ""))) > 0
+
+
+def verified_clause():
+    """SQL twin of `missing_fields() == []`, so the list can filter and paginate in the database.
+
+    Keep the two in sync: any rule changed in one must change in the other.
+    """
+    offline_ids = select(LeadSource.id).where(LeadSource.slug == "offline")
+    # IS NULL keeps the whole expression non-NULL, so ~verified_clause() still matches these rows
+    offline_ok = or_(
+        Contact.lead_source_id.is_(None),
+        Contact.lead_source_id.not_in(offline_ids),
+        and_(
+            Contact.latitude.is_not(None),
+            Contact.longitude.is_not(None),
+            Contact.created_by.is_not(None),
+        ),
+    )
+    consumer_ok = or_(
+        Contact.contact_type != "consumer",
+        exists().where(
+            ConsumerProfile.contact_id == Contact.id, _filled(ConsumerProfile.house_stage)
+        ),
+    )
+    partner_ok = or_(
+        Contact.contact_type != "partner",
+        exists().where(
+            PartnerProfile.contact_id == Contact.id, _filled(PartnerProfile.work_area)
+        ),
+    )
+    return and_(
+        _filled(Contact.name),
+        _filled(Contact.phone),
+        _filled(Contact.district),
+        _filled(Contact.address),
+        Contact.lead_source_id.is_not(None),
+        offline_ok,
+        consumer_ok,
+        partner_ok,
+    )

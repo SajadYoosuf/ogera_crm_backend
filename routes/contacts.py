@@ -3,7 +3,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, aliased, joinedload
 from auth import get_current_user
 from database import get_db
-from verification import missing_fields
+from verification import missing_fields, verified_clause
 from models import Contact, ConsumerProfile, Employee, LeadSource, LeadStage, PartnerProfile
 from schemas import (
     ContactCreate,
@@ -81,6 +81,7 @@ def list_contacts(
     lead_source_id: int | None = None,
     assigned_to: int | None = None,
     created_by: int | None = None,
+    verified: bool | None = Query(None, description="true = only verified, false = only unverified"),
     db: Session = Depends(get_db),
 ):
     """List contacts (any type) with current stage, lead source and owner."""
@@ -122,6 +123,10 @@ def list_contacts(
             q = q.filter(Contact.assigned_to == assigned_to)
         if created_by is not None:
             q = q.filter(Contact.created_by == created_by)
+        if verified is True:
+            q = q.filter(verified_clause())
+        elif verified is False:
+            q = q.filter(~verified_clause())
         return q
 
     total = base(func.count(Contact.id)).scalar() or 0
