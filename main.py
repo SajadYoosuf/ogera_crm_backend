@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base, SessionLocal
 import models  # noqa: F401 — registers all models with Base before create_all
-from routes import auth_router, contacts_router, employees_router, lead_sources_router, roles_router, staff_locations_router
+from routes import auth_router, contacts_router, employees_router, lead_activities_router, lead_sources_router, roles_router, staff_locations_router
 from middleware import RequestLoggingMiddleware
 
 Base.metadata.create_all(bind=engine)
@@ -26,6 +26,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(contacts_router)
 app.include_router(employees_router)
+app.include_router(lead_activities_router)
 app.include_router(lead_sources_router)
 app.include_router(roles_router)
 app.include_router(staff_locations_router)
