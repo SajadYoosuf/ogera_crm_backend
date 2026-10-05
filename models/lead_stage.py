@@ -10,7 +10,7 @@ class LeadStage(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     contact_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("contacts.id"))
     stage: Mapped[str] = mapped_column(
-        SAEnum("new_lead", "first_call", "aware", "interested", "quoted", "won", "lost", "referral")
+        SAEnum("new_lead", "first_call", "aware", "interested", "quoted", "negotiating", "won", "lost", "referral", "repeat_customer")
     )
     changed_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("employees.id"))
     changed_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())

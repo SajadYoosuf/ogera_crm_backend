@@ -39,14 +39,14 @@ DEFAULT_LEAD_SOURCES = [
 ]
 
 DEFAULT_STAGE_TYPES = [
-    {"name": "New Lead", "slug": "new_lead", "description": "Initial contact", "order": 1},
-    {"name": "First Call", "slug": "first_call", "description": "First conversation", "order": 2},
-    {"name": "Aware", "slug": "aware", "description": "Customer aware of product", "order": 3},
-    {"name": "Interested", "slug": "interested", "description": "Showed interest", "order": 4},
-    {"name": "Quoted", "slug": "quoted", "description": "Quote sent", "order": 5},
-    {"name": "Won", "slug": "won", "description": "Deal closed successfully", "order": 6},
-    {"name": "Lost", "slug": "lost", "description": "Deal lost", "order": 7},
-    {"name": "Referral", "slug": "referral", "description": "Post-sale referral", "order": 8},
+    {"name": "New Lead", "slug": "new_lead", "description": "Just entered. Not yet contacted. 24h clock ticking.", "order": 1},
+    {"name": "Aware", "slug": "aware", "description": "Contacted. Needs education before they're ready to hear a price.", "order": 2},
+    {"name": "Interested", "slug": "interested", "description": "Understands the product. Ready for demo or detailed info.", "order": 3},
+    {"name": "Quoted", "slug": "quoted", "description": "Quote sent. Now the 3-day follow-up clock starts.", "order": 4},
+    {"name": "Negotiating", "slug": "negotiating", "description": "Active discussion on price, timing, or terms.", "order": 5},
+    {"name": "Won", "slug": "won", "description": "Deal closed. Order being created. Payment tracking begins.", "order": 6},
+    {"name": "Lost", "slug": "lost", "description": "Did not buy. Reason captured. Re-engage in 60 days.", "order": 7},
+    {"name": "Repeat Customer", "slug": "repeat_customer", "description": "Bought again or came back for another purchase.", "order": 8},
 ]
 
 

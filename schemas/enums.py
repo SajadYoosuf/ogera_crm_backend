@@ -23,9 +23,11 @@ class StageEnum(str, enum.Enum):
     aware = "aware"
     interested = "interested"
     quoted = "quoted"
+    negotiating = "negotiating"
     won = "won"
     lost = "lost"
     referral = "referral"
+    repeat_customer = "repeat_customer"
 
 
 class LossReasonEnum(str, enum.Enum):
