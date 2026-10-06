@@ -29,10 +29,8 @@ class LeadActivityCreate(BaseModel):
     @model_validator(mode="after")
     def validate_activity(self) -> "LeadActivityCreate":
         allowed = ACTIVITY_SUBTYPES[self.kind]
-        if allowed and self.subtype not in allowed:
-            raise ValueError(f"subtype must be one of {', '.join(allowed)} for {self.kind}")
-        if not allowed and self.subtype is not None:
-            raise ValueError(f"{self.kind} has no subtype")
+        if self.subtype is not None and self.subtype not in allowed:
+            raise ValueError(f"subtype must be one of {', '.join(allowed) or 'none'} for {self.kind}")
         if self.kind == "internal_note" and not (self.notes and self.notes.strip()):
             raise ValueError("notes are required for an internal note")
         if self.kind == "internal_note" and self.due_at is not None:
