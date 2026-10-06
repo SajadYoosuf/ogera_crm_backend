@@ -233,11 +233,8 @@ def create_contact(
     contact = Contact(**data, assigned_to=assigned_to, created_by=current_user.id)
     if body.consumer_profile is not None:
         contact.consumer_profile = ConsumerProfile(**body.consumer_profile.model_dump())
-    # Every contact starts in a stage (same rule as scripts/backfill_stages.py)
-    aware = body.consumer_profile is not None and body.consumer_profile.awareness_mode == 1
-    contact.lead_stages.append(
-        LeadStage(stage="aware" if aware else "new_lead", changed_by=current_user.id)
-    )
+    # Every contact starts as a New Lead; Aware is only reached by moving the lead there
+    contact.lead_stages.append(LeadStage(stage="new_lead", changed_by=current_user.id))
     db.add(contact)
     db.commit()
     db.refresh(contact)

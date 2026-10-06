@@ -20,6 +20,7 @@ class ContactType(str, enum.Enum):
 class StageEnum(str, enum.Enum):
     new_lead = "new_lead"
     first_call = "first_call"
+    connected = "connected"
     aware = "aware"
     interested = "interested"
     quoted = "quoted"

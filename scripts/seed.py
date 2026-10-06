@@ -40,13 +40,15 @@ DEFAULT_LEAD_SOURCES = [
 
 DEFAULT_STAGE_TYPES = [
     {"name": "New Lead", "slug": "new_lead", "description": "Just entered. Not yet contacted. 24h clock ticking.", "order": 1},
-    {"name": "Aware", "slug": "aware", "description": "Contacted. Needs education before they're ready to hear a price.", "order": 2},
-    {"name": "Interested", "slug": "interested", "description": "Understands the product. Ready for demo or detailed info.", "order": 3},
-    {"name": "Quoted", "slug": "quoted", "description": "Quote sent. Now the 3-day follow-up clock starts.", "order": 4},
-    {"name": "Negotiating", "slug": "negotiating", "description": "Active discussion on price, timing, or terms.", "order": 5},
-    {"name": "Won", "slug": "won", "description": "Deal closed. Order being created. Payment tracking begins.", "order": 6},
-    {"name": "Lost", "slug": "lost", "description": "Did not buy. Reason captured. Re-engage in 60 days.", "order": 7},
-    {"name": "Repeat Customer", "slug": "repeat_customer", "description": "Bought again or came back for another purchase.", "order": 8},
+    {"name": "First Call", "slug": "first_call", "description": "First call attempted. Waiting to reach them.", "order": 2},
+    {"name": "Connected", "slug": "connected", "description": "Spoke to them. Qualify the need and decide the next step.", "order": 3},
+    {"name": "Aware", "slug": "aware", "description": "Contacted. Needs education before they're ready to hear a price.", "order": 4},
+    {"name": "Interested", "slug": "interested", "description": "Understands the product. Ready for demo or detailed info.", "order": 5},
+    {"name": "Quoted", "slug": "quoted", "description": "Quote sent. Now the 3-day follow-up clock starts.", "order": 6},
+    {"name": "Negotiating", "slug": "negotiating", "description": "Active discussion on price, timing, or terms.", "order": 7},
+    {"name": "Won", "slug": "won", "description": "Deal closed. Order being created. Payment tracking begins.", "order": 8},
+    {"name": "Lost", "slug": "lost", "description": "Did not buy. Reason captured. Re-engage in 60 days.", "order": 9},
+    {"name": "Repeat Customer", "slug": "repeat_customer", "description": "Bought again or came back for another purchase.", "order": 10},
 ]
 
 

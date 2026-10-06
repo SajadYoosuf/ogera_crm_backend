@@ -14,3 +14,9 @@ Removing legacy values, order creation on Won, payment tracking, automatic re-en
 
 ## Verification
 Import the app, POST a `negotiating` and a `repeat_customer` stage on a contact, confirm `lost` still requires `loss_reason`.
+
+## Update 2026-10-06
+- Added `connected` (and `first_call` is now a real stage, no longer legacy). Pipeline order: new_lead, first_call, connected, aware, interested, quoted, negotiating, won, lost, repeat_customer.
+- New contacts always start as `new_lead` (Aware is reached by moving the lead there); `awareness_mode` no longer picks the first stage.
+- `migrate_lead_stage_values.sql` now includes `connected`; applied to the live database on 2026-10-06.
+- Data fixes run on the live database on 2026-10-06: `scripts/reassign_admin_leads.py` (531 admin-assigned contacts moved to sajad yoosuf, the only eligible employee) and `scripts/reset_aware_to_new_lead.py` (127 contacts moved from aware to new_lead; old rows stay in history).
