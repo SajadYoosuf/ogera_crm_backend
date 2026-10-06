@@ -1,23 +1,26 @@
 import datetime
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Numeric, String, Text, func
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Index, Numeric, String, Text, Time, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
 
 class LeadActivity(Base):
-    """A logged action or scheduled task on a contact: a call, visit, WhatsApp, quote, demo or note."""
+    """An activity logged on a contact (call, visit, WhatsApp, quote, demo, note) or a scheduled follow-up task."""
 
     __tablename__ = "lead_activities"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     contact_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("contacts.id"))
-    kind: Mapped[str] = mapped_column(String(20))
-    subtype: Mapped[str | None] = mapped_column(String(30))
+    type: Mapped[str] = mapped_column(String(20))
     notes: Mapped[str | None] = mapped_column(Text)
-    # Set for scheduled tasks; a task is pending until marked done
-    due_at: Mapped[datetime.datetime | None] = mapped_column(DateTime)
-    status: Mapped[str] = mapped_column(String(10), default="done")  # "pending" | "done"
-    done_at: Mapped[datetime.datetime | None] = mapped_column(DateTime)
+    # A log entry is created "done"; a scheduled follow-up starts "pending" until completed
+    status: Mapped[str] = mapped_column(String(10), default="done")
+    # Only for scheduled follow-ups; the time is optional (date-only task)
+    scheduled_date: Mapped[datetime.date | None] = mapped_column(Date)
+    scheduled_time: Mapped[datetime.time | None] = mapped_column(Time)
+    assigned_to: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("employees.id"))
+    completed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime)
+    completed_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("employees.id"))
     # GPS of a field visit
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
@@ -25,8 +28,11 @@ class LeadActivity(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     creator: Mapped["Employee"] = relationship("Employee", foreign_keys=[created_by])
+    assignee: Mapped["Employee | None"] = relationship("Employee", foreign_keys=[assigned_to])
+    completer: Mapped["Employee | None"] = relationship("Employee", foreign_keys=[completed_by])
 
     __table_args__ = (
         Index("idx_lead_activities_contact_id", "contact_id"),
-        Index("idx_lead_activities_due", "status", "due_at"),
+        Index("idx_lead_activities_due", "status", "scheduled_date"),
+        Index("idx_lead_activities_assigned", "assigned_to"),
     )
