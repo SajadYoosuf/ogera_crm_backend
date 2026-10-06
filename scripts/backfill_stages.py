@@ -1,6 +1,6 @@
 """
 Backfill an initial lead_stages row for contacts that have none.
-awareness_mode=1 -> 'aware', otherwise 'new_lead'. Stage time = contact.created_at.
+every contact starts as 'new_lead'. Stage time = contact.created_at.
     python scripts/backfill_stages.py           # dry run
     python scripts/backfill_stages.py --commit
 """
@@ -31,7 +31,7 @@ def main():
         )
         counts = {"aware": 0, "new_lead": 0}
         for contact, mode in rows:
-            stage = "aware" if mode == 1 else "new_lead"
+            stage = "new_lead"
             counts[stage] += 1
             db.add(LeadStage(
                 contact_id=contact.id, stage=stage,
