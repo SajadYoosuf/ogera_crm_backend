@@ -12,10 +12,9 @@ def missing_fields(contact: Contact) -> list[str]:
     if contact.lead_source_id is None:
         missing.append("lead_source")
 
-    # Field-visit leads need the GPS pin and who entered them
+    # Field-visit leads need who entered them. The GPS pin is only asked for when the contact is
+    # created, so imported offline contacts without one are still verified.
     if contact.lead_source is not None and contact.lead_source.slug == "offline":
-        if contact.latitude is None or contact.longitude is None:
-            missing.append("location")
         if contact.created_by is None:
             missing.append("created_by")
 
@@ -42,11 +41,7 @@ def verified_clause():
     offline_ok = or_(
         Contact.lead_source_id.is_(None),
         Contact.lead_source_id.not_in(offline_ids),
-        and_(
-            Contact.latitude.is_not(None),
-            Contact.longitude.is_not(None),
-            Contact.created_by.is_not(None),
-        ),
+        Contact.created_by.is_not(None),
     )
     consumer_ok = or_(
         Contact.contact_type != "consumer",

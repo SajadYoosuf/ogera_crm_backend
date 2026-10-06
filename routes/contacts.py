@@ -56,10 +56,10 @@ def _ensure_referrer(db: Session, referred_by_id: int | None, contact_id: int | 
         raise HTTPException(status_code=400, detail="Referring contact not found")
 
 
-def _check_location(source: LeadSource | None, latitude, longitude) -> None:
-    """GPS location is required for Offline (field visit) leads and not allowed otherwise."""
+def _check_location(source: LeadSource | None, latitude, longitude, creating: bool = False) -> None:
+    """Offline (field visit) leads must come with a location when they are created; it is not allowed on other sources."""
     if source is not None and source.slug == "offline":
-        if latitude is None or longitude is None:
+        if creating and (latitude is None or longitude is None):
             raise HTTPException(
                 status_code=400, detail="latitude and longitude are required for offline leads"
             )
@@ -214,7 +214,7 @@ def create_contact(
         source = db.query(LeadSource).filter(LeadSource.id == body.lead_source_id).first()
         if not source:
             raise HTTPException(status_code=400, detail="Lead source not found")
-    _check_location(source, body.latitude, body.longitude)
+    _check_location(source, body.latitude, body.longitude, creating=True)
     _ensure_referrer(db, body.referred_by_id)
 
     if body.consumer_profile is not None and body.contact_type != "consumer":
