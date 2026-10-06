@@ -420,6 +420,24 @@ def add_contact_stage(
     if not employee:
         raise HTTPException(status_code=400, detail="Employee not found")
 
+    # A lead only moves on from New Lead once its details are verified (Lost is always allowed)
+    if body.stage not in (StageEnum.new_lead, StageEnum.lost):
+        latest = (
+            db.query(LeadStage)
+            .filter(LeadStage.contact_id == contact_id)
+            .order_by(LeadStage.id.desc())
+            .first()
+        )
+        pending = missing_fields(contact)
+        if (latest is None or latest.stage == "new_lead") and pending:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Complete the lead's details before moving it to the next stage",
+                    "missing_fields": pending,
+                },
+            )
+
     # Create stage with contact_id from URL
     stage_data = body.model_dump()
     stage_data["contact_id"] = contact_id

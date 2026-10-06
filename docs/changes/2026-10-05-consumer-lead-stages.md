@@ -20,3 +20,4 @@ Import the app, POST a `negotiating` and a `repeat_customer` stage on a contact,
 - New contacts always start as `new_lead` (Aware is reached by moving the lead there); `awareness_mode` no longer picks the first stage.
 - `migrate_lead_stage_values.sql` now includes `connected`; applied to the live database on 2026-10-06.
 - Data fixes run on the live database on 2026-10-06: `scripts/reassign_admin_leads.py` (531 admin-assigned contacts moved to sajad yoosuf, the only eligible employee) and `scripts/reset_aware_to_new_lead.py` (127 contacts moved from aware to new_lead; old rows stay in history).
+- Stage gate: `POST /contacts/{id}/stages` returns `409` with `{ message, missing_fields }` when a lead leaves `new_lead` (to anything but `lost`) while `missing_fields(contact)` is not empty. The web shows a popup listing the missing details (`UnverifiedDialog`).
