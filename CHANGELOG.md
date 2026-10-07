@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-10-07 — `4914a08`..`cc64a9e` (branch `phase1`)
+
+**Lead followup: consumer stages, verification gate, activity log and follow-up tasks, configurable CORS**
+
+Author: sajad yoosuf
+Previous commit on this side: `48b3df0` Add verified / unverified filter to contacts (2026-10-05)
+
+### Summary
+Backend support for the Lead Followup page. Notes: [consumer-lead-stages](docs/changes/2026-10-05-consumer-lead-stages.md), [lead-activities](docs/changes/2026-10-05-lead-activities.md), [activity-followup-schedule](docs/changes/2026-10-06-activity-followup-schedule.md), [offline-location-on-create](docs/changes/2026-10-06-offline-location-on-create.md), [cors-origins](docs/changes/2026-10-07-cors-origins.md).
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Modified | `schemas/enums.py`, `models/lead_stage.py` | Stages `first_call`, `connected`, `negotiating`, `repeat_customer` added; `referral` kept |
+| Modified | `routes/contacts.py` | New contacts start as `new_lead`; `POST /contacts/{id}/stages` returns 409 with `missing_fields` when an unverified lead leaves `new_lead` (Lost allowed); offline coordinates required on create only |
+| Modified | `verification.py` | Offline contacts no longer need a GPS location to be verified (SQL and Python rules kept in sync) |
+| Added | `models/lead_activity.py`, `schemas/lead_activity.py`, `routes/lead_activities.py` | `lead_activities` table and `GET/POST/PATCH /contacts/{id}/activities` (log, schedule, mark done, reschedule) |
+| Modified | `models/__init__.py`, `routes/__init__.py`, `main.py` | Register the new model and router; CORS uses `CORS_ORIGINS` |
+| Modified | `config.py` | `CORS_ORIGINS` environment variable (comma separated, default `http://localhost:3000`) |
+| Modified | `scripts/seed.py`, `scripts/backfill_stages.py` | Stage list and descriptions; backfill starts everyone as `new_lead` |
+| Added | `scripts/migrate_lead_stage_values.sql`, `scripts/migrate_lead_activities_v2.sql` | Widen the stage ENUM; recreate `lead_activities` |
+| Added | `scripts/reassign_admin_leads.py`, `scripts/reset_aware_to_new_lead.py` | One-off data fixes (dry run by default, `--commit` to write) |
+| Added | `docs/changes/*` | Change notes (five files) |
+
+### Notes
+- Applied to the live database on 2026-10-06: the stage ENUM widening, the `lead_activities` rebuild (table was empty), 531 admin-assigned contacts moved to sajad yoosuf, 127 contacts moved from `aware` to `new_lead`.
+- A database used by another deployment (for example the Render service, if it points elsewhere) needs the two SQL files run once.
+- Set `CORS_ORIGINS` on the Render service to every web address that calls the API. Render's start command should be `python -m uvicorn main:app --host 0.0.0.0 --port $PORT`.
+- `API.md` documents the new endpoints and the 409 rule. The web side of the same work is in `ogera_crm_web/CHANGELOG.md`.
+
 ## 2026-10-05 — `48b3df0` (branch `phase1`)
 
 **Add verified / unverified filter to contacts**
