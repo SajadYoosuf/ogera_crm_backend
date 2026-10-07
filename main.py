@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from config import CORS_ORIGINS
 from database import engine, Base, SessionLocal
 import models  # noqa: F401 — registers all models with Base before create_all
 from routes import auth_router, contacts_router, employees_router, lead_activities_router, lead_sources_router, roles_router, staff_locations_router
@@ -16,7 +17,7 @@ app.add_middleware(RequestLoggingMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

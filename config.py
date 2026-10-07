@@ -4,6 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Browser origins allowed to call the API (comma separated). Add the deployed web app's address here.
+CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
+
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
