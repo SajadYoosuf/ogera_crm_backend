@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-10-08 — `a47a286` (branch `phase1`)
+
+**Add partner profession type enum and partner type picker in contact form**
+
+Author: sajad yoosuf
+Previous commit on this side: `849413e` docs: update changelog for cc64a9e (2026-10-07)
+
+### Summary
+Partner type is now a fixed `ProfessionType` enum that contacts can set on create and update. Notes: `docs/changes/2026-10-08-partner-profession-type.md`.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Added | `docs/changes/2026-10-08-partner-profession-type.md` | Change notes |
+| Modified | `routes/contacts.py` | New `GET /contacts/profession-types`; `partner_profile` handled on create and update (partner contacts only); `profession_type` filter takes the enum and matches legacy text |
+| Modified | `schemas/__init__.py` | Export `ProfessionType` |
+| Modified | `schemas/contact.py` | `partner_profile` on `ContactCreate`/`ContactUpdate`; list rows use the enum |
+| Modified | `schemas/enums.py` | New `ProfessionType` (plumber, engineer, interior_designer, architect, contractor, electrician, other) with `normalise()` |
+| Modified | `schemas/partner_profile.py` | `profession_type` is the enum; responses map legacy text to a member |
+| Modified | `scripts/import_professionals.py` | Writes lowercase profession values |
+
+### Notes
+No migration: the column stays VARCHAR and old rows are normalised on read (unknown text becomes `other`, which pickers do not offer). `API.md` updated. The web contact form uses this in the same commit; mobile is not changed yet.
+
 ## 2026-10-07 — `4914a08`..`cc64a9e` (branch `phase1`)
 
 **Lead followup: consumer stages, verification gate, activity log and follow-up tasks, configurable CORS**
