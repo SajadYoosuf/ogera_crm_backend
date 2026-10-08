@@ -23,7 +23,7 @@ EXCLUDED_ROLES = ("admin", "manager", "support")
 OWNER_EMAIL = None  # None -> the single active employee outside EXCLUDED_ROLES
 MISSING_DISTRICT = "Unknown"  # contacts.district is NOT NULL
 LEAD_SOURCE_SLUG = "offline"
-PROFESSION_TYPES = {"contractor": "Contractor", "engineer": "Engineer", "plumber": "Plumber", "other": "Other"}
+PROFESSION_TYPES = {"contractor": "contractor", "engineer": "engineer", "plumber": "plumber", "other": "other"}
 
 
 def clean(v):
@@ -76,7 +76,7 @@ def main():
             stats["trimmed_phone"] += len(re.sub(r"\D", "", r["phone"])) == 11
 
             ptype = clean(r.get("type"))
-            profession = PROFESSION_TYPES.get((ptype or "").lower(), ptype) or "Other"
+            profession = PROFESSION_TYPES.get((ptype or "").lower(), ptype) or "other"
             place = clean(r.get("place"))
             # `place` repeats the trade for most rows; only keep it when it is a real work area
             work_area = place if place and place.lower() not in ("contactor", "contractor", "engineer", "plumber") else None

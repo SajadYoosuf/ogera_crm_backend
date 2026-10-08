@@ -1,7 +1,7 @@
 import datetime
 from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
-from .enums import ContactType, StageEnum
+from .enums import ContactType, ProfessionType, StageEnum
 from .employee import EmployeeSummary
 from .lead_source import LeadSourceSummary
 from .lead_stage import LeadStageResponse
@@ -10,7 +10,7 @@ from .consumer_profile import (
     ConsumerProfileResponse,
     ConsumerProfileUpdate,
 )
-from .partner_profile import PartnerProfileResponse
+from .partner_profile import PartnerProfileBase, PartnerProfileResponse, PartnerProfileUpdate
 
 
 class ContactSummary(BaseModel):
@@ -64,6 +64,8 @@ class ContactCreate(ContactBase):
     longitude: Longitude | None = None
     # Optional consumer details, created in the same transaction (consumer contacts only)
     consumer_profile: ConsumerProfileBase | None = None
+    # Optional partner details (partner contacts only); profession_type picks from ProfessionType
+    partner_profile: PartnerProfileBase | None = None
 
 
 class ContactUpdate(BaseModel):
@@ -80,6 +82,8 @@ class ContactUpdate(BaseModel):
     lead_source_id: int | None = None
     # Creates the profile if the contact has none, otherwise updates the given fields
     consumer_profile: ConsumerProfileUpdate | None = None
+    # Same for partners; a profile created here must include profession_type
+    partner_profile: PartnerProfileUpdate | None = None
 
 
 class ContactResponse(ContactBase):
@@ -130,7 +134,7 @@ class ContactListItem(BaseModel):
     phone: str
     address: str | None = None
     district: str
-    profession_type: str | None = None  # partners only
+    profession_type: ProfessionType | None = None  # partners only
     lead_stage: LeadStageSummary | None = None
     lead_source: NameRef | None = None
     assigned_to: NameRef

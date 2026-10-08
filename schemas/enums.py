@@ -17,6 +17,22 @@ class ContactType(str, enum.Enum):
     dealer = "dealer"
 
 
+class ProfessionType(str, enum.Enum):
+    plumber = "plumber"
+    engineer = "engineer"
+    interior_designer = "interior_designer"
+    architect = "architect"
+    contractor = "contractor"
+    electrician = "electrician"
+    other = "other"                      # legacy imports; clients do not offer it for new partners
+
+    @classmethod
+    def normalise(cls, raw: str) -> "ProfessionType":
+        """Map legacy free text ("Interior Designer") to a member; unknown text becomes other."""
+        key = raw.strip().lower().replace(" ", "_")
+        return cls(key) if key in cls._value2member_map_ else cls.other
+
+
 class StageEnum(str, enum.Enum):
     new_lead = "new_lead"
     first_call = "first_call"

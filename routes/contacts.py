@@ -11,6 +11,7 @@ from schemas import (
     ContactListResponse,
     ContactResponse,
     ContactType,
+    ProfessionType,
     StageEnum,
     ContactUpdate,
     ConsumerProfileResponse,
@@ -74,7 +75,7 @@ def list_contacts(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
     contact_type: ContactType | None = None,
-    profession_type: str | None = Query(None, description="Partner profession, e.g. Plumber"),
+    profession_type: ProfessionType | None = Query(None, description="Partner profession, e.g. plumber"),
     district: str | None = None,
     search: str | None = Query(None, description="Matches name or phone"),
     stage: StageEnum | None = None,
@@ -108,7 +109,8 @@ def list_contacts(
             q = q.filter(Contact.contact_type == contact_type.value)
         if profession_type:
             q = q.join(PartnerProfile, PartnerProfile.contact_id == Contact.id).filter(
-                PartnerProfile.profession_type == profession_type
+                # Legacy rows hold free text ("Plumber", "Interior Designer"), so compare normalised
+                func.replace(func.lower(PartnerProfile.profession_type), " ", "_") == profession_type.value
             )
         if district:
             q = q.filter(Contact.district.ilike(f"%{district}%"))
@@ -156,7 +158,7 @@ def list_contacts(
                 "phone": contact.phone,
                 "address": contact.address,
                 "district": contact.district,
-                "profession_type": contact.partner_profile.profession_type if contact.partner_profile else None,
+                "profession_type": ProfessionType.normalise(contact.partner_profile.profession_type) if contact.partner_profile else None,
                 "lead_stage": current_stage,
                 "lead_source": contact.lead_source,
                 "assigned_to": contact.assigned_employee,
@@ -170,6 +172,16 @@ def list_contacts(
         items.append(item)
 
     return ContactListResponse(items=items, total=total, skip=skip, limit=limit)
+
+
+@router.get("/profession-types")
+def list_profession_types():
+    """Partner profession options for the partner-type picker (value is what the API stores)."""
+    return [
+        {"value": p.value, "label": p.value.replace("_", " ").title()}
+        for p in ProfessionType
+        if p is not ProfessionType.other
+    ]
 
 
 @router.get("/{contact_id}", response_model=ContactResponse)
@@ -229,10 +241,17 @@ def create_contact(
             raise HTTPException(status_code=400, detail="Assigned employee not found")
         assigned_to = body.assigned_to
 
-    data = body.model_dump(exclude={"consumer_profile", "assigned_to"})
+    if body.partner_profile is not None and body.contact_type != "partner":
+        raise HTTPException(
+            status_code=400, detail="partner_profile is only allowed for partner contacts"
+        )
+
+    data = body.model_dump(exclude={"consumer_profile", "partner_profile", "assigned_to"})
     contact = Contact(**data, assigned_to=assigned_to, created_by=current_user.id)
     if body.consumer_profile is not None:
         contact.consumer_profile = ConsumerProfile(**body.consumer_profile.model_dump())
+    if body.partner_profile is not None:
+        contact.partner_profile = PartnerProfile(**body.partner_profile.model_dump(mode="json"))
     # Every contact starts as a New Lead; Aware is only reached by moving the lead there
     contact.lead_stages.append(LeadStage(stage="new_lead", changed_by=current_user.id))
     db.add(contact)
@@ -285,7 +304,7 @@ def update_contact(
             body.longitude if "longitude" in fields else contact.longitude,
         )
 
-    update_data = body.model_dump(exclude_unset=True, exclude={"consumer_profile"})
+    update_data = body.model_dump(exclude_unset=True, exclude={"consumer_profile", "partner_profile"})
     # Required columns can't be cleared
     for key in ("contact_type", "name", "phone", "district", "address", "assigned_to"):
         if key in update_data and update_data[key] is None:
@@ -304,6 +323,24 @@ def update_contact(
         else:
             for field, value in profile_data.items():
                 setattr(contact.consumer_profile, field, value)
+
+    if body.partner_profile is not None:
+        if contact.contact_type != "partner":
+            raise HTTPException(
+                status_code=400, detail="partner_profile is only allowed for partner contacts"
+            )
+        profile_data = body.partner_profile.model_dump(exclude_unset=True, mode="json")
+        if contact.partner_profile is None:
+            if not profile_data.get("profession_type"):
+                raise HTTPException(
+                    status_code=400, detail="profession_type is required for a partner"
+                )
+            contact.partner_profile = PartnerProfile(**profile_data)
+        else:
+            for field, value in profile_data.items():
+                if field == "profession_type" and value is None:
+                    continue
+                setattr(contact.partner_profile, field, value)
 
     db.add(contact)
     db.commit()
