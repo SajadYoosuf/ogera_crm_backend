@@ -16,26 +16,42 @@ router = APIRouter(
 )
 
 
-def _task_state(activity: LeadActivity) -> tuple[str, int]:
-    """(state, days overdue) for an activity; log entries and finished tasks are always "done"."""
+# Roles that see and manage every employee's tasks; everyone else only their own.
+TASK_MANAGER_ROLES = {"admin", "manager", "sales_head"}
+
+
+def can_manage_tasks(user: Employee) -> bool:
+    return user.role in TASK_MANAGER_ROLES
+
+
+def task_state(activity: LeadActivity, now: datetime.datetime | None = None) -> tuple[str, int]:
+    """(state, days overdue) for an activity; log entries and finished tasks are always "done".
+
+    A task with a time is overdue once that time has passed; a date-only task is due until the day ends.
+    """
     if activity.status == "done":
         return "done", 0
-    today = datetime.date.today()
+    now = now or datetime.datetime.now()
+    today = now.date()
     if activity.scheduled_date is None:
         return "pending", 0
     if activity.scheduled_date < today:
         return "overdue", (today - activity.scheduled_date).days
-    return ("due_today" if activity.scheduled_date == today else "pending"), 0
+    if activity.scheduled_date == today:
+        if activity.scheduled_time is not None and activity.scheduled_time < now.time():
+            return "overdue", 0
+        return "due_today", 0
+    return "pending", 0
 
 
-def _response(activity: LeadActivity) -> LeadActivityResponse:
+def activity_response(activity: LeadActivity) -> LeadActivityResponse:
     response = LeadActivityResponse.model_validate(activity, from_attributes=True)
     response.created_by_name = activity.creator.name if activity.creator else None
     response.assigned_to_name = activity.assignee.name if activity.assignee else None
     response.completed_by_name = activity.completer.name if activity.completer else None
     if activity.latitude is not None and activity.longitude is not None:
         response.coordinates = Coordinates(lat=float(activity.latitude), lng=float(activity.longitude))
-    response.task_state, response.overdue_days = _task_state(activity)
+    response.task_state, response.overdue_days = task_state(activity)
     return response
 
 
@@ -72,7 +88,7 @@ def list_activities(contact_id: int, db: Session = Depends(get_db)):
         .order_by(LeadActivity.created_at.desc(), LeadActivity.id.desc())
         .all()
     )
-    return [_response(row) for row in rows]
+    return [activity_response(row) for row in rows]
 
 
 @router.post("/{contact_id}/activities", response_model=LeadActivityResponse, status_code=201)
@@ -106,7 +122,7 @@ def create_activity(
     db.add(activity)
     db.commit()
     db.refresh(activity)
-    return _response(activity)
+    return activity_response(activity)
 
 
 @router.patch("/{contact_id}/activities/{activity_id}", response_model=LeadActivityResponse)
@@ -124,14 +140,28 @@ def update_activity(
         raise HTTPException(status_code=409, detail="Only scheduled follow-ups can be changed")
     if activity.status == "done":
         raise HTTPException(status_code=409, detail="Follow-up is already done")
+    if not can_manage_tasks(current_user) and activity.assigned_to != current_user.id:
+        raise HTTPException(status_code=403, detail="This follow-up is assigned to someone else")
 
     if body.status == "done":
+        now = datetime.datetime.now()
         activity.status = "done"
-        activity.completed_at = datetime.datetime.now()
+        activity.completed_at = now
         activity.completed_by = current_user.id
+        # The outcome is the record of what happened, so it goes into the activity log
+        db.add(LeadActivity(
+            contact_id=contact_id,
+            type=activity.type,
+            notes=body.outcome.strip(),
+            status="done",
+            task_id=activity.id,
+            completed_at=now,
+            completed_by=current_user.id,
+            created_by=current_user.id,
+        ))
     else:
         activity.scheduled_date = body.scheduled_date
         activity.scheduled_time = body.scheduled_time  # None clears the time (date-only task)
     db.commit()
     db.refresh(activity)
-    return _response(activity)
+    return activity_response(activity)

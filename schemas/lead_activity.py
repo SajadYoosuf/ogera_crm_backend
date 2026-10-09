@@ -52,9 +52,10 @@ class LeadActivityCreate(BaseModel):
 
 
 class LeadActivityUpdate(BaseModel):
-    """Mark a pending task done (`status`), or move it (`scheduled_date`, optional `scheduled_time`)."""
+    """Mark a pending task done (`status` + `outcome`), or move it (`scheduled_date`, optional `scheduled_time`)."""
 
     status: Literal["done"] | None = None
+    outcome: str | None = None  # what happened; logged as an activity when the task is marked done
     scheduled_date: datetime.date | None = None
     scheduled_time: datetime.time | None = None
 
@@ -64,6 +65,10 @@ class LeadActivityUpdate(BaseModel):
             raise ValueError("mark done or reschedule, not both")
         if self.status is None and self.scheduled_date is None:
             raise ValueError("send status or scheduled_date")
+        if self.status == "done" and not (self.outcome and self.outcome.strip()):
+            raise ValueError("outcome is required to mark a follow-up done")
+        if self.status is None and self.outcome is not None:
+            raise ValueError("outcome is only for marking a follow-up done")
         if self.scheduled_date is not None and self.scheduled_date < datetime.date.today():
             raise ValueError("scheduled_date cannot be in the past")
         return self
@@ -84,8 +89,31 @@ class LeadActivityResponse(BaseModel):
     completed_by: int | None
     completed_by_name: str | None = None
     coordinates: Coordinates | None = None
+    task_id: int | None = None
     created_by: int
     created_by_name: str | None = None
     created_at: datetime.datetime
     task_state: TaskState = "done"
     overdue_days: int = 0
+
+
+class TaskResponse(LeadActivityResponse):
+    """A follow-up task together with the contact it belongs to."""
+
+    contact_id: int
+    contact_name: str
+    contact_phone: str
+    contact_type: str
+
+
+class TaskSummary(BaseModel):
+    overdue: int = 0
+    today: int = 0
+    upcoming: int = 0
+    done: int = 0
+
+
+class TaskListResponse(BaseModel):
+    items: list[TaskResponse]
+    total: int
+    summary: TaskSummary
