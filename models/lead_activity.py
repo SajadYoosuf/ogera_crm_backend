@@ -24,8 +24,6 @@ class LeadActivity(Base):
     # GPS of a field visit
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
-    # On an outcome log entry: the follow-up task it records the result of
-    task_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("lead_activities.id"))
     created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("employees.id"))
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -37,5 +35,4 @@ class LeadActivity(Base):
         Index("idx_lead_activities_contact_id", "contact_id"),
         Index("idx_lead_activities_due", "status", "scheduled_date"),
         Index("idx_lead_activities_assigned", "assigned_to", "status", "scheduled_date"),
-        Index("idx_lead_activities_task_id", "task_id"),
     )

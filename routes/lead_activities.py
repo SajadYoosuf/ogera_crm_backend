@@ -154,7 +154,6 @@ def update_activity(
             type=activity.type,
             notes=body.outcome.strip(),
             status="done",
-            task_id=activity.id,
             completed_at=now,
             completed_by=current_user.id,
             created_by=current_user.id,

@@ -89,7 +89,6 @@ class LeadActivityResponse(BaseModel):
     completed_by: int | None
     completed_by_name: str | None = None
     coordinates: Coordinates | None = None
-    task_id: int | None = None
     created_by: int
     created_by_name: str | None = None
     created_at: datetime.datetime
