@@ -7,6 +7,7 @@ from .lead_stage import LeadStage
 from .lead_activity import LeadActivity
 from .consumer_profile import ConsumerProfile
 from .partner_profile import PartnerProfile
+from .product import Product, ProductOption
 from .staff_location import StaffLocation, StaffLocationState
 
 __all__ = [
@@ -21,6 +22,8 @@ __all__ = [
     "LeadActivity",
     "ConsumerProfile",
     "PartnerProfile",
+    "Product",
+    "ProductOption",
     "StaffLocation",
     "StaffLocationState",
 ]
