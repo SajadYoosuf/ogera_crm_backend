@@ -6,3 +6,6 @@ python-dotenv
 pydantic[email]
 passlib[argon2]
 python-jose[cryptography]
+python-multipart
+openpyxl
+reportlab

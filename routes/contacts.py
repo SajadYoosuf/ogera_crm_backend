@@ -1,7 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from datetime import date, timedelta
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, aliased, joinedload
-from auth import get_current_user
+import json
+
+import contact_export
+import contact_import
+from auth import get_current_user, require_roles
 from database import get_db
 from verification import missing_fields, verified_clause
 from models import Contact, ConsumerProfile, Employee, LeadSource, LeadStage, PartnerProfile
@@ -26,6 +33,8 @@ router = APIRouter(
 
 # Roles that never receive auto-assigned leads
 NON_ASSIGNABLE_ROLES = ("admin", "manager", "support")
+# Roles that may import contacts and export everyone's contacts
+MANAGER_ROLES = ("admin", "manager")
 
 
 def _pick_random_assignee(db: Session) -> int:
@@ -70,10 +79,7 @@ def _check_location(source: LeadSource | None, latitude, longitude, creating: bo
         )
 
 
-@router.get("", response_model=ContactListResponse)
-def list_contacts(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
+def contact_filters(
     contact_type: ContactType | None = None,
     profession_type: ProfessionType | None = Query(None, description="Partner profession, e.g. plumber"),
     district: str | None = None,
@@ -83,9 +89,16 @@ def list_contacts(
     assigned_to: int | None = None,
     created_by: int | None = None,
     verified: bool | None = Query(None, description="true = only verified, false = only unverified"),
-    db: Session = Depends(get_db),
-):
-    """List contacts (any type) with current stage, lead source and owner."""
+    created_from: date | None = Query(None, description="Created on or after this date"),
+    created_to: date | None = Query(None, description="Created on or before this date"),
+) -> dict:
+    """Filters shared by the contact list and the export, so the two can never disagree."""
+    params = dict(locals())
+    return {k: v for k, v in params.items() if v is not None}
+
+
+def contact_query(db: Session, f: dict, entities):
+    """Contacts matching the filters. `entities(current_stage)` picks what to select."""
     # Latest stage per contact. Stage rows are append-only, so max(id) is the newest.
     latest = (
         db.query(
@@ -96,44 +109,55 @@ def list_contacts(
         .subquery()
     )
     current = aliased(LeadStage)
-
-    def base(*entities):
-        q = (
-            db.query(*entities)
-            .select_from(Contact)
-            .outerjoin(latest, latest.c.contact_id == Contact.id)
-            .outerjoin(current, current.id == latest.c.stage_id)
-            .filter(Contact.deleted_at.is_(None))  # Exclude soft-deleted
+    q = (
+        db.query(*entities(current))
+        .select_from(Contact)
+        .outerjoin(latest, latest.c.contact_id == Contact.id)
+        .outerjoin(current, current.id == latest.c.stage_id)
+        .filter(Contact.deleted_at.is_(None))  # Exclude soft-deleted
+    )
+    if "contact_type" in f:
+        q = q.filter(Contact.contact_type == f["contact_type"].value)
+    if "profession_type" in f:
+        q = q.join(PartnerProfile, PartnerProfile.contact_id == Contact.id).filter(
+            # Legacy rows hold free text ("Plumber", "Interior Designer"), so compare normalised
+            func.replace(func.lower(PartnerProfile.profession_type), " ", "_") == f["profession_type"].value
         )
-        if contact_type:
-            q = q.filter(Contact.contact_type == contact_type.value)
-        if profession_type:
-            q = q.join(PartnerProfile, PartnerProfile.contact_id == Contact.id).filter(
-                # Legacy rows hold free text ("Plumber", "Interior Designer"), so compare normalised
-                func.replace(func.lower(PartnerProfile.profession_type), " ", "_") == profession_type.value
-            )
-        if district:
-            q = q.filter(Contact.district.ilike(f"%{district}%"))
-        if search:
-            like = f"%{search.strip()}%"
-            q = q.filter(or_(Contact.name.ilike(like), Contact.phone.ilike(like)))
-        if stage:
-            q = q.filter(current.stage == stage.value)
-        if lead_source_id is not None:
-            q = q.filter(Contact.lead_source_id == lead_source_id)
-        if assigned_to is not None:
-            q = q.filter(Contact.assigned_to == assigned_to)
-        if created_by is not None:
-            q = q.filter(Contact.created_by == created_by)
-        if verified is True:
-            q = q.filter(verified_clause())
-        elif verified is False:
-            q = q.filter(~verified_clause())
-        return q
+    if "district" in f:
+        q = q.filter(Contact.district.ilike(f"%{f['district']}%"))
+    if "search" in f:
+        like = f"%{f['search'].strip()}%"
+        q = q.filter(or_(Contact.name.ilike(like), Contact.phone.ilike(like)))
+    if "stage" in f:
+        q = q.filter(current.stage == f["stage"].value)
+    if "lead_source_id" in f:
+        q = q.filter(Contact.lead_source_id == f["lead_source_id"])
+    if "assigned_to" in f:
+        q = q.filter(Contact.assigned_to == f["assigned_to"])
+    if "created_by" in f:
+        q = q.filter(Contact.created_by == f["created_by"])
+    if f.get("verified") is True:
+        q = q.filter(verified_clause())
+    elif f.get("verified") is False:
+        q = q.filter(~verified_clause())
+    if "created_from" in f:
+        q = q.filter(Contact.created_at >= f["created_from"])
+    if "created_to" in f:
+        q = q.filter(Contact.created_at < f["created_to"] + timedelta(days=1))
+    return q
 
-    total = base(func.count(Contact.id)).scalar() or 0
+
+@router.get("", response_model=ContactListResponse)
+def list_contacts(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    f: dict = Depends(contact_filters),
+    db: Session = Depends(get_db),
+):
+    """List contacts (any type) with current stage, lead source and owner."""
+    total = contact_query(db, f, lambda cur: (func.count(Contact.id),)).scalar() or 0
     rows = (
-        base(Contact, current)
+        contact_query(db, f, lambda cur: (Contact, cur))
         .options(
             joinedload(Contact.lead_source),
             joinedload(Contact.assigned_employee),
@@ -182,6 +206,160 @@ def list_profession_types():
         for p in ProfessionType
         if p is not ProfessionType.other
     ]
+
+
+@router.get("/export")
+def export_contacts(
+    format: str = Query("csv", pattern="^(csv|xlsx|pdf)$"),
+    f: dict = Depends(contact_filters),
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """Download the contacts matching the list filters as CSV, Excel or PDF."""
+    if current_user.role not in MANAGER_ROLES:
+        f["assigned_to"] = current_user.id  # everyone else exports only their own contacts
+
+    total = contact_query(db, f, lambda cur: (func.count(Contact.id),)).scalar() or 0
+    limit = contact_export.MAX_ROWS[format]
+    if total > limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{total} contacts match; a {format.upper()} export holds at most {limit}. Narrow the filters.",
+        )
+    rows = (
+        contact_query(db, f, lambda cur: (Contact, cur))
+        .options(
+            joinedload(Contact.lead_source),
+            joinedload(Contact.assigned_employee),
+            joinedload(Contact.creator),
+            joinedload(Contact.partner_profile),
+            joinedload(Contact.consumer_profile),
+        )
+        .order_by(Contact.created_at.desc(), Contact.id.desc())
+        .all()
+    )
+    table = contact_export.build_rows([(c, stage, not missing_fields(c)) for c, stage in rows])
+    if format == "csv":
+        body = contact_export.to_csv(table)
+    elif format == "xlsx":
+        body = contact_export.to_xlsx(table)
+    else:
+        summary = ", ".join(f"{k.replace('_', ' ')}: {getattr(v, 'value', v)}" for k, v in f.items())
+        body = contact_export.to_pdf(table, summary)
+    filename = f"contacts_{date.today():%Y%m%d}.{format}"
+    return Response(
+        body,
+        media_type=contact_export.MEDIA_TYPES[format],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/import/template")
+def import_template():
+    """Blank CSV with the headers the importer recognises and one example row."""
+    return Response(
+        contact_import.template_csv(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="contacts_import_template.csv"'},
+    )
+
+
+def _read_upload(file: UploadFile, mapping_json: str | None):
+    """Rows, header row and column mapping for an uploaded sheet (auto-detected unless given)."""
+    try:
+        rows = contact_import.read_rows(file.filename or "", file.file.read(contact_import.MAX_BYTES + 1))
+    except contact_import.ImportFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    header_row, detected = contact_import.detect_header(rows)
+    if mapping_json:
+        try:
+            chosen = {int(col): fld for col, fld in json.loads(mapping_json).items() if fld in contact_import.FIELDS}
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=400, detail="mapping must be a JSON object of column index to field")
+    else:
+        chosen = detected
+    return rows, header_row, chosen
+
+
+def _import_options(default_type: str, default_source_id: int | None, duplicates: str) -> contact_import.Options:
+    if default_type not in ("consumer", "partner", "dealer"):
+        raise HTTPException(status_code=400, detail="default_type must be consumer, partner or dealer")
+    if duplicates not in ("skip", "update_blank"):
+        raise HTTPException(status_code=400, detail="duplicates must be skip or update_blank")
+    return contact_import.Options(default_type, default_source_id, duplicates)
+
+
+@router.post("/import/analyze")
+def analyze_import(
+    file: UploadFile = File(...),
+    mapping: str | None = Form(None, description="JSON {column index: field}; auto-detected when omitted"),
+    default_type: str = Form("consumer"),
+    default_source_id: int | None = Form(None),
+    duplicates: str = Form("skip"),
+    db: Session = Depends(get_db),
+    _: Employee = Depends(require_roles("admin", "manager")),
+):
+    """Check a sheet without writing anything: detected columns, and every row that needs attention."""
+    rows, header_row, chosen = _read_upload(file, mapping)
+    options = _import_options(default_type, default_source_id, duplicates)
+    results = contact_import.analyze(db, rows, header_row, chosen, options)
+    headers = rows[header_row]
+    return {
+        "header_row": header_row + 1,
+        "columns": [
+            {
+                "index": i,
+                "header": headers[i] if i < len(headers) else "",
+                "field": chosen.get(i),
+                "sample": [r[i] for r in rows[header_row + 1:header_row + 4] if i < len(r) and r[i]],
+            }
+            for i in range(max(len(headers), max(chosen, default=-1) + 1))
+        ],
+        "fields": contact_import.FIELDS,
+        "missing_required": [f for f in ("name", "phone") if f not in chosen.values()],
+        "summary": contact_import.summarize(results),
+        "rows": [
+            {"row": r.row, "status": r.status, "issues": r.issues, "raw": r.raw,
+             "name": r.data.get("name"), "phone": r.data.get("phone")}
+            for r in results if r.status != "ready"
+        ],
+    }
+
+
+@router.post("/import/commit")
+def commit_import(
+    file: UploadFile = File(...),
+    mapping: str = Form(...),
+    default_type: str = Form("consumer"),
+    default_source_id: int | None = Form(None),
+    duplicates: str = Form("skip"),
+    assigned_to: int | None = Form(None, description="Owner for every imported contact; random eligible employee when omitted"),
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(require_roles("admin", "manager")),
+):
+    """Import the ready and warning rows of a sheet. Errors are skipped; duplicates follow `duplicates`."""
+    rows, header_row, chosen = _read_upload(file, mapping)
+    if "name" not in chosen.values() or "phone" not in chosen.values():
+        raise HTTPException(status_code=400, detail="Map the Name and Phone columns first")
+    options = _import_options(default_type, default_source_id, duplicates)
+    if default_source_id is not None and not db.get(LeadSource, default_source_id):
+        raise HTTPException(status_code=400, detail="Lead source not found")
+
+    if assigned_to is not None:
+        if not db.query(Employee).filter(Employee.id == assigned_to, Employee.deleted_at.is_(None)).first():
+            raise HTTPException(status_code=400, detail="Assigned employee not found")
+        assignees = [assigned_to]
+    else:
+        assignees = [
+            e.id for e in db.query(Employee).filter(
+                Employee.deleted_at.is_(None), Employee.is_active == 1, Employee.role.notin_(NON_ASSIGNABLE_ROLES)
+            )
+        ]
+        if not assignees:
+            raise HTTPException(status_code=409, detail="No eligible employee available to assign these leads")
+
+    results = contact_import.analyze(db, rows, header_row, chosen, options)
+    return contact_import.run_import(db, results, options, assignees, current_user.id)
 
 
 @router.get("/{contact_id}", response_model=ContactResponse)
