@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-10-09 — `addee71` (branch `phase1`)
+
+**Add contact import and export (CSV, Excel, PDF) for backend and web**
+
+Author: sajad yoosuf
+Previous commit on this side: `d26872d` docs: update changelog for a47a286 (2026-10-08)
+
+### Summary
+Contacts can be imported from CSV/XLSX (analyze, then commit) and exported as CSV, Excel or PDF with the list filters. Notes: `docs/changes/2026-10-08-contact-import-export.md`.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Added | `contact_import.py` | Parses sheets, maps headers, validates rows, classifies ready/warning/duplicate/error |
+| Added | `contact_export.py` | Builds CSV, XLSX and PDF output |
+| Added | `docs/changes/2026-10-08-contact-import-export.md` | Change notes |
+| Modified | `requirements.txt` | Adds `python-multipart`, `openpyxl`, `reportlab` |
+| Modified | `routes/contacts.py` | Shared list filters, `created_from`/`created_to`, new `/export`, `/import/template`, `/import/analyze`, `/import/commit` routes |
+
+### Notes
+Run `pip install -r requirements.txt`. Import is admin/manager only; other roles export only their own contacts. PDF needs a Malayalam font for Malayalam text. Same commit also touched web and root `API.md`.
+
 ## 2026-10-08 — `a47a286` (branch `phase1`)
 
 **Add partner profession type enum and partner type picker in contact form**
