@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from auth import get_password_hash, require_roles
+from auth import get_current_user, get_password_hash, require_roles
 from database import get_db
 from mailer import send_employee_credentials
 from models import Employee, Role
@@ -74,6 +74,18 @@ def _phone_taken(db: Session, phone: str, exclude_id: int | None = None) -> bool
     if exclude_id is not None:
         q = q.filter(Employee.id != exclude_id)
     return q.first() is not None
+
+
+@router.get("/directory")
+def employee_directory(db: Session = Depends(get_db), _: Employee = Depends(get_current_user)):
+    """Active staff for assignee pickers and the staff directory. Open to every signed-in employee, names and phones only."""
+    rows = (
+        db.query(Employee)
+        .filter(Employee.deleted_at.is_(None), Employee.is_active == 1)
+        .order_by(func.lower(Employee.name))
+        .all()
+    )
+    return [{"id": e.id, "name": e.name, "role": e.role, "phone": e.phone} for e in rows]
 
 
 @router.get("", response_model=EmployeeListResponse)

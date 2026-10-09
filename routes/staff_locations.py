@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.dialects.mysql import insert as mysql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 from auth import get_current_user, require_roles
 from database import get_db
@@ -86,7 +87,10 @@ def upload_points(
             }
         )
     if rows:
-        db.execute(mysql_insert(StaffLocation).prefix_with("IGNORE"), rows)
+        if db.get_bind().dialect.name == "sqlite":
+            db.execute(sqlite_insert(StaffLocation).prefix_with("OR IGNORE"), rows)
+        else:
+            db.execute(mysql_insert(StaffLocation).prefix_with("IGNORE"), rows)
         # Points are flowing again, so any earlier "location off" report is over.
         db.merge(StaffLocationState(employee_id=current_user.id, state="location_enabled", updated_at=now))
         db.commit()
