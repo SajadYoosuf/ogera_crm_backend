@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-10-09 — `a207130` (branch `phase1`)
+
+**Add Tasks screen (day, week, month) and require an outcome when a follow-up is done**
+
+Author: sajad yoosuf
+Previous commit on this side: `99798ab` docs: update changelog for addee71 (2026-10-09)
+
+### Summary
+New `GET /tasks` feeds the Tasks screen, and marking a follow-up done now logs its outcome as an activity. Notes: `docs/changes/2026-10-09-tasks-calendar-outcome.md`.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Added | `routes/tasks.py` | `GET /tasks`: date range, employee, status, type, search; staff scoped to their own; summary counts |
+| Modified | `routes/lead_activities.py` | Outcome required on done and logged as an activity; only the assignee or a manager can change a task; time-aware `task_state` |
+| Modified | `schemas/lead_activity.py` | `outcome` on update, `task_id` on response, task list schemas |
+| Modified | `models/lead_activity.py` | `task_id` column, new assignee index |
+| Added | `scripts/migrate_lead_activities_task_id.sql` | Adds `task_id` and replaces the assignee index |
+| Modified | `routes/__init__.py`, `main.py` | Register the tasks router |
+| Added | `docs/changes/2026-10-09-tasks-calendar-outcome.md` | Change notes |
+
+### Notes
+Run `scripts/migrate_lead_activities_task_id.sql` before deploying. `API.md` is updated. The same commit changed the web side. Checked with a SQLite smoke test only; there is no pytest suite.
+
 ## 2026-10-09 — `addee71` (branch `phase1`)
 
 **Add contact import and export (CSV, Excel, PDF) for backend and web**
