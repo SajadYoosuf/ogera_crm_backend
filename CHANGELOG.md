@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-12 — `c944450` (branch `phase1-redesign`)
+
+**Redesign the Contacts page to the design and add Sort by**
+
+Author: sajad yoosuf
+Previous commit on this side: `4f9501f` Connect the mobile app to the FastAPI backend (2026-10-09)
+
+### Summary
+`GET /contacts` takes a `sort` parameter for the Contacts "Sort by" control. Notes: `docs/changes/2026-10-12-contacts-sort.md`.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Modified | `routes/contacts.py` | `sort` query: `newest` (default), `oldest`, `name_asc`, `name_desc`; `CONTACT_ORDERINGS` map with an id tie-break |
+
+### Notes
+Only the sort change from this commit is in this side's history; other backend work from the same period is still uncommitted. Restart the server to pick up the parameter. The web side changed in the same commit.
+
 ## 2026-10-09 — `a207130` (branch `phase1`)
 
 **Add Tasks screen (day, week, month) and require an outcome when a follow-up is done**
