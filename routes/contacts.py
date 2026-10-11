@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
@@ -147,10 +148,20 @@ def contact_query(db: Session, f: dict, entities):
     return q
 
 
+# Sort orders offered by the Contacts "Sort by" control. The id tie-break keeps paging stable.
+CONTACT_ORDERINGS = {
+    "newest": (Contact.created_at.desc(), Contact.id.desc()),
+    "oldest": (Contact.created_at.asc(), Contact.id.asc()),
+    "name_asc": (func.lower(Contact.name).asc(), Contact.id.asc()),
+    "name_desc": (func.lower(Contact.name).desc(), Contact.id.desc()),
+}
+
+
 @router.get("", response_model=ContactListResponse)
 def list_contacts(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
+    sort: Literal["newest", "oldest", "name_asc", "name_desc"] = Query("newest"),
     f: dict = Depends(contact_filters),
     db: Session = Depends(get_db),
 ):
@@ -165,7 +176,7 @@ def list_contacts(
             joinedload(Contact.partner_profile),
             joinedload(Contact.consumer_profile),
         )
-        .order_by(Contact.created_at.desc(), Contact.id.desc())
+        .order_by(*CONTACT_ORDERINGS[sort])
         .offset(skip)
         .limit(limit)
         .all()
