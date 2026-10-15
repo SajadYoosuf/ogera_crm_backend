@@ -30,7 +30,7 @@ def _apply_product(db: Session, data: dict) -> None:
     data["purchased_product"] = product.name
 
 
-@router.get("", response_model=SaleListResponse)
+@router.get("", response_model=SaleListResponse, summary="List past sales")
 def list_sales(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
@@ -41,7 +41,9 @@ def list_sales(
     purchased_to: datetime.date | None = None,
     db: Session = Depends(get_db),
 ):
-    """Sales, newest purchase first."""
+    """Paged list of past sales from the buyers register, newest purchase first.
+    Filter by search text, product name, product id, or a purchase date range. Requires sign-in.
+    """
     q = db.query(Sale)
     if search and search.strip():
         like = f"%{search.strip()}%"
@@ -60,21 +62,23 @@ def list_sales(
     return SaleListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
-@router.get("/products", response_model=list[str])
+@router.get("/products", response_model=list[str], summary="List purchased product names")
 def list_products(db: Session = Depends(get_db)):
-    """Distinct purchased products, for the filter and the form's suggestions."""
+    """Distinct product names that appear in past sales. Used for the filter and the sale form's suggestions."""
     rows = (db.query(Sale.purchased_product).filter(Sale.purchased_product.isnot(None))
             .distinct().order_by(Sale.purchased_product).all())
     return [r[0] for r in rows]
 
 
-@router.get("/{sale_id}", response_model=SaleResponse)
+@router.get("/{sale_id}", response_model=SaleResponse, summary="Get a sale")
 def get_sale(sale_id: int, db: Session = Depends(get_db)):
+    """One past sale record. Returns 404 if it does not exist."""
     return _get_or_404(db, sale_id)
 
 
-@router.post("", response_model=SaleResponse, status_code=201, dependencies=[writers])
+@router.post("", response_model=SaleResponse, status_code=201, dependencies=[writers], summary="Create a sale record")
 def create_sale(body: SaleCreate, db: Session = Depends(get_db)):
+    """Adds a past sale to the register. Admin and manager only."""
     data = body.model_dump()
     _apply_product(db, data)
     sale = Sale(**data)
@@ -84,8 +88,9 @@ def create_sale(body: SaleCreate, db: Session = Depends(get_db)):
     return sale
 
 
-@router.put("/{sale_id}", response_model=SaleResponse, dependencies=[writers])
+@router.put("/{sale_id}", response_model=SaleResponse, dependencies=[writers], summary="Update a sale record")
 def update_sale(sale_id: int, body: SaleUpdate, db: Session = Depends(get_db)):
+    """Partial update of a past sale. Admin and manager only."""
     sale = _get_or_404(db, sale_id)
     changes = body.model_dump(exclude_unset=True)
     if "name" in changes and changes["name"] is None:
@@ -100,7 +105,8 @@ def update_sale(sale_id: int, body: SaleUpdate, db: Session = Depends(get_db)):
     return sale
 
 
-@router.delete("/{sale_id}", status_code=204, dependencies=[writers])
+@router.delete("/{sale_id}", status_code=204, dependencies=[writers], summary="Delete a sale record")
 def delete_sale(sale_id: int, db: Session = Depends(get_db)):
+    """Deletes a past sale record. Admin and manager only."""
     db.delete(_get_or_404(db, sale_id))
     db.commit()

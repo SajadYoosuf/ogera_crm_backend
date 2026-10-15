@@ -157,7 +157,7 @@ CONTACT_ORDERINGS = {
 }
 
 
-@router.get("", response_model=ContactListResponse)
+@router.get("", response_model=ContactListResponse, summary="List contacts")
 def list_contacts(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
@@ -165,7 +165,10 @@ def list_contacts(
     f: dict = Depends(contact_filters),
     db: Session = Depends(get_db),
 ):
-    """List contacts (any type) with current stage, lead source and owner."""
+    """Paged list of contacts of every type, each with its current stage, lead source, owner and verification status.
+    Filter by type, stage, district, owner, creator, verified state, creation dates and search text. `sort` sets the order.
+    Requires sign-in. The list is not limited to the caller's own contacts.
+    """
     total = contact_query(db, f, lambda cur: (func.count(Contact.id),)).scalar() or 0
     rows = (
         contact_query(db, f, lambda cur: (Contact, cur))
@@ -209,9 +212,9 @@ def list_contacts(
     return ContactListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
-@router.get("/profession-types")
+@router.get("/profession-types", summary="List profession types")
 def list_profession_types():
-    """Partner profession options for the partner-type picker (value is what the API stores)."""
+    """Partner profession options for the partner type picker. The `value` is the key the API stores."""
     return [
         {"value": p.value, "label": p.value.replace("_", " ").title()}
         for p in ProfessionType
@@ -219,14 +222,16 @@ def list_profession_types():
     ]
 
 
-@router.get("/export")
+@router.get("/export", summary="Export contacts")
 def export_contacts(
     format: str = Query("csv", pattern="^(csv|xlsx|pdf)$"),
     f: dict = Depends(contact_filters),
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Download the contacts matching the list filters as CSV, Excel or PDF."""
+    """Downloads the contacts matching the list filters as CSV, Excel or PDF (`format`).
+    It uses the same filters as the list, so the export matches what is on screen.
+    """
     if current_user.role not in MANAGER_ROLES:
         f["assigned_to"] = current_user.id  # everyone else exports only their own contacts
 
@@ -265,9 +270,9 @@ def export_contacts(
     )
 
 
-@router.get("/import/template")
+@router.get("/import/template", summary="Download import template")
 def import_template():
-    """Blank CSV with the headers the importer recognises and one example row."""
+    """A blank CSV with the headers the importer recognises and one example row."""
     return Response(
         contact_import.template_csv(),
         media_type="text/csv; charset=utf-8",
@@ -300,7 +305,7 @@ def _import_options(default_type: str, default_source_id: int | None, duplicates
     return contact_import.Options(default_type, default_source_id, duplicates)
 
 
-@router.post("/import/analyze")
+@router.post("/import/analyze", summary="Check an import file")
 def analyze_import(
     file: UploadFile = File(...),
     mapping: str | None = Form(None, description="JSON {column index: field}; auto-detected when omitted"),
@@ -310,7 +315,9 @@ def analyze_import(
     db: Session = Depends(get_db),
     _: Employee = Depends(require_roles("admin", "manager")),
 ):
-    """Check a sheet without writing anything: detected columns, and every row that needs attention."""
+    """Reads an uploaded sheet and reports the detected columns and every row that needs attention.
+    Nothing is written. Admin and manager only.
+    """
     rows, header_row, chosen = _read_upload(file, mapping)
     options = _import_options(default_type, default_source_id, duplicates)
     results = contact_import.analyze(db, rows, header_row, chosen, options)
@@ -337,7 +344,7 @@ def analyze_import(
     }
 
 
-@router.post("/import/commit")
+@router.post("/import/commit", summary="Import contacts from a file")
 def commit_import(
     file: UploadFile = File(...),
     mapping: str = Form(...),
@@ -348,7 +355,10 @@ def commit_import(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(require_roles("admin", "manager")),
 ):
-    """Import the ready and warning rows of a sheet. Errors are skipped; duplicates follow `duplicates`."""
+    """Writes the ready and warning rows of an uploaded sheet. Error rows are skipped.
+    `duplicates` decides what happens to a row that matches an existing contact (skip it, or fill only its blank fields).
+    Admin and manager only.
+    """
     rows, header_row, chosen = _read_upload(file, mapping)
     if "name" not in chosen.values() or "phone" not in chosen.values():
         raise HTTPException(status_code=400, detail="Map the Name and Phone columns first")
@@ -373,9 +383,11 @@ def commit_import(
     return contact_import.run_import(db, results, options, assignees, current_user.id)
 
 
-@router.get("/{contact_id}", response_model=ContactResponse)
+@router.get("/{contact_id}", response_model=ContactResponse, summary="Get a contact")
 def get_contact(contact_id: int, db: Session = Depends(get_db)):
-    """Get a single contact by ID."""
+    """One contact with its current stage, referral count and verification status (`is_verified`, `missing_fields`).
+    Returns 404 if the id is unknown or the contact is deleted.
+    """
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
 
     if not contact or contact.deleted_at:
@@ -403,13 +415,17 @@ def get_contact(contact_id: int, db: Session = Depends(get_db)):
     return response
 
 
-@router.post("", response_model=ContactResponse, status_code=201)
+@router.post("", response_model=ContactResponse, status_code=201, summary="Create a contact")
 def create_contact(
     body: ContactCreate,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Create a new contact. Owner is auto-assigned if omitted; creator is the signed-in user."""
+    """Creates a consumer, partner or dealer contact. The signed-in user is recorded as the creator.
+    If `assigned_to` is omitted, an owner is picked automatically from the staff who take leads.
+    Offline leads need latitude and longitude. A consumer profile is allowed only on consumer contacts, and a partner profile only on partner contacts.
+    Returns 400 for an unknown source, owner or referrer.
+    """
     source = None
     if body.lead_source_id is not None:
         source = db.query(LeadSource).filter(LeadSource.id == body.lead_source_id).first()
@@ -455,13 +471,15 @@ def create_contact(
     return response
 
 
-@router.put("/{contact_id}", response_model=ContactResponse)
+@router.put("/{contact_id}", response_model=ContactResponse, summary="Update a contact")
 def update_contact(
     contact_id: int,
     body: ContactUpdate,
     db: Session = Depends(get_db),
 ):
-    """Update a contact."""
+    """Changes a contact's details. Only the fields sent are changed.
+    The same rules as create apply: the profile must match the contact type, offline leads need a location, and the referrer must exist and cannot be the contact itself.
+    """
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
 
     if not contact or contact.deleted_at:
@@ -551,9 +569,9 @@ def update_contact(
     return response
 
 
-@router.delete("/{contact_id}", status_code=204)
+@router.delete("/{contact_id}", status_code=204, summary="Delete a contact")
 def delete_contact(contact_id: int, db: Session = Depends(get_db)):
-    """Soft delete a contact."""
+    """Soft delete. The contact disappears from lists, but its row and history are kept. Returns 404 if it is already gone."""
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
 
     if not contact or contact.deleted_at:
@@ -566,13 +584,15 @@ def delete_contact(contact_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 
-@router.put("/{contact_id}/consumer-profile", response_model=ConsumerProfileResponse)
+@router.put("/{contact_id}/consumer-profile", response_model=ConsumerProfileResponse, summary="Save consumer profile")
 def upsert_consumer_profile(
     contact_id: int,
     body: ConsumerProfileUpdate,
     db: Session = Depends(get_db),
 ):
-    """Create or update a contact's consumer profile."""
+    """Creates or updates the consumer details of a contact (house stage, current tank, awareness mode).
+    Returns 400 if the contact is not a consumer.
+    """
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
 
     if not contact or contact.deleted_at:
@@ -592,9 +612,9 @@ def upsert_consumer_profile(
     return ConsumerProfileResponse.model_validate(contact.consumer_profile, from_attributes=True)
 
 
-@router.delete("/{contact_id}/consumer-profile", status_code=204)
+@router.delete("/{contact_id}/consumer-profile", status_code=204, summary="Remove consumer profile")
 def delete_consumer_profile(contact_id: int, db: Session = Depends(get_db)):
-    """Remove a contact's consumer profile (the contact itself is kept)."""
+    """Removes a contact's consumer profile. The contact itself is kept."""
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
 
     if not contact or contact.deleted_at:
@@ -606,12 +626,12 @@ def delete_consumer_profile(contact_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 
-@router.get("/{contact_id}/stages", response_model=list[LeadStageResponse])
+@router.get("/{contact_id}/stages", response_model=list[LeadStageResponse], summary="List stage history")
 def get_contact_stages(
     contact_id: int,
     db: Session = Depends(get_db),
 ):
-    """Get stage history for a contact (ordered by date)."""
+    """Every stage a contact has been in, ordered by the time it was set. The newest entry is the current stage."""
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
 
     if not contact or contact.deleted_at:
@@ -627,13 +647,16 @@ def get_contact_stages(
     return [LeadStageResponse.model_validate(s, from_attributes=True) for s in stages]
 
 
-@router.post("/{contact_id}/stages", response_model=LeadStageResponse, status_code=201)
+@router.post("/{contact_id}/stages", response_model=LeadStageResponse, status_code=201, summary="Move contact to a stage")
 def add_contact_stage(
     contact_id: int,
     body: LeadStageCreate,
     db: Session = Depends(get_db),
 ):
-    """Add a new stage to a contact's history."""
+    """Adds a new stage to a contact's history and returns it with status 201.
+    Partner-only stages are refused for consumers, and consumer-only stages for partners. A loss reason must be one configured in Settings.
+    The signed-in user and the time are recorded.
+    """
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
 
     if not contact or contact.deleted_at:

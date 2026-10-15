@@ -14,7 +14,7 @@ router = APIRouter(prefix="/tasks", tags=["tasks"], dependencies=[Depends(get_cu
 MAX_RANGE_DAYS = 62  # a month view with its leading and trailing days
 
 
-@router.get("", response_model=TaskListResponse)
+@router.get("", response_model=TaskListResponse, summary="List follow-up tasks")
 def list_tasks(
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
@@ -28,10 +28,9 @@ def list_tasks(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Scheduled follow-ups across leads for the day / week / month views.
-
-    Sales staff only ever get their own tasks; admins and managers can filter by employee.
-    `include_overdue` adds open tasks from before `date_from` (the "today" list starts with what was missed).
+    """Scheduled follow-ups across leads, for the all, day, week, month and custom views.
+    Sales staff only get their own tasks. Admins and managers can filter by employee.
+    `include_overdue` adds open tasks from before `date_from`, so the today list starts with what was missed. The date range can be at most 62 days.
     """
     if date_from and date_to and (date_to < date_from or (date_to - date_from).days > MAX_RANGE_DAYS):
         raise HTTPException(status_code=400, detail=f"date_to must be on or after date_from, within {MAX_RANGE_DAYS} days")

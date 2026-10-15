@@ -90,3 +90,46 @@ def send_employee_credentials(name: str, email: str, password: str, role: str) -
         "message": f"Credentials email sent to {email}. If the address has no mailbox, "
         "the mail provider bounces it to the sender inbox.",
     }
+
+
+def send_password_changed_notice(name: str, email: str) -> dict:
+    """Tell an employee that their password was just changed. Never raises. Returns {"sent": bool, "message": str}.
+
+    The change itself is not undone when this fails, so the caller only logs the result.
+    """
+    if not SMTP_HOST or not SMTP_FROM:
+        print(f"[mail] SMTP not configured; password change notice to {email} was NOT sent")
+        return {"sent": False, "message": "Email sending is not configured on the server"}
+
+    try:
+        validate_email(email, check_deliverability=True)
+    except EmailNotValidError as exc:
+        print(f"[mail] NOT sending password change notice to {email}: {exc}")
+        return {"sent": False, "message": f"Notice not sent: {exc}"}
+
+    text = (
+        f"Hi {name},\n\n"
+        f"The password for your {SMTP_FROM_NAME} account was just changed.\n\n"
+        "If you did not change it, contact your admin right away.\n"
+    )
+    html = (
+        f"<p>Hi {escape(name)},</p>"
+        f"<p>The password for your {escape(SMTP_FROM_NAME)} account was just changed.</p>"
+        "<p>If you did not change it, contact your admin right away.</p>"
+    )
+
+    message = EmailMessage()
+    message["Subject"] = f"Your {SMTP_FROM_NAME} password was changed"
+    message["From"] = formataddr((SMTP_FROM_NAME, SMTP_FROM))
+    message["To"] = email
+    message.set_content(text)
+    message.add_alternative(html, subtype="html")
+
+    try:
+        _send(message)
+    except Exception as exc:  # noqa: BLE001 - must never break the password change
+        print(f"[mail] FAILED to send password change notice to {email}: {type(exc).__name__}: {exc}")
+        return {"sent": False, "message": "Notice not sent: could not reach the mail server"}
+
+    print(f"[mail] password change notice handed to mail server for {email}")
+    return {"sent": True, "message": "Notice sent"}

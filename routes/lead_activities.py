@@ -73,9 +73,9 @@ def _task_or_404(db: Session, contact_id: int, activity_id: int) -> LeadActivity
     return activity
 
 
-@router.get("/{contact_id}/activities", response_model=list[LeadActivityResponse])
+@router.get("/{contact_id}/activities", response_model=list[LeadActivityResponse], summary="List activities of a contact")
 def list_activities(contact_id: int, db: Session = Depends(get_db)):
-    """Activity log and follow-up tasks for a contact, newest first."""
+    """The activity log and follow-up tasks of one contact, newest first. Each entry shows who created it, who it is assigned to, and who completed it."""
     _contact_or_404(db, contact_id)
     rows = (
         db.query(LeadActivity)
@@ -91,14 +91,17 @@ def list_activities(contact_id: int, db: Session = Depends(get_db)):
     return [activity_response(row) for row in rows]
 
 
-@router.post("/{contact_id}/activities", response_model=LeadActivityResponse, status_code=201)
+@router.post("/{contact_id}/activities", response_model=LeadActivityResponse, status_code=201, summary="Log an activity or schedule a follow-up")
 def create_activity(
     contact_id: int,
     body: LeadActivityCreate,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Log an activity (done now, server time) or schedule a follow-up for a staff member."""
+    """A logged activity is saved as done at the server time.
+    A follow-up (with a date) is assigned to a staff member and stays pending until it is completed.
+    Follow-ups cannot be assigned to an admin or manager (400).
+    """
     _contact_or_404(db, contact_id)
     if body.is_task:
         assignee = db.query(Employee).filter(Employee.id == body.assigned_to).first()
@@ -125,7 +128,7 @@ def create_activity(
     return activity_response(activity)
 
 
-@router.patch("/{contact_id}/activities/{activity_id}", response_model=LeadActivityResponse)
+@router.patch("/{contact_id}/activities/{activity_id}", response_model=LeadActivityResponse, summary="Complete or reschedule a follow-up")
 def update_activity(
     contact_id: int,
     activity_id: int,
@@ -133,7 +136,7 @@ def update_activity(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Mark a pending follow-up done (server sets the time and the user), or reschedule it."""
+    """Marks a pending follow-up done (the server records the time and the user), or changes its date and time."""
     _contact_or_404(db, contact_id)
     activity = _task_or_404(db, contact_id, activity_id)
     if activity.scheduled_date is None:

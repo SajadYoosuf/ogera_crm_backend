@@ -12,16 +12,15 @@ router = APIRouter(prefix="/performance", tags=["performance"])
 TEAM_ROLES = {"admin", "manager"}
 
 
-@router.get("")
+@router.get("", summary="Lead counts per employee")
 def performance_report(
     start_date: datetime.date = Query(...),
     end_date: datetime.date = Query(...),
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Contacts each employee added in a date range: sales-ready leads vs awareness (needs education) contacts.
-
-    A contact counts as awareness when its consumer profile has `awareness_mode = 1`; every other contact is a lead.
+    """Counts the contacts each employee created in a date range, split into sales-ready leads and awareness contacts (`awareness_mode = 1`).
+    Admins and managers see the whole team. Everyone else sees only their own numbers.
     """
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
@@ -127,7 +126,7 @@ def _open_followups(db: Session):
     )
 
 
-@router.get("/summary")
+@router.get("/summary", summary="Headline performance numbers")
 def performance_summary(
     start_date: datetime.date | None = Query(None),
     end_date: datetime.date | None = Query(None),
@@ -157,7 +156,7 @@ def performance_summary(
     }
 
 
-@router.get("/team")
+@router.get("/team", summary="Team performance table")
 def performance_team(
     start_date: datetime.date | None = Query(None),
     end_date: datetime.date | None = Query(None),
@@ -226,12 +225,12 @@ def _contacts_with_stage(db: Session, *entities):
     )
 
 
-@router.get("/pipeline")
+@router.get("/pipeline", summary="Pipeline snapshot")
 def performance_pipeline(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Consumer contacts at each stage right now (a snapshot, no dates). Non-managers see their own contacts."""
+    """Consumer contacts at each stage right now. This is a snapshot with no dates. Non-managers see only their own contacts."""
     stage = func.coalesce(LeadStage.stage, "new_lead")
     query = _contacts_with_stage(db, stage, func.count(Contact.id))
     if current_user.role not in TEAM_ROLES:
@@ -243,14 +242,14 @@ def performance_pipeline(
     return [{"stage": slug, "label": label, "count": counts.get(slug, 0)} for slug, label in PIPELINE]
 
 
-@router.get("/lead-sources")
+@router.get("/lead-sources", summary="Lead source performance")
 def performance_lead_sources(
     start_date: datetime.date | None = Query(None),
     end_date: datetime.date | None = Query(None),
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Consumer contacts created in the period per lead source, and how many are Won now. Biggest source first."""
+    """Consumer contacts created in the period, per lead source, and how many of them are Won now. Biggest source first."""
     _, _, lo, hi = _period(start_date, end_date)
     name = func.coalesce(LeadSource.name, "Unknown")
     won = case((LeadStage.stage == "won", 1), else_=0)

@@ -21,12 +21,15 @@ class LoginResponse(BaseModel):
     employee: EmployeeResponse
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post("/login", response_model=LoginResponse, summary="Log in")
 def login(
     body: LoginRequest,
     db: Session = Depends(get_db),
 ):
-    """Login with email and password, return JWT token."""
+    """Sign in with email and password. Returns a bearer token (valid 5 days by default) and the employee's profile.
+    Returns 401 for an unknown email or a wrong password, and 403 if the account is inactive or deleted.
+    Send the token as `Authorization: Bearer <token>` on every later request.
+    """
     employee = db.query(Employee).filter(Employee.email == body.email).first()
 
     if not employee:
@@ -55,7 +58,9 @@ def login(
     )
 
 
-@router.get("/me", response_model=EmployeeResponse)
+@router.get("/me", response_model=EmployeeResponse, summary="Get my profile")
 def get_profile(current_user: Employee = Depends(get_current_user)):
-    """Get current user profile."""
+    """Returns the profile of the signed-in employee. Use it to restore the session when the app starts.
+    Returns 401 if the token is missing or expired, or the employee has been deleted.
+    """
     return EmployeeResponse.model_validate(current_user, from_attributes=True)

@@ -79,25 +79,26 @@ def _commit(db: Session) -> None:
         raise HTTPException(status_code=409, detail="This product conflicts with an existing one")
 
 
-@router.get("/options", response_model=list[ProductOptionResponse])
+@router.get("/options", response_model=list[ProductOptionResponse], summary="List product dropdown values")
 def list_options(
     kind: OptionKind | None = None,
     db: Session = Depends(get_db),
     _: Employee = Depends(get_current_user),
 ):
-    """Dropdown values for the product form (brand, category, material)."""
+    """Brand, category and material options for the product form. Filter by `kind` to get one of them."""
     query = db.query(ProductOption).filter(ProductOption.is_active == 1)
     if kind:
         query = query.filter(ProductOption.kind == kind)
     return query.order_by(ProductOption.name).all()
 
 
-@router.post("/options", response_model=ProductOptionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/options", response_model=ProductOptionResponse, status_code=status.HTTP_201_CREATED, summary="Add a product option")
 def create_option(
     body: ProductOptionCreate,
     db: Session = Depends(get_db),
     _: Employee = Depends(can_edit),
 ):
+    """Adds a brand, category or material option. Admin and manager only."""
     name = body.name.strip()
     slug = _slugify(name)
     existing = db.query(ProductOption).filter(ProductOption.kind == body.kind, ProductOption.slug == slug).first()
@@ -115,7 +116,7 @@ def create_option(
     return option
 
 
-@router.get("", response_model=ProductListResponse)
+@router.get("", response_model=ProductListResponse, summary="List products")
 def list_products(
     q: str | None = None,
     brand_id: int | None = None,
@@ -126,6 +127,7 @@ def list_products(
     db: Session = Depends(get_db),
     _: Employee = Depends(get_current_user),
 ):
+    """Paged product list with optional search and filters for brand, category and active state. Soft-deleted products are excluded."""
     query = db.query(Product).filter(Product.deleted_at.is_(None))
     if q and q.strip():
         like = f"%{q.strip()}%"
@@ -147,21 +149,23 @@ def list_products(
     return {"items": items, "total": total, "skip": skip, "limit": limit}
 
 
-@router.get("/{product_id}", response_model=ProductResponse)
+@router.get("/{product_id}", response_model=ProductResponse, summary="Get a product")
 def get_product(
     product_id: int,
     db: Session = Depends(get_db),
     _: Employee = Depends(get_current_user),
 ):
+    """One product with its specs, pricing and options. Returns 404 if it is unknown or deleted."""
     return _to_response(_get_product(db, product_id))
 
 
-@router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ProductResponse, status_code=status.HTTP_201_CREATED, summary="Create a product")
 def create_product(
     body: ProductCreate,
     db: Session = Depends(get_db),
     _: Employee = Depends(can_edit),
 ):
+    """Adds a product to the catalogue. Admin and manager only."""
     data = body.model_dump()
     _check_options(db, data)
     for column in _BOOL_COLUMNS:
@@ -172,13 +176,14 @@ def create_product(
     return _to_response(_get_product(db, product.id))
 
 
-@router.patch("/{product_id}", response_model=ProductResponse)
+@router.patch("/{product_id}", response_model=ProductResponse, summary="Update a product")
 def update_product(
     product_id: int,
     body: ProductUpdate,
     db: Session = Depends(get_db),
     _: Employee = Depends(can_edit),
 ):
+    """Partial update: only the fields sent are changed. Admin and manager only."""
     product = _get_product(db, product_id)
     changes = body.model_dump(exclude_unset=True)
 
@@ -203,13 +208,13 @@ def update_product(
     return _to_response(_get_product(db, product_id))
 
 
-@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a product")
 def delete_product(
     product_id: int,
     db: Session = Depends(get_db),
     _: Employee = Depends(can_edit),
 ):
-    """Soft delete: the row stays, but the product disappears from lists."""
+    """Soft delete. The row stays, but the product disappears from lists. Admin and manager only."""
     product = _get_product(db, product_id)
     product.deleted_at = datetime.datetime.now()
     product.is_active = 0

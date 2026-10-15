@@ -12,6 +12,10 @@ SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(5 * 24 * 60)))  # 5 days
 
+# Passwords (employee passwords and reset passwords share these limits)
+PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "6"))
+PASSWORD_MAX_LENGTH = int(os.getenv("PASSWORD_MAX_LENGTH", "15"))
+
 # Outgoing email (SMTP). Email sending is skipped, with a log line, when SMTP_HOST is unset.
 SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

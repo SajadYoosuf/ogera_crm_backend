@@ -59,13 +59,13 @@ def _haversine(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return 2 * radius * math.asin(math.sqrt(a))
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, summary="Upload location points")
 def upload_points(
     body: PointsIn,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Phone uploads a batch of points. Duplicates on (employee, recordedAt) are ignored."""
+    """The phone uploads a batch of GPS points. A point with the same employee and time as an existing one is ignored, so retries are safe. Requires sign-in."""
     if not body.points:
         return {"saved": 0}
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
@@ -97,13 +97,13 @@ def upload_points(
     return {"saved": len(rows)}
 
 
-@router.post("/state", status_code=204)
+@router.post("/state", status_code=204, summary="Report tracking on or off")
 def report_state(
     body: StateIn,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Phone says tracking was switched off/on, so the map can tell 'location off' from 'no signal'."""
+    """The phone reports that location tracking was switched on or off, so the map can tell 'location off' apart from 'no signal'."""
     if body.state not in REPORTABLE_STATES:
         raise HTTPException(status_code=422, detail=f"state must be one of {sorted(REPORTABLE_STATES)}")
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
@@ -111,9 +111,9 @@ def report_state(
     db.commit()
 
 
-@router.get("/live")
+@router.get("/live", summary="Live staff locations")
 def live_locations(db: Session = Depends(get_db), _: Employee = Depends(view_staff_locations)):
-    """Newest known position and status of every staff member who has reported at least once."""
+    """The newest known position and status of every staff member who has reported at least once. Admin and manager only."""
     latest = (
         db.query(StaffLocation.employee_id, func.max(StaffLocation.id).label("last_id"))
         .group_by(StaffLocation.employee_id)
@@ -222,22 +222,22 @@ def _build_route(db: Session, employee_id: int, date: str) -> dict:
     }
 
 
-@router.get("/history")
+@router.get("/history", summary="Route for a staff member on a day")
 def route_history(
     userId: int = Query(...),
     date: str = Query(..., description="YYYY-MM-DD, India time"),
     db: Session = Depends(get_db),
     _: Employee = Depends(view_staff_locations),
 ):
-    """One staff member's route for one day."""
+    """The route of one staff member (`userId`) for one date (`date`). Admin and manager only."""
     return _build_route(db, userId, date)
 
 
-@router.get("/me")
+@router.get("/me", summary="My route for a day")
 def my_route(
     date: str = Query(..., description="YYYY-MM-DD, India time"),
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """A staff member's own route, for 'My route today'."""
+    """The signed-in employee's own route for one date, for the 'My route' screen."""
     return _build_route(db, current_user.id, date)

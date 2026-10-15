@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from auth import get_current_user, get_password_hash, require_roles
 from database import get_db
-from mailer import send_employee_credentials
+from mailer import send_employee_credentials, send_password_changed_notice
 from models import Employee, Role
 from schemas import (
     EmployeeCreate,
@@ -95,9 +95,11 @@ def _phone_taken(db: Session, phone: str, exclude_id: int | None = None) -> bool
     return any(_phone_key(stored) == key for _, stored in q.all() if key)
 
 
-@router.get("/directory")
+@router.get("/directory", summary="Staff directory")
 def employee_directory(db: Session = Depends(get_db), _: Employee = Depends(get_current_user)):
-    """Active staff for assignee pickers and the staff directory. Open to every signed-in employee, names and phones only."""
+    """Active staff with id, name, role and phone, for assignee pickers and the staff directory.
+    Open to every signed-in employee. Deleted and deactivated staff are left out.
+    """
     rows = (
         db.query(Employee)
         .filter(Employee.deleted_at.is_(None), Employee.is_active == 1)
@@ -107,7 +109,7 @@ def employee_directory(db: Session = Depends(get_db), _: Employee = Depends(get_
     return [{"id": e.id, "name": e.name, "role": e.role, "phone": e.phone} for e in rows]
 
 
-@router.get("", response_model=EmployeeListResponse)
+@router.get("", response_model=EmployeeListResponse, summary="List employees")
 def list_employees(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
@@ -117,7 +119,10 @@ def list_employees(
     db: Session = Depends(get_db),
     viewer: Employee = Depends(get_current_user),
 ):
-    """List employees for any signed-in employee. Admin accounts are never listed; managers also don't see other managers. Soft-deleted are excluded."""
+    """Paged list of employees with optional filters for role, active status and search (name, email or phone).
+    Admin accounts are never returned. Managers also don't see other managers. Soft-deleted employees are excluded.
+    Open to every signed-in employee.
+    """
     q = db.query(Employee).filter(
         Employee.deleted_at.is_(None),
         Employee.role.notin_(_hidden_roles(viewer)),
@@ -147,26 +152,29 @@ def list_employees(
     )
 
 
-@router.get("/{employee_id}", response_model=EmployeeResponse)
+@router.get("/{employee_id}", response_model=EmployeeResponse, summary="Get an employee")
 def get_employee(
     employee_id: int,
     db: Session = Depends(get_db),
     viewer: Employee = Depends(get_current_user),
 ):
-    """Get a single employee by ID for any signed-in employee. Hidden roles return 404."""
+    """One employee by id. Returns 404 for an unknown id, a deleted employee, or a role hidden from the list."""
     return EmployeeResponse.model_validate(
         _get_employee_or_404(db, employee_id, viewer), from_attributes=True
     )
 
 
-@router.post("", response_model=EmployeeCreateResponse, status_code=201)
+@router.post("", response_model=EmployeeCreateResponse, status_code=201, summary="Create an employee")
 def create_employee(
     body: EmployeeCreate,
     db: Session = Depends(get_db),
     actor: Employee = Depends(manage_employees),
 ):
-    """Create an employee (admin/manager only). The password is stored hashed and the
-    login details are emailed to the employee; the outcome is reported in `credentials_email`."""
+    """Admin or manager creates an employee. Only an admin can assign the admin or manager role. The role must exist and be active.
+    Email must be unique, ignoring case, and a deleted employee's email still counts. Phone must be unique by its last 10 digits, and a deleted employee's phone can be reused.
+    The password is stored hashed and the login details are emailed. The outcome is in `credentials_email`.
+    Returns 409 for a duplicate email or phone, and 422 for an unknown role.
+    """
     _ensure_can_assign_role(actor, body.role)
     _ensure_role_assignable(db, body.role)
     if _email_taken(db, body.email):
@@ -190,14 +198,17 @@ def create_employee(
     )
 
 
-@router.put("/{employee_id}", response_model=EmployeeResponse)
+@router.put("/{employee_id}", response_model=EmployeeResponse, summary="Update an employee")
 def update_employee(
     employee_id: int,
     body: EmployeeUpdate,
     db: Session = Depends(get_db),
     actor: Employee = Depends(manage_employees),
 ):
-    """Update an employee (admin/manager only). Supplying `password` resets it."""
+    """Admin or manager edits an employee. Only the fields sent are changed. Sending `password` resets it.
+    Only an admin can change an admin or manager account, or grant those roles. Nobody can deactivate or change the role of their own account.
+    Required fields cannot be null. Returns 409 for a duplicate email or phone.
+    """
     employee = _get_employee_or_404(db, employee_id)
     data = body.model_dump(exclude_unset=True)
 
@@ -223,7 +234,8 @@ def update_employee(
     if data.get("phone") and _phone_taken(db, data["phone"], exclude_id=employee.id):
         raise HTTPException(status_code=409, detail=DUPLICATE_PHONE)
 
-    if "password" in data:
+    password_changed = "password" in data
+    if password_changed:
         employee.password_hash = get_password_hash(data.pop("password"))
     for field, value in data.items():
         setattr(employee, field, value)
@@ -234,16 +246,21 @@ def update_employee(
         db.rollback()
         raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
     db.refresh(employee)
+    if password_changed:
+        # Best effort: the password is already changed, so a failed email is only logged.
+        send_password_changed_notice(employee.name, employee.email)
     return EmployeeResponse.model_validate(employee, from_attributes=True)
 
 
-@router.delete("/{employee_id}", status_code=204)
+@router.delete("/{employee_id}", status_code=204, summary="Delete an employee")
 def delete_employee(
     employee_id: int,
     db: Session = Depends(get_db),
     actor: Employee = Depends(manage_employees),
 ):
-    """Soft delete an employee (admin/manager only)."""
+    """Soft delete. The row is kept for history and the employee is deactivated.
+    You cannot delete your own account. Only an admin can delete an admin or manager.
+    """
     employee = _get_employee_or_404(db, employee_id)
     if employee.id == actor.id:
         raise HTTPException(status_code=400, detail="You cannot delete your own account")

@@ -36,11 +36,11 @@ app.include_router(staff_locations_router)
 app.include_router(tasks_router)
 
 
-@app.get("/")
+@app.get("/", summary="API status", description="Confirms the API is running. No sign-in needed.")
 def root():
     return {"message": "Ogera CRM API is running"}
 
 
-@app.get("/health")
+@app.get("/health", summary="Health check", description="Returns healthy when the server is up. Used by uptime checks. No sign-in needed.")
 def health_check():
     return {"status": "healthy"}

@@ -63,13 +63,13 @@ def _name_taken(db: Session, name: str, exclude_id: int | None = None) -> bool:
     return q.first() is not None
 
 
-@router.get("", response_model=RoleListResponse)
+@router.get("", response_model=RoleListResponse, summary="List roles")
 def list_roles(
     include_inactive: bool = True,
     db: Session = Depends(get_db),
     _: Employee = Depends(view_roles),
 ):
-    """List roles (admin/manager). Pass `include_inactive=false` for assignable roles only."""
+    """Lists roles for admins and managers. Pass `include_inactive=false` to get only the roles that can be assigned."""
     q = db.query(Role)
     if not include_inactive:
         q = q.filter(Role.is_active == 1)
@@ -80,23 +80,24 @@ def list_roles(
     )
 
 
-@router.get("/{role_id}", response_model=RoleResponse)
+@router.get("/{role_id}", response_model=RoleResponse, summary="Get a role")
 def get_role(
     role_id: int,
     db: Session = Depends(get_db),
     _: Employee = Depends(view_roles),
 ):
+    """One role by id. Admin and manager only."""
     role = _get_role_or_404(db, role_id)
     return _to_response(role, _employee_counts(db).get(role.slug, 0))
 
 
-@router.post("", response_model=RoleResponse, status_code=201)
+@router.post("", response_model=RoleResponse, status_code=201, summary="Create a custom role")
 def create_role(
     body: RoleCreate,
     db: Session = Depends(get_db),
     _: Employee = Depends(manage_roles),
 ):
-    """Create a custom role (admin only). The slug is generated from the name."""
+    """Creates a custom role (admin only). The slug is generated from the name and never changes."""
     slug = _slugify(body.name)
     if _name_taken(db, body.name) or db.query(Role.id).filter(Role.slug == slug).first():
         raise HTTPException(status_code=409, detail=DUPLICATE_ROLE)
@@ -112,14 +113,14 @@ def create_role(
     return _to_response(role, 0)
 
 
-@router.put("/{role_id}", response_model=RoleResponse)
+@router.put("/{role_id}", response_model=RoleResponse, summary="Update a role")
 def update_role(
     role_id: int,
     body: RoleUpdate,
     db: Session = Depends(get_db),
     _: Employee = Depends(manage_roles),
 ):
-    """Edit a role's name/description or (de)activate it (admin only). The slug never changes."""
+    """Edits a role's name or description, or turns it on or off (admin only). The slug never changes."""
     role = _get_role_or_404(db, role_id)
     data = body.model_dump(exclude_unset=True)
     for field in ("name", "is_active"):
@@ -142,13 +143,13 @@ def update_role(
     return _to_response(role, _employee_counts(db).get(role.slug, 0))
 
 
-@router.delete("/{role_id}", status_code=204)
+@router.delete("/{role_id}", status_code=204, summary="Delete a role")
 def delete_role(
     role_id: int,
     db: Session = Depends(get_db),
     _: Employee = Depends(manage_roles),
 ):
-    """Delete an unused custom role (admin only). Use deactivate for roles that are in use."""
+    """Deletes a custom role that no employee uses (admin only). For a role that is in use, deactivate it instead."""
     role = _get_role_or_404(db, role_id)
     if role.is_system:
         raise HTTPException(status_code=400, detail="System roles cannot be deleted")

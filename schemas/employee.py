@@ -2,6 +2,7 @@ import datetime
 import re
 from typing import Annotated
 from pydantic import BaseModel, EmailStr, ConfigDict, Field, field_validator
+from config import PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH
 from .enums import RoleEnum
 
 _PHONE_RE = re.compile(r"^\+?[0-9]{7,15}$")
@@ -20,8 +21,10 @@ def _validate_phone(v: str | None) -> str | None:
 
 
 def _validate_password(v: str) -> str:
-    if len(v) < 8:
-        raise ValueError("Password must be at least 8 characters")
+    if len(v) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"Password must be at least {PASSWORD_MIN_LENGTH} characters")
+    if len(v) > PASSWORD_MAX_LENGTH:
+        raise ValueError(f"Password must be at most {PASSWORD_MAX_LENGTH} characters")
     if len(v.encode()) > 72:
         raise ValueError("Password must be at most 72 bytes")
     if not (any(c.isalpha() for c in v) and any(c.isdigit() for c in v)):
