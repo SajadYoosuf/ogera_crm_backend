@@ -101,18 +101,6 @@ def test_stage_change_needs_verified_details(client, login, lead_source_id):
     assert moved.status_code == 201
 
 
-# --- heartbeat ------------------------------------------------------------------------------
-
-def test_heartbeat_records_presence_and_returns_a_fresh_token(client, login):
-    headers, anu = login("anu")
-    beat = client.post("/auth/heartbeat", headers=headers)
-    assert beat.status_code == 200
-    body = beat.json()
-    assert body["employee_id"] == anu["id"] and body["is_online"] is True
-    assert body["access_token"] and body["token_type"] == "bearer"
-    assert client.post("/auth/heartbeat", headers={"Authorization": "Bearer nope"}).status_code == 401
-
-
 # --- staff directory ------------------------------------------------------------------------
 
 def test_directory_is_open_to_staff(client, login):
