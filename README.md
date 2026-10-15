@@ -21,6 +21,7 @@ Tests: `pip install -r requirements-dev.txt`, then run `pytest` from this folder
 - `routes/` — endpoints (`contacts.py`, `lead_activities.py`, `tasks.py`, `settings.py`, …)
 - `models/`, `schemas/` — database models and request/response schemas
 - `docs/changes/` — change notes for each feature
+- `docs/modules/` — module guides: authentication and employee management (routes, business rules, tables, end-to-end flow)
 - `CHANGELOG.md` — what changed, commit by commit
 
 Migrations that must run before a deploy are listed in each changelog entry (`scripts/`).

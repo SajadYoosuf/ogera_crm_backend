@@ -1,5 +1,73 @@
 # Changelog
 
+## 2026-10-15 — `5d54032` (branch `phase1-redesign`)
+
+**Swagger descriptions for every API; password length 6-15 and change emails**
+
+Author: sajad yoosuf
+Previous commit on this side: `931d39d` Remove heartbeat endpoint and employee_presence model (2026-10-15)
+
+### Summary
+Every route has a Swagger summary and description. Passwords for new and admin-edited employees must be 6 to 15 characters. An employee is emailed when an admin changes their password. Module guides: `docs/modules/authentication.md`, `docs/modules/employee-management.md`.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Modified | `routes/auth.py`, `routes/contacts.py`, `routes/lead_activities.py`, `routes/lead_sources.py`, `routes/performance.py`, `routes/products.py`, `routes/roles.py`, `routes/sales.py`, `routes/staff_locations.py`, `routes/tasks.py`, `routes/employees.py` | Swagger summary and description on each route |
+| Modified | `main.py` | Summary and description for `GET /` and `GET /health` |
+| Modified | `config.py` | `PASSWORD_MIN_LENGTH` (6), `PASSWORD_MAX_LENGTH` (15) |
+| Modified | `schemas/employee.py` | Password length from config; the old 8-character minimum is gone |
+| Modified | `routes/employees.py` | Sends the password-changed notice after an admin changes a password |
+| Modified | `mailer.py` | `send_password_changed_notice` |
+| Added | `tests/test_employee_passwords.py` | Length limits and the change notice |
+| Modified | `rule.md` | Rule 5: password rules and change notices |
+
+### Notes
+The forgot-password feature and the settings feature are not in this commit. Three contact routes (`contact_map_pins`, `contact_type_counts`, `list_stage_types`) get their Swagger text when `routes/contacts.py` from the contacts work is committed.
+
+## 2026-10-15 — `931d39d` (branch `phase1-redesign`)
+
+**Remove heartbeat endpoint and employee_presence model**
+
+Author: sajad yoosuf
+Previous commit on this side: `18ffeb3` Employees: staff can list employees, hide admins, add heartbeat (2026-10-15)
+
+### Summary
+`POST /auth/heartbeat` and the presence table are removed. The table was empty and unreferenced, and was dropped from the database.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Modified | `routes/auth.py` | Heartbeat route and its response model removed |
+| Deleted | `models/employee_presence.py` | `EmployeePresence` model removed |
+| Modified | `models/__init__.py` | `EmployeePresence` export removed |
+| Modified | `tests/test_mobile_api.py` | Heartbeat test removed |
+
+## 2026-10-15 — `18ffeb3` (branch `phase1-redesign`)
+
+**Employees: staff can list employees, hide admins, add heartbeat**
+
+Author: sajad yoosuf
+Previous commit on this side: `99b9bd3` Redesign the Employees page to the design and add a Role filter
+
+### Summary
+Any signed-in employee can read the employee list and a single employee, but admin accounts are never returned, and managers do not see other managers. The phone duplicate check ignores the country code and spacing. `is_field_staff` is removed. The backend test-audit skill is added. Module guides for authentication and employee management are in `docs/modules/`.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Modified | `routes/employees.py` | List and get open to signed-in employees, with hidden roles; phone match on last 10 digits; `is_field_staff` removed from the allowed fields |
+| Modified | `models/employee.py` | `is_field_staff` removed |
+| Modified | `schemas/employee.py` | `is_field_staff` removed from create and update |
+| Modified | `scripts/create_tables.sql`, `scripts/seed.py` | `is_field_staff` removed |
+| Modified | `tests/test_mobile_api.py` | Employee list visibility tests |
+| Added | `tests/test_employee_duplicates.py` | Duplicate email and phone tests, including soft-deleted rows and country codes |
+| Added | `.claude/skills/backend-test-audit/SKILL.md` | Project skill for auditing backend changes |
+| Modified | `rule.md` | Rule 3: employee list hides admin accounts |
+
+### Notes
+The DB column `employees.is_field_staff` still needs `ALTER TABLE employees DROP COLUMN is_field_staff;` on databases that have it. The code no longer reads or writes it.
+
 ## 2026-10-12 — `c944450` (branch `phase1-redesign`)
 
 **Redesign the Contacts page to the design and add Sort by**
