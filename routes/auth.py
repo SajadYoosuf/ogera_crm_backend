@@ -1,9 +1,11 @@
 
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from database import get_db
-from models import Employee
+from models import Employee, EmployeePresence
 from auth import verify_password, create_access_token, get_current_user
 from schemas import EmployeeResponse
 
@@ -59,3 +61,41 @@ def login(
 def get_profile(current_user: Employee = Depends(get_current_user)):
     """Get current user profile."""
     return EmployeeResponse.model_validate(current_user, from_attributes=True)
+
+
+class HeartbeatResponse(BaseModel):
+    employee_id: int
+    is_online: bool
+    last_seen_at: datetime.datetime
+    # A fresh token, so an employee who is still using the app is not logged out when the old one runs out.
+    access_token: str
+    token_type: str = "bearer"
+
+
+@router.post("/heartbeat", response_model=HeartbeatResponse)
+def heartbeat(
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """Called by the app while it is in use. Records that the employee is online and returns a refreshed token.
+
+    Presence is separate from the account's is_active flag: is_active is set by an admin, presence comes from this call.
+    """
+    if not current_user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employee account is inactive")
+
+    now = datetime.datetime.utcnow()
+    presence = db.get(EmployeePresence, current_user.id)
+    if presence is None:
+        presence = EmployeePresence(employee_id=current_user.id, last_seen_at=now)
+        db.add(presence)
+    else:
+        presence.last_seen_at = now
+    db.commit()
+
+    return HeartbeatResponse(
+        employee_id=current_user.id,
+        is_online=True,
+        last_seen_at=now,
+        access_token=create_access_token(current_user.id),
+    )

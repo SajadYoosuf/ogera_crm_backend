@@ -10,6 +10,7 @@ from .partner_profile import PartnerProfile
 from .product import Product, ProductOption
 from .sale import Sale
 from .staff_location import StaffLocation, StaffLocationState
+from .employee_presence import EmployeePresence
 
 __all__ = [
     "Role",
@@ -28,4 +29,5 @@ __all__ = [
     "Sale",
     "StaffLocation",
     "StaffLocationState",
+    "EmployeePresence",
 ]

@@ -101,15 +101,50 @@ def test_stage_change_needs_verified_details(client, login, lead_source_id):
     assert moved.status_code == 201
 
 
+# --- heartbeat ------------------------------------------------------------------------------
+
+def test_heartbeat_records_presence_and_returns_a_fresh_token(client, login):
+    headers, anu = login("anu")
+    beat = client.post("/auth/heartbeat", headers=headers)
+    assert beat.status_code == 200
+    body = beat.json()
+    assert body["employee_id"] == anu["id"] and body["is_online"] is True
+    assert body["access_token"] and body["token_type"] == "bearer"
+    assert client.post("/auth/heartbeat", headers={"Authorization": "Bearer nope"}).status_code == 401
+
+
 # --- staff directory ------------------------------------------------------------------------
 
-def test_directory_is_open_to_staff_but_employee_list_is_not(client, login):
+def test_directory_is_open_to_staff(client, login):
     headers, _ = login("anu")
     directory = client.get("/employees/directory", headers=headers)
     assert directory.status_code == 200
     assert {"Ada Admin", "Anu Sales"} <= {e["name"] for e in directory.json()}
     assert set(directory.json()[0]) == {"id", "name", "role", "phone"}
-    assert client.get("/employees", headers=headers).status_code == 403
+
+
+def test_employee_list_is_open_to_staff_but_hides_admins(client, login):
+    admin_headers, admin = login("admin")
+    headers, _ = login("anu")
+    listed = client.get("/employees", headers=headers)
+    assert listed.status_code == 200
+    roles = {e["role"] for e in listed.json()["items"]}
+    assert "admin" not in roles
+    assert client.get(f"/employees/{admin['id']}", headers=headers).status_code == 404
+    assert client.get(f"/employees/{admin['id']}", headers=admin_headers).status_code == 404
+    assert "admin" not in {e["role"] for e in client.get("/employees", headers=admin_headers).json()["items"]}
+
+
+def test_manager_list_also_hides_managers(client, login):
+    admin_headers, _ = login("admin")
+    created = client.post("/employees", json={
+        "name": "Mona Manager", "email": "mona@example.com", "password": "Passw0rd!",
+        "role": "manager", "phone": "9999900001",
+    }, headers=admin_headers).json()
+    manager_headers, _ = login("mona")
+    roles = {e["role"] for e in client.get("/employees", headers=manager_headers).json()["items"]}
+    assert "admin" not in roles and "manager" not in roles
+    assert client.get(f"/employees/{created['id']}", headers=manager_headers).status_code == 404
 
 
 def test_directory_hides_deactivated_staff(client, login):

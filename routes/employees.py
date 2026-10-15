@@ -28,9 +28,20 @@ DUPLICATE_EMAIL = "An employee with this email already exists"
 DUPLICATE_PHONE = "An employee with this phone number already exists"
 
 
-def _get_employee_or_404(db: Session, employee_id: int) -> Employee:
+# Roles hidden from the employee list and detail for every viewer. Managers also hide other managers.
+HIDDEN_FROM_LIST = {RoleEnum.admin.value}
+HIDDEN_FROM_MANAGER = {RoleEnum.admin.value, RoleEnum.manager.value}
+
+
+def _hidden_roles(viewer: Employee) -> set[str]:
+    return HIDDEN_FROM_MANAGER if viewer.role == RoleEnum.manager.value else HIDDEN_FROM_LIST
+
+
+def _get_employee_or_404(db: Session, employee_id: int, viewer: Employee | None = None) -> Employee:
     employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee or employee.deleted_at:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if viewer is not None and employee.role in _hidden_roles(viewer):
         raise HTTPException(status_code=404, detail="Employee not found")
     return employee
 
@@ -68,12 +79,20 @@ def _email_taken(db: Session, email: str, exclude_id: int | None = None) -> bool
     return q.first() is not None
 
 
+def _phone_key(phone: str) -> str:
+    """Last 10 digits, so '+91 90000 00003' and '9000000003' are the same number."""
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    return digits[-10:]
+
+
 def _phone_taken(db: Session, phone: str, exclude_id: int | None = None) -> bool:
     # Phone has no DB unique index, so soft-deleted employees don't reserve their number.
-    q = db.query(Employee.id).filter(Employee.phone == phone, Employee.deleted_at.is_(None))
+    # Compared in Python on the normalised key, so the country code and spacing don't matter.
+    key = _phone_key(phone)
+    q = db.query(Employee.id, Employee.phone).filter(Employee.phone.is_not(None), Employee.deleted_at.is_(None))
     if exclude_id is not None:
         q = q.filter(Employee.id != exclude_id)
-    return q.first() is not None
+    return any(_phone_key(stored) == key for _, stored in q.all() if key)
 
 
 @router.get("/directory")
@@ -96,10 +115,13 @@ def list_employees(
     is_active: bool | None = None,
     search: str | None = Query(None, description="Matches name, email or phone"),
     db: Session = Depends(get_db),
-    _: Employee = Depends(manage_employees),
+    viewer: Employee = Depends(get_current_user),
 ):
-    """List employees (admin/manager only; soft-deleted are excluded)."""
-    q = db.query(Employee).filter(Employee.deleted_at.is_(None))
+    """List employees for any signed-in employee. Admin accounts are never listed; managers also don't see other managers. Soft-deleted are excluded."""
+    q = db.query(Employee).filter(
+        Employee.deleted_at.is_(None),
+        Employee.role.notin_(_hidden_roles(viewer)),
+    )
     if role:
         q = q.filter(Employee.role == role)
     if is_active is not None:
@@ -129,11 +151,11 @@ def list_employees(
 def get_employee(
     employee_id: int,
     db: Session = Depends(get_db),
-    _: Employee = Depends(manage_employees),
+    viewer: Employee = Depends(get_current_user),
 ):
-    """Get a single employee by ID (admin/manager only)."""
+    """Get a single employee by ID for any signed-in employee. Hidden roles return 404."""
     return EmployeeResponse.model_validate(
-        _get_employee_or_404(db, employee_id), from_attributes=True
+        _get_employee_or_404(db, employee_id, viewer), from_attributes=True
     )
 
 
@@ -180,7 +202,7 @@ def update_employee(
     data = body.model_dump(exclude_unset=True)
 
     # Null is not a valid value for these required columns.
-    for field in ("name", "email", "role", "is_field_staff", "is_active", "password"):
+    for field in ("name", "email", "role", "is_active", "password"):
         if field in data and data[field] is None:
             raise HTTPException(status_code=422, detail=f"{field} cannot be null")
 

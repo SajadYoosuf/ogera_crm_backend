@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS employees (
     email VARCHAR(180) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(40) NOT NULL DEFAULT 'sales_executive',
-    is_field_staff SMALLINT NOT NULL DEFAULT 0,
     phone VARCHAR(20),
     is_active SMALLINT NOT NULL DEFAULT 1,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

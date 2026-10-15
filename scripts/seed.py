@@ -23,7 +23,6 @@ DEFAULT_ADMIN_USERS = [
         "email": "admin@ogera.com",
         "password": "admin",
         "role": "admin",
-        "is_field_staff": False,
         "phone": None,
         "is_active": True,
     },

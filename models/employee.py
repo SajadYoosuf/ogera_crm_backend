@@ -15,7 +15,6 @@ class Employee(Base):
     role: Mapped[str] = mapped_column(
         String(40), ForeignKey("roles.slug", onupdate="CASCADE"), default="sales_executive"
     )
-    is_field_staff: Mapped[int] = mapped_column(SmallInteger, default=0)
     phone: Mapped[str | None] = mapped_column(String(20))
     is_active: Mapped[int] = mapped_column(SmallInteger, default=1)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())

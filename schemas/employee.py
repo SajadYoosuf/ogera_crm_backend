@@ -33,7 +33,6 @@ class EmployeeBase(BaseModel):
     name: Annotated[str, Field(min_length=1, max_length=120)]
     email: EmailStr
     role: RoleSlug = RoleEnum.sales.value
-    is_field_staff: bool = False
     phone: Annotated[str, Field(max_length=20)] | None = None
 
     @field_validator("name", mode="after")
@@ -68,7 +67,6 @@ class EmployeeUpdate(BaseModel):
     name: Annotated[str, Field(min_length=1, max_length=120)] | None = None
     email: EmailStr | None = None
     role: RoleSlug | None = None
-    is_field_staff: bool | None = None
     phone: Annotated[str, Field(max_length=20)] | None = None
     is_active: bool | None = None
     password: str | None = None  # if provided, route handler re-hashes it
