@@ -16,6 +16,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", str(5
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "6"))
 PASSWORD_MAX_LENGTH = int(os.getenv("PASSWORD_MAX_LENGTH", "15"))
 
+# Forgot password: the emailed code and the short-lived token that follows it
+RESET_CODE_TTL_MINUTES = int(os.getenv("RESET_CODE_TTL_MINUTES", "10"))      # how long a code stays valid
+RESET_CODE_RESEND_SECONDS = int(os.getenv("RESET_CODE_RESEND_SECONDS", "60"))  # wait before another code
+RESET_CODE_MAX_ATTEMPTS = int(os.getenv("RESET_CODE_MAX_ATTEMPTS", "5"))    # wrong tries before the code locks
+RESET_TOKEN_TTL_MINUTES = int(os.getenv("RESET_TOKEN_TTL_MINUTES", "10"))    # time to set the new password after verifying
+
 # Outgoing email (SMTP). Email sending is skipped, with a log line, when SMTP_HOST is unset.
 SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

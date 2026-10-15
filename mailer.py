@@ -133,3 +133,50 @@ def send_password_changed_notice(name: str, email: str) -> dict:
 
     print(f"[mail] password change notice handed to mail server for {email}")
     return {"sent": True, "message": "Notice sent"}
+
+
+def send_password_reset_code(name: str, email: str, code: str, expires_minutes: int) -> dict:
+    """Email a password-reset code. Never raises. Returns {"sent": bool, "message": str}."""
+    if not SMTP_HOST or not SMTP_FROM:
+        print(f"[mail] SMTP not configured; reset code to {email} was NOT sent")
+        return {"sent": False, "message": "Email sending is not configured on the server"}
+
+    try:
+        validate_email(email, check_deliverability=True)
+    except EmailNotValidError as exc:
+        print(f"[mail] NOT sending reset code to {email}: {exc}")
+        return {"sent": False, "message": f"Reset code not sent: {exc}"}
+
+    text = (
+        f"Hi {name},\n\n"
+        f"Your {SMTP_FROM_NAME} password reset code is: {code}\n\n"
+        f"It expires in {expires_minutes} minutes. If you did not ask to reset your password, ignore this email.\n"
+    )
+    html = (
+        f"<p>Hi {escape(name)},</p>"
+        f"<p>Your {escape(SMTP_FROM_NAME)} password reset code is:</p>"
+        f"<p style=\"font-size:24px;font-weight:bold;letter-spacing:4px\">{escape(code)}</p>"
+        f"<p>It expires in {expires_minutes} minutes. If you did not ask to reset your password, ignore this email.</p>"
+    )
+
+    message = EmailMessage()
+    message["Subject"] = f"Your {SMTP_FROM_NAME} password reset code"
+    message["From"] = formataddr((SMTP_FROM_NAME, SMTP_FROM))
+    message["To"] = email
+    message.set_content(text)
+    message.add_alternative(html, subtype="html")
+
+    try:
+        _send(message)
+    except smtplib.SMTPRecipientsRefused:
+        print(f"[mail] recipient refused reset code: {email}")
+        return {"sent": False, "message": "The mail server refused this email address"}
+    except smtplib.SMTPAuthenticationError:
+        print("[mail] SMTP login failed - check SMTP_USER / SMTP_PASSWORD")
+        return {"sent": False, "message": "Reset code not sent: mail server login failed"}
+    except Exception as exc:  # noqa: BLE001 - must never break the request
+        print(f"[mail] FAILED to send reset code to {email}: {type(exc).__name__}: {exc}")
+        return {"sent": False, "message": "Reset code not sent: could not reach the mail server"}
+
+    print(f"[mail] reset code handed to mail server for {email}")
+    return {"sent": True, "message": "Reset code sent"}
