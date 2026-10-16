@@ -144,7 +144,8 @@ def _source_items(db: Session, category: str) -> list[Item]:
 
 
 def _stage_items(db: Session, category: str) -> list[Item]:
-    rows = db.query(StageType).order_by(StageType.order, StageType.id).all()
+    # Only the consumer pipeline is managed via Settings; partner and dealer stages are fixed in code.
+    rows = db.query(StageType).filter(StageType.contact_type == "consumer").order_by(StageType.order, StageType.id).all()
     return [Item(r.id, r.slug, r.name, r.order, bool(r.is_active), r.slug in LOCKED[category]) for r in rows]
 
 
