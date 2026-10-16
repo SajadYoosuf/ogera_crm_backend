@@ -81,12 +81,13 @@ DEFAULT_STAGES: list[tuple[str, str, str, str, int]] = [
     ("new_lead",             "New Lead",               "Just entered.",                                        "dealer", 1),
     ("connected",            "Connected",               "Initial contact made.",                               "dealer", 2),
     ("meeting_done",         "Meeting Done",            "In-person or video meeting completed.",               "dealer", 3),
-    ("terms_agreed",         "Terms Agreed",            "Commercial terms discussed and agreed.",              "dealer", 4),
-    ("sample_sent",          "Sample Sent",             "Product sample dispatched.",                          "dealer", 5),
-    ("first_order",          "First Order",             "First order placed.",                                 "dealer", 6),
-    ("placed",               "Placed",                  "Order confirmed and in fulfilment.",                  "dealer", 7),
-    ("active_dealer",        "Active Dealer",           "Recurring active dealer.",                            "dealer", 8),
-    ("inactive_dealer",      "Inactive Dealer",         "Dealer no longer ordering.",                          "dealer", 9),
+    ("aware",                "Aware",                   "Dealer understands the product range.",               "dealer", 4),
+    ("terms_agreed",         "Terms Agreed",            "Commercial terms discussed and agreed.",              "dealer", 5),
+    ("sample_sent",          "Sample Sent",             "Product sample dispatched.",                          "dealer", 6),
+    ("first_order",          "First Order",             "First order placed.",                                 "dealer", 7),
+    ("placed",               "Placed",                  "Order confirmed and in fulfilment.",                  "dealer", 8),
+    ("active_dealer",        "Active Dealer",           "Recurring active dealer.",                            "dealer", 9),
+    ("inactive_dealer",      "Inactive Dealer",         "Dealer no longer ordering.",                          "dealer", 10),
 ]
 
 DEFAULT_COMPANY = {"company_name": "Ogera", "company_logo_url": None}
