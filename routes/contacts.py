@@ -26,8 +26,7 @@ from schemas import (
     ContactType,
     StageEnum,
     ContactUpdate,
-    ConsumerProfileResponse,
-    ConsumerProfileUpdate,
+
     LeadStageCreate,
     LeadStageResponse,
     StageTypeItem,
@@ -737,45 +736,6 @@ def delete_contact(
     db.commit()
 
 
-@router.put("/{contact_id}/consumer-profile", response_model=ConsumerProfileResponse, summary="Save consumer profile")
-def upsert_consumer_profile(
-    contact_id: int,
-    body: ConsumerProfileUpdate,
-    db: Session = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
-):
-    """Creates or updates the consumer details of a contact (house stage, current tank).
-    Returns 400 if the contact is not a consumer.
-    """
-    contact = get_visible_contact(db, current_user, contact_id)
-    if contact.contact_type != "consumer":
-        raise HTTPException(status_code=400, detail="Contact is not a consumer")
-
-    data = body.model_dump(exclude_unset=True, mode="json")
-    if contact.consumer_profile is None:
-        contact.consumer_profile = ConsumerProfile(**data)
-    else:
-        for field, value in data.items():
-            setattr(contact.consumer_profile, field, value)
-
-    db.commit()
-    db.refresh(contact.consumer_profile)
-    return ConsumerProfileResponse.model_validate(contact.consumer_profile, from_attributes=True)
-
-
-@router.delete("/{contact_id}/consumer-profile", status_code=204, summary="Remove consumer profile")
-def delete_consumer_profile(
-    contact_id: int,
-    db: Session = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
-):
-    """Removes a contact's consumer profile. The contact itself is kept."""
-    contact = get_visible_contact(db, current_user, contact_id)
-    if contact.consumer_profile is None:
-        raise HTTPException(status_code=404, detail="Consumer profile not found")
-
-    db.delete(contact.consumer_profile)
-    db.commit()
 
 
 @router.get("/{contact_id}/stages", response_model=list[LeadStageResponse], summary="List stage history")
