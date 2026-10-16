@@ -18,9 +18,10 @@ MAX_RANGE_DAYS = 62  # a month view with its leading and trailing days
 def list_tasks(
     date_from: datetime.date | None = None,
     date_to: datetime.date | None = None,
-    status: Literal["open", "done", "all"] = "open",
+    status: Literal["open", "done", "all", "due_today", "overdue"] = "open",
     assigned_to: int | None = None,
     type: ActivityType | None = None,
+    contact_type: Literal["consumer", "partner"] | None = None,
     q: str | None = Query(default=None, max_length=100),
     include_overdue: bool = False,
     skip: int = Query(default=0, ge=0),
@@ -47,10 +48,21 @@ def list_tasks(
         scope.append(LeadActivity.assigned_to == assigned_to)
     if type:
         scope.append(LeadActivity.type == type)
+    if contact_type:
+        scope.append(Contact.contact_type == contact_type)
     needle = (q or "").strip()
     if needle:
         like = f"%{needle}%"
         scope.append(or_(Contact.name.ilike(like), Contact.phone.like(like)))
+
+    now = datetime.datetime.now()
+    today, clock = now.date(), now.time()
+    pending = LeadActivity.status == "pending"
+    overdue = and_(pending, or_(
+        LeadActivity.scheduled_date < today,
+        and_(LeadActivity.scheduled_date == today, LeadActivity.scheduled_time.is_not(None), LeadActivity.scheduled_time < clock),
+    ))
+    due_today = and_(pending, ~overdue, LeadActivity.scheduled_date == today)
 
     in_range = []
     if date_from:
@@ -62,7 +74,10 @@ def list_tasks(
     if include_overdue and date_from and status != "done":
         window = or_(window, and_(LeadActivity.status == "pending", LeadActivity.scheduled_date < date_from))
     filters = [*scope, window]
-    if status != "all":
+    if status in ("overdue", "due_today"):
+        # "Already late" and "due today" are about right now, so they ignore the date range
+        filters = [*scope, overdue if status == "overdue" else due_today]
+    elif status != "all":
         filters.append(LeadActivity.status == ("pending" if status == "open" else "done"))
 
     base = db.query(LeadActivity).join(Contact, Contact.id == LeadActivity.contact_id).filter(*filters)
@@ -91,17 +106,10 @@ def list_tasks(
         for activity, contact in rows
     ]
 
-    now = datetime.datetime.now()
-    today, clock = now.date(), now.time()
-    pending = LeadActivity.status == "pending"
-    overdue = and_(pending, or_(
-        LeadActivity.scheduled_date < today,
-        and_(LeadActivity.scheduled_date == today, LeadActivity.scheduled_time.is_not(None), LeadActivity.scheduled_time < clock),
-    ))
     counts = (
         db.query(
             func.coalesce(func.sum(case((overdue, 1), else_=0)), 0),
-            func.coalesce(func.sum(case((and_(pending, ~overdue, LeadActivity.scheduled_date == today), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((due_today, 1), else_=0)), 0),
             func.coalesce(func.sum(case((and_(pending, LeadActivity.scheduled_date > today), 1), else_=0)), 0),
             func.coalesce(func.sum(case((and_(LeadActivity.status == "done", window), 1), else_=0)), 0),
         )

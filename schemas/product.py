@@ -158,7 +158,10 @@ class ProductListItem(BaseModel):
     slug: str
     brand: ProductOptionRef | None = None
     category: ProductOptionRef | None = None
+    model_number: str | None = None
+    sku: str | None = None
     capacity_display: str | None = None
+    orientation: str | None = None
     mrp: Decimal | None = None
     sale_price: Decimal | None = None
     is_popular: bool = False

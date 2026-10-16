@@ -1,10 +1,11 @@
 import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import case, func
+from sqlalchemy import case, exists, func
 from sqlalchemy.orm import Session
 from auth import get_current_user
 from database import get_db
-from models import ConsumerProfile, Contact, Employee, LeadActivity, LeadSource, LeadStage
+from models import Contact, Employee, LeadActivity, LeadSource, LeadStage, StageType
+from schemas.enums import ContactType
 
 router = APIRouter(prefix="/performance", tags=["performance"])
 
@@ -19,21 +20,22 @@ def performance_report(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Counts the contacts each employee created in a date range, split into sales-ready leads and awareness contacts (`awareness_mode = 1`).
+    """Counts the contacts each employee created in a date range, split into sales-ready leads and awareness contacts (a contact is awareness once it has reached the Aware stage).
     Admins and managers see the whole team. Everyone else sees only their own numbers.
     """
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
     is_team = current_user.role in TEAM_ROLES
 
-    awareness = case((ConsumerProfile.awareness_mode == 1, 1), else_=0)
+    aware_ids = [r.id for r in db.query(StageType).filter(StageType.slug == "aware", StageType.is_active == 1).all()]
+    aware_reached = exists().where(LeadStage.contact_id == Contact.id, LeadStage.stage_id.in_(aware_ids)) if aware_ids else exists().where(False)
+    awareness = case((aware_reached, 1), else_=0)
     query = (
         db.query(
             Contact.created_by,
             func.count(Contact.id),
             func.coalesce(func.sum(awareness), 0),
         )
-        .outerjoin(ConsumerProfile, ConsumerProfile.contact_id == Contact.id)
         .filter(
             Contact.deleted_at.is_(None),
             Contact.created_at >= start_date,
@@ -70,12 +72,6 @@ def performance_report(
 
 # --- Dashboard endpoints: summary, team scorecard, pipeline, lead sources -------------------
 
-# Pipeline order, matching the board. Rows saved before the current pipeline ("referral") count as repeat customers.
-PIPELINE = [
-    ("new_lead", "New Lead"), ("first_call", "First Call"), ("connected", "Connected"), ("aware", "Aware"),
-    ("interested", "Interested"), ("quoted", "Quoted"), ("negotiating", "Negotiating"),
-    ("won", "Won"), ("lost", "Lost"), ("repeat_customer", "Repeat Customer"),
-]
 # Roles that are not on the sales team scorecard.
 NON_SELLING_ROLES = {"admin", "manager", "support"}
 
@@ -93,13 +89,14 @@ def _period(start_date: datetime.date | None, end_date: datetime.date | None):
 
 
 def _stage_changes(db: Session, stage: str, lo, hi, group_by_assignee: bool, only_user: int | None = None):
-    """Distinct contacts that moved into `stage` in [lo, hi), counted from the stage history."""
+    """Distinct contacts that moved into `stage` (slug) in [lo, hi), counted from the stage history."""
+    stage_ids = [r.id for r in db.query(StageType).filter(StageType.slug == stage, StageType.is_active == 1).all()]
     distinct = func.count(func.distinct(LeadStage.contact_id))
     columns = [Contact.assigned_to, distinct] if group_by_assignee else [distinct]
     query = (
         db.query(*columns)
         .join(Contact, Contact.id == LeadStage.contact_id)
-        .filter(LeadStage.stage == stage, LeadStage.changed_at >= lo, LeadStage.changed_at < hi, Contact.deleted_at.is_(None))
+        .filter(LeadStage.stage_id.in_(stage_ids), LeadStage.changed_at >= lo, LeadStage.changed_at < hi, Contact.deleted_at.is_(None))
     )
     if only_user is not None:
         query = query.filter(Contact.assigned_to == only_user)
@@ -209,7 +206,7 @@ def performance_team(
     return rows
 
 
-def _contacts_with_stage(db: Session, *entities):
+def _contacts_with_stage(db: Session, *entities, contact_type: str = "consumer"):
     """Contacts left-joined to their newest stage row (LeadStage), so callers can group by its stage."""
     latest = (
         db.query(func.max(LeadStage.id).label("stage_id"), LeadStage.contact_id.label("contact_id"))
@@ -221,25 +218,37 @@ def _contacts_with_stage(db: Session, *entities):
         .select_from(Contact)
         .outerjoin(latest, latest.c.contact_id == Contact.id)
         .outerjoin(LeadStage, LeadStage.id == latest.c.stage_id)
-        .filter(Contact.contact_type == "consumer", Contact.deleted_at.is_(None))
+        .filter(Contact.contact_type == contact_type, Contact.deleted_at.is_(None))
     )
 
 
 @router.get("/pipeline", summary="Pipeline snapshot")
 def performance_pipeline(
+    contact_type: ContactType = Query(ContactType.consumer, description="Which pipeline to show (consumer, partner or dealer)"),
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Consumer contacts at each stage right now. This is a snapshot with no dates. Non-managers see only their own contacts."""
-    stage = func.coalesce(LeadStage.stage, "new_lead")
-    query = _contacts_with_stage(db, stage, func.count(Contact.id))
+    """Contacts at each stage right now for the requested pipeline. Defaults to consumer (backward-compatible).
+    Non-managers see only their own contacts."""
+    stage_rows = (
+        db.query(StageType)
+        .filter(StageType.contact_type == contact_type.value, StageType.is_active == 1)
+        .order_by(StageType.order, StageType.id)
+        .all()
+    )
+    pipeline = [(r.slug, r.name) for r in stage_rows]
+
+    # Group by stage_id (the FK) and resolve slug from the already-fetched pipeline list
+    stage_id_to_slug = {r.id: r.slug for r in stage_rows}
+    query = _contacts_with_stage(db, LeadStage.stage_id, func.count(Contact.id), contact_type=contact_type.value)
     if current_user.role not in TEAM_ROLES:
         query = query.filter(Contact.assigned_to == current_user.id)
     counts: dict[str, int] = {}
-    for slug, count in query.group_by(stage).all():
-        slug = "repeat_customer" if slug == "referral" else slug
-        counts[slug] = counts.get(slug, 0) + int(count)
-    return [{"stage": slug, "label": label, "count": counts.get(slug, 0)} for slug, label in PIPELINE]
+    for sid, count in query.group_by(LeadStage.stage_id).all():
+        slug = stage_id_to_slug.get(sid, "")
+        if slug:
+            counts[slug] = counts.get(slug, 0) + int(count)
+    return [{"stage": slug, "label": label, "count": counts.get(slug, 0)} for slug, label in pipeline]
 
 
 @router.get("/lead-sources", summary="Lead source performance")
@@ -252,7 +261,11 @@ def performance_lead_sources(
     """Consumer contacts created in the period, per lead source, and how many of them are Won now. Biggest source first."""
     _, _, lo, hi = _period(start_date, end_date)
     name = func.coalesce(LeadSource.name, "Unknown")
-    won = case((LeadStage.stage == "won", 1), else_=0)
+    # 'won' stage id for consumer pipeline — joined from stage_types via the FK
+    won_ids = [
+        r.id for r in db.query(StageType).filter(StageType.slug == "won", StageType.is_active == 1).all()
+    ]
+    won = case((LeadStage.stage_id.in_(won_ids), 1), else_=0) if won_ids else case((False, 1), else_=0)
     query = (
         _contacts_with_stage(db, name, func.count(Contact.id), func.coalesce(func.sum(won), 0))
         .outerjoin(LeadSource, LeadSource.id == Contact.lead_source_id)

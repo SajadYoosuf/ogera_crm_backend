@@ -18,13 +18,13 @@ class ContactType(str, enum.Enum):
 
 
 class ProfessionType(str, enum.Enum):
+    other = "other"
     plumber = "plumber"
     engineer = "engineer"
     interior_designer = "interior_designer"
     architect = "architect"
     contractor = "contractor"
     electrician = "electrician"
-    other = "other"                      # legacy imports; clients do not offer it for new partners
 
     @classmethod
     def normalise(cls, raw: str) -> "ProfessionType":
@@ -33,18 +33,24 @@ class ProfessionType(str, enum.Enum):
         return cls(key) if key in cls._value2member_map_ else cls.other
 
 
-class StageEnum(str, enum.Enum):
-    new_lead = "new_lead"
-    first_call = "first_call"
-    connected = "connected"
-    aware = "aware"
-    interested = "interested"
-    quoted = "quoted"
-    negotiating = "negotiating"
-    won = "won"
-    lost = "lost"
-    referral = "referral"
-    repeat_customer = "repeat_customer"
+def profession_key(raw: str) -> str:
+    """Stored profession text as an option value: "Interior Designer" -> "interior_designer"."""
+    return raw.strip().lower().replace(" ", "_")
+
+
+# Fixed lists in code (not in Settings). Changing them is a code change.
+class HouseStage(str, enum.Enum):
+    ready = "ready"
+    under_construction = "under_construction"
+    renovation = "renovation"
+
+
+class TankType(str, enum.Enum):
+    plastic = "plastic"
+    concrete = "concrete"
+    steel = "steel"
+    other = "other"
+
 
 
 class LossReasonEnum(str, enum.Enum):

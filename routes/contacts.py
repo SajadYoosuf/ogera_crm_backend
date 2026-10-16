@@ -24,9 +24,7 @@ from schemas import (
     ContactMapResponse,
     ContactResponse,
     ContactType,
-    StageEnum,
     ContactUpdate,
-
     LeadStageCreate,
     LeadStageResponse,
     StageTypeItem,
@@ -43,6 +41,30 @@ router = APIRouter(
 NON_ASSIGNABLE_ROLES = ("admin", "manager", "support")
 # Roles that may import contacts
 MANAGER_ROLES = ("admin", "manager")
+
+
+def _stage_response(stage: LeadStage) -> LeadStageResponse:
+    """Build a LeadStageResponse including slug/name/type from the joined StageType (lazy-loaded ok)."""
+    st = stage.stage_type
+    r = LeadStageResponse.model_validate(stage, from_attributes=True)
+    if st is not None:
+        r.stage_slug = st.slug
+        r.stage_name = st.name
+        r.contact_type = st.contact_type
+        r.is_terminal = bool(st.is_terminal)
+    return r
+
+
+def _get_new_lead_stage(db: Session, contact_type: str) -> StageType:
+    """Return the 'new_lead' StageType row for the given contact_type."""
+    st = db.query(StageType).filter(
+        StageType.slug == "new_lead",
+        StageType.contact_type == contact_type,
+        StageType.is_active == 1,
+    ).first()
+    if not st:
+        raise HTTPException(status_code=500, detail="Pipeline not seeded: new_lead stage missing")
+    return st
 
 
 def _pick_random_assignee(db: Session) -> int:
@@ -116,7 +138,7 @@ def contact_filters(
     profession_type: str | None = Query(None, description="Partner profession, e.g. plumber"),
     district: str | None = None,
     search: str | None = Query(None, description="Matches name or phone"),
-    stage: StageEnum | None = None,
+    stage_id: int | None = Query(None, description="Filter by pipeline stage (stage_types.id)"),
     lead_source_id: int | None = None,
     assigned_to: int | None = None,
     created_by: int | None = None,
@@ -132,11 +154,11 @@ def contact_filters(
 
 def contact_query(db: Session, f: dict, entities, user: Employee):
     """Contacts matching the filters and visible to the user. `entities(current_stage)` picks what to select."""
-    # Latest stage per contact. Stage rows are append-only, so max(id) is the newest.
+    # Latest stage per contact. Stage rows are append-only, so max(id) is the newest row.
     latest = (
         db.query(
             LeadStage.contact_id.label("contact_id"),
-            func.max(LeadStage.id).label("stage_id"),
+            func.max(LeadStage.id).label("latest_row_id"),
         )
         .group_by(LeadStage.contact_id)
         .subquery()
@@ -146,7 +168,7 @@ def contact_query(db: Session, f: dict, entities, user: Employee):
         db.query(*entities(current))
         .select_from(Contact)
         .outerjoin(latest, latest.c.contact_id == Contact.id)
-        .outerjoin(current, current.id == latest.c.stage_id)
+        .outerjoin(current, current.id == latest.c.latest_row_id)
         .filter(Contact.deleted_at.is_(None))  # Exclude soft-deleted
     )
     scope = visible_to(user)
@@ -164,8 +186,8 @@ def contact_query(db: Session, f: dict, entities, user: Employee):
     if "search" in f:
         like = f"%{f['search'].strip()}%"
         q = q.filter(or_(Contact.name.ilike(like), Contact.phone.ilike(like)))
-    if "stage" in f:
-        q = q.filter(current.stage == f["stage"].value)
+    if "stage_id" in f:
+        q = q.filter(current.stage_id == f["stage_id"])
     if "lead_source_id" in f:
         q = q.filter(Contact.lead_source_id == f["lead_source_id"])
     if "assigned_to" in f:
@@ -224,9 +246,25 @@ def list_contacts(
         .all()
     )
 
+    # Batch-load stage names for all stage ids in this page so each row has slug + name
+    stage_ids = {s.stage_id for _, s in rows if s is not None}
+    stage_meta: dict[int, tuple[str, str]] = {}
+    if stage_ids:
+        for st in db.query(StageType).filter(StageType.id.in_(stage_ids)).all():
+            stage_meta[st.id] = (st.slug, st.name)
+
     items = []
     for contact, current_stage in rows:
         pending = missing_fields(contact)
+        lead_stage_val = None
+        if current_stage is not None:
+            slug, name = stage_meta.get(current_stage.stage_id, ("", ""))
+            lead_stage_val = {
+                "stage_id": current_stage.stage_id,
+                "stage_slug": slug,
+                "stage_name": name,
+                "changed_at": current_stage.changed_at,
+            }
         item = ContactListItem.model_validate(
             {
                 "id": contact.id,
@@ -241,7 +279,7 @@ def list_contacts(
                 "work_area": contact.partner_profile.work_area if contact.partner_profile else None,
                 "latitude": contact.latitude,
                 "longitude": contact.longitude,
-                "lead_stage": current_stage,
+                "lead_stage": lead_stage_val,
                 "lead_source": contact.lead_source,
                 "assigned_to": contact.assigned_employee,
                 "created_by": contact.creator,
@@ -271,6 +309,13 @@ def contact_map_pins(
         .limit(limit)
         .all()
     )
+    # Batch-load stage slugs for map pin stage indicators
+    map_stage_ids = {s.stage_id for _, s in rows if s is not None}
+    map_stage_slugs: dict[int, str] = {}
+    if map_stage_ids:
+        for st in db.query(StageType).filter(StageType.id.in_(map_stage_ids)).all():
+            map_stage_slugs[st.id] = st.slug
+
     items = [
         ContactMapPin(
             id=c.id,
@@ -280,7 +325,7 @@ def contact_map_pins(
             address=c.address,
             latitude=float(c.latitude),
             longitude=float(c.longitude),
-            stage=stage.stage if stage else None,
+            stage_slug=map_stage_slugs.get(stage.stage_id) if stage else None,
             house_stage=c.consumer_profile.house_stage if c.consumer_profile else None,
         )
         for c, stage in rows
@@ -288,34 +333,27 @@ def contact_map_pins(
     return ContactMapResponse(items=items, total=len(items))
 
 
-# Board order of the pipeline. `referral` is a legacy value that is still accepted but not offered.
-# Partners have their own, shorter pipeline; new_lead, connected, aware and interested are shared with consumers.
-PARTNER_STAGES = {
-    StageEnum.new_lead, StageEnum.connected, StageEnum.demo_introduction, StageEnum.aware, StageEnum.interested,
-    StageEnum.active_referral, StageEnum.inactive,
-}
-PARTNER_ONLY_STAGES = {StageEnum.demo_introduction, StageEnum.active_referral, StageEnum.inactive}
-
-STAGE_ORDER = [
-    StageEnum.new_lead, StageEnum.first_call, StageEnum.connected, StageEnum.aware, StageEnum.interested,
-    StageEnum.quoted, StageEnum.negotiating, StageEnum.won, StageEnum.lost, StageEnum.repeat_customer,
-]
-
-
 @router.get("/stage-types", response_model=list[StageTypeItem], summary="List pipeline stages")
-def list_stage_types(db: Session = Depends(get_db)):
-    """Pipeline stages in board order, with the names and order managed in Settings."""
-    known = {s.value for s in StageEnum}
-    rows = [
-        r for r in db.query(StageType).filter(StageType.is_active == 1).order_by(StageType.order, StageType.id).all()
-        if r.slug in known
+def list_stage_types(
+    contact_type: ContactType | None = Query(None, description="Filter stages to one pipeline (consumer, partner or dealer)"),
+    db: Session = Depends(get_db),
+):
+    """Pipeline stages in board order. Pass contact_type to get only the stages for that pipeline."""
+    q = db.query(StageType).filter(StageType.is_active == 1)
+    if contact_type is not None:
+        q = q.filter(StageType.contact_type == contact_type.value)
+    rows = q.order_by(StageType.order, StageType.id).all()
+    return [
+        StageTypeItem(
+            id=r.id,
+            slug=r.slug,
+            label=r.name,
+            order_index=i,
+            contact_type=r.contact_type,
+            is_terminal=bool(r.is_terminal),
+        )
+        for i, r in enumerate(rows)
     ]
-    if not rows:  # stage_types not seeded yet: fall back to the built-in order
-        return [
-            StageTypeItem(id=stage, label=stage.value.replace("_", " ").title(), order_index=i)
-            for i, stage in enumerate(STAGE_ORDER)
-        ]
-    return [StageTypeItem(id=r.slug, label=r.name, order_index=i) for i, r in enumerate(rows)]
 
 
 @router.get("/partner-types", summary="List partner profession types")
@@ -366,7 +404,14 @@ def export_contacts(
         .order_by(Contact.created_at.desc(), Contact.id.desc())
         .all()
     )
-    table = contact_export.build_rows([(c, stage, not missing_fields(c)) for c, stage in rows])
+    export_stage_ids = {s.stage_id for _, s in rows if s is not None}
+    export_stage_slugs: dict[int, str] = {}
+    if export_stage_ids:
+        for st in db.query(StageType).filter(StageType.id.in_(export_stage_ids)).all():
+            export_stage_slugs[st.id] = st.slug
+    table = contact_export.build_rows(
+        [(c, export_stage_slugs.get(s.stage_id) if s else None, not missing_fields(c)) for c, s in rows]
+    )
     if format == "csv":
         body = contact_export.to_csv(table)
     elif format == "xlsx":
@@ -535,12 +580,9 @@ def get_contact(
     response.missing_fields = missing_fields(contact)
     response.is_verified = not response.missing_fields
 
-    # Populate current_stage
     if contact.lead_stages:
         latest_stage = max(contact.lead_stages, key=lambda s: s.changed_at)
-        response.current_stage = LeadStageResponse.model_validate(
-            latest_stage, from_attributes=True
-        )
+        response.current_stage = _stage_response(latest_stage)
 
     return response
 
@@ -593,8 +635,8 @@ def create_contact(
         contact.partner_profile = PartnerProfile(**body.partner_profile.model_dump(mode="json"))
     if body.dealer_profile is not None:
         contact.dealer_profile = DealerProfile(**body.dealer_profile.model_dump(mode="json"))
-    # Every contact starts as a New Lead; Aware is only reached by moving the lead there
-    contact.lead_stages.append(LeadStage(stage="new_lead", changed_by=current_user.id))
+    new_lead_type = _get_new_lead_stage(db, body.contact_type.value if body.contact_type else "consumer")
+    contact.lead_stages.append(LeadStage(stage_id=new_lead_type.id, changed_by=current_user.id))
     db.add(contact)
     db.commit()
     db.refresh(contact)
@@ -603,9 +645,7 @@ def create_contact(
     response.referrals_count = 0
     response.missing_fields = missing_fields(contact)
     response.is_verified = not response.missing_fields
-    response.current_stage = LeadStageResponse.model_validate(
-        contact.lead_stages[0], from_attributes=True
-    )
+    response.current_stage = _stage_response(contact.lead_stages[0])
     return response
 
 
@@ -715,9 +755,7 @@ def update_contact(
 
     if contact.lead_stages:
         latest_stage = max(contact.lead_stages, key=lambda s: s.changed_at)
-        response.current_stage = LeadStageResponse.model_validate(
-            latest_stage, from_attributes=True
-        )
+        response.current_stage = _stage_response(latest_stage)
 
     return response
 
@@ -750,11 +788,11 @@ def get_contact_stages(
     stages = (
         db.query(LeadStage)
         .filter(LeadStage.contact_id == contact_id)
-        .order_by(LeadStage.changed_at.desc(), LeadStage.id.desc())  # id breaks ties within one second
+        .order_by(LeadStage.changed_at.desc(), LeadStage.id.desc())
         .all()
     )
 
-    return [LeadStageResponse.model_validate(s, from_attributes=True) for s in stages]
+    return [_stage_response(s) for s in stages]
 
 
 @router.post("/{contact_id}/stages", response_model=LeadStageResponse, status_code=201, summary="Move contact to a stage")
@@ -765,34 +803,41 @@ def add_contact_stage(
     current_user: Employee = Depends(get_current_user),
 ):
     """Adds a new stage to a contact's history and returns it with status 201.
-    Partner-only stages are refused for consumers, and consumer-only stages for partners. A loss reason must be one configured in Settings.
-    The signed-in user and the time are recorded.
+    The stage must belong to the contact's pipeline (stage_types.contact_type must match).
+    A loss reason must be configured in Settings. The signed-in user and the time are recorded.
     """
     contact = get_visible_contact(db, current_user, contact_id)
 
-    # Validate employee exists
-    from models import Employee as EmployeeModel
-
-    employee = db.query(EmployeeModel).filter(EmployeeModel.id == body.changed_by).first()
+    employee = db.query(Employee).filter(Employee.id == body.changed_by).first()
     if not employee:
         raise HTTPException(status_code=400, detail="Employee not found")
 
-    # Each contact type moves through its own pipeline
-    if contact.contact_type == "partner" and body.stage not in PARTNER_STAGES:
-        raise HTTPException(status_code=400, detail="This stage is not part of the partner pipeline")
-    if contact.contact_type != "partner" and body.stage in PARTNER_ONLY_STAGES:
-        raise HTTPException(status_code=400, detail="This stage is only for partners")
+    # Look up the stage being requested
+    stage_type = db.query(StageType).filter(
+        StageType.id == body.stage_id,
+        StageType.is_active == 1,
+    ).first()
+    if not stage_type:
+        raise HTTPException(status_code=400, detail="Stage not found")
 
-    # A lead only moves on from New Lead once its details are verified (Lost is always allowed)
-    if body.stage not in (StageEnum.new_lead, StageEnum.lost):
+    # The stage must belong to this contact's pipeline (lost is allowed from any pipeline)
+    if stage_type.slug != "lost" and stage_type.contact_type != contact.contact_type:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Stage '{stage_type.slug}' is not part of the {contact.contact_type} pipeline",
+        )
+
+    # A lead can only leave new_lead once its required details are complete
+    if stage_type.slug not in ("new_lead", "lost"):
         latest = (
             db.query(LeadStage)
             .filter(LeadStage.contact_id == contact_id)
             .order_by(LeadStage.id.desc())
             .first()
         )
+        latest_slug = latest.stage_type.slug if latest and latest.stage_type else "new_lead"
         pending = missing_fields(contact)
-        if (latest is None or latest.stage == "new_lead") and pending:
+        if latest_slug == "new_lead" and pending:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -801,21 +846,27 @@ def add_contact_stage(
                 },
             )
 
-    if body.stage != StageEnum.referral and contact.contact_type != "partner":  # the partner pipeline is fixed in code
-        latest_slug = (
-            db.query(LeadStage.stage).filter(LeadStage.contact_id == contact_id).order_by(LeadStage.id.desc()).limit(1).scalar()
-        )
-        catalog.ensure_allowed(db, catalog.LEAD_STAGE, body.stage.value, current=latest_slug)
+    # loss_reason is required when moving to 'lost'
+    if stage_type.slug == "lost" and body.loss_reason is None:
+        raise HTTPException(status_code=400, detail="loss_reason is required when moving to Lost")
+    if stage_type.slug != "lost" and body.loss_reason is not None:
+        raise HTTPException(status_code=400, detail="loss_reason is only valid when moving to Lost")
+    if stage_type.slug != "aware" and body.awareness_note is not None:
+        raise HTTPException(status_code=400, detail="awareness_note is only valid when moving to Aware")
+
     if body.loss_reason is not None:
         catalog.ensure_allowed(db, catalog.LOSS_REASON, body.loss_reason)
 
-    # Create stage with contact_id from URL
-    stage_data = body.model_dump()
-    stage_data["contact_id"] = contact_id
-
-    stage = LeadStage(**stage_data)
-    db.add(stage)
+    new_stage = LeadStage(
+        contact_id=contact_id,
+        stage_id=body.stage_id,
+        changed_by=body.changed_by,
+        loss_reason=body.loss_reason,
+        loss_notes=body.loss_notes,
+        awareness_note=body.awareness_note,
+    )
+    db.add(new_stage)
     db.commit()
-    db.refresh(stage)
+    db.refresh(new_stage)
 
-    return LeadStageResponse.model_validate(stage, from_attributes=True)
+    return _stage_response(new_stage)

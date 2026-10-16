@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
 from database import get_db
+import settings_catalog as catalog
+from contact_access import get_visible_contact
 from models import Contact, Employee, LeadActivity
 from schemas.lead_activity import (
     Coordinates,
@@ -18,6 +20,10 @@ router = APIRouter(
 
 # Roles that see and manage every employee's tasks; everyone else only their own.
 TASK_MANAGER_ROLES = {"admin", "manager", "sales_head"}
+
+
+# Admin and manager monitor the team; follow-ups are never assigned to them (see rule.md)
+MONITORING_ROLES = {"admin", "manager"}
 
 
 def can_manage_tasks(user: Employee) -> bool:
@@ -55,11 +61,9 @@ def activity_response(activity: LeadActivity) -> LeadActivityResponse:
     return response
 
 
-def _contact_or_404(db: Session, contact_id: int) -> Contact:
-    contact = db.query(Contact).filter(Contact.id == contact_id).first()
-    if not contact or contact.deleted_at:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return contact
+def _contact_or_404(db: Session, contact_id: int, user: Employee) -> Contact:
+    """The contact if the user may see it; 404 otherwise (same as a missing contact)."""
+    return get_visible_contact(db, user, contact_id)
 
 
 def _task_or_404(db: Session, contact_id: int, activity_id: int) -> LeadActivity:
@@ -74,9 +78,13 @@ def _task_or_404(db: Session, contact_id: int, activity_id: int) -> LeadActivity
 
 
 @router.get("/{contact_id}/activities", response_model=list[LeadActivityResponse], summary="List activities of a contact")
-def list_activities(contact_id: int, db: Session = Depends(get_db)):
+def list_activities(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
     """The activity log and follow-up tasks of one contact, newest first. Each entry shows who created it, who it is assigned to, and who completed it."""
-    _contact_or_404(db, contact_id)
+    _contact_or_404(db, contact_id, current_user)
     rows = (
         db.query(LeadActivity)
         .options(
@@ -102,11 +110,14 @@ def create_activity(
     A follow-up (with a date) is assigned to a staff member and stays pending until it is completed.
     Follow-ups cannot be assigned to an admin or manager (400).
     """
-    _contact_or_404(db, contact_id)
+    _contact_or_404(db, contact_id, current_user)
+    catalog.ensure_allowed(db, catalog.ACTIVITY_TYPE, body.type)
     if body.is_task:
         assignee = db.query(Employee).filter(Employee.id == body.assigned_to).first()
         if not assignee or assignee.deleted_at or not assignee.is_active:
             raise HTTPException(status_code=400, detail="Assigned employee not found")
+        if assignee.role in MONITORING_ROLES:
+            raise HTTPException(status_code=400, detail="Follow-ups cannot be assigned to an admin or manager")
 
     activity = LeadActivity(
         contact_id=contact_id,
@@ -137,7 +148,7 @@ def update_activity(
     current_user: Employee = Depends(get_current_user),
 ):
     """Marks a pending follow-up done (the server records the time and the user), or changes its date and time."""
-    _contact_or_404(db, contact_id)
+    _contact_or_404(db, contact_id, current_user)
     activity = _task_or_404(db, contact_id, activity_id)
     if activity.scheduled_date is None:
         raise HTTPException(status_code=409, detail="Only scheduled follow-ups can be changed")

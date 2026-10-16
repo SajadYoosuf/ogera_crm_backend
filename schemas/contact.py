@@ -1,7 +1,7 @@
 import datetime
 from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
-from .enums import ContactType, StageEnum
+from .enums import ContactType
 from .employee import EmployeeSummary
 from .lead_source import LeadSourceSummary
 from .lead_stage import LeadStageResponse
@@ -39,7 +39,9 @@ class LeadStageSummary(BaseModel):
     """Current stage snapshot for list rows."""
     model_config = ConfigDict(from_attributes=True)
 
-    stage: StageEnum
+    stage_id: int
+    stage_slug: str = ""
+    stage_name: str = ""
     changed_at: datetime.datetime
 
 
@@ -188,7 +190,7 @@ class ContactMapPin(BaseModel):
     address: str | None = None
     latitude: float
     longitude: float
-    stage: StageEnum | None = None
+    stage_slug: str | None = None
     house_stage: str | None = None
 
 
@@ -199,9 +201,12 @@ class ContactMapResponse(BaseModel):
 
 class StageTypeItem(BaseModel):
     """One pipeline stage, in board order."""
-    id: StageEnum
+    id: int        # stage_types.id — use this as stage_id when moving a contact
+    slug: str
     label: str
     order_index: int
+    contact_type: str
+    is_terminal: bool = False
 
 
 class ContactListResponse(BaseModel):

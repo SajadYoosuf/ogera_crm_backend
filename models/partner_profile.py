@@ -10,8 +10,6 @@ class PartnerProfile(Base):
     contact_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("contacts.id", ondelete="CASCADE"), unique=True
     )
-    # Three-state: None=not assessed, 1=needs education (aware), 0=sales-ready
-    awareness_mode: Mapped[int | None] = mapped_column(SmallInteger)
     # VARCHAR so new professions don't require a migration
     profession_type: Mapped[str] = mapped_column(String(80))
     work_area: Mapped[str | None] = mapped_column(String(120))

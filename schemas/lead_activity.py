@@ -2,7 +2,7 @@ import datetime
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-ActivityType = Literal["phone_call", "field_visit", "whatsapp", "quote", "demo", "internal_note"]
+ActivityType = str  # an active option of Settings -> Activity types, checked by the route
 TaskState = Literal["pending", "due_today", "overdue", "done"]
 
 

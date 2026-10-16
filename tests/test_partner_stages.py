@@ -1,4 +1,6 @@
 """Partners move through their own pipeline; consumers keep theirs."""
+from database import SessionLocal
+from models import StageType
 
 
 def _contact(client, headers, sources, **overrides):
@@ -18,22 +20,32 @@ def _partner(client, headers, sources):
                     consumer_profile=None, partner_profile={"profession_type": "plumber", "work_area": "Calicut"})
 
 
-def _move(client, headers, admin, contact, stage):
-    return client.post(f"/contacts/{contact['id']}/stages", headers=headers, json={"stage": stage, "changed_by": admin["id"]})
+def _stage_id(slug: str, contact_type: str) -> int:
+    with SessionLocal() as db:
+        row = db.query(StageType).filter(StageType.slug == slug, StageType.contact_type == contact_type).first()
+        assert row is not None, f"Stage '{slug}' for type '{contact_type}' not seeded"
+        return row.id
+
+
+def _move(client, headers, admin, contact_id, stage_id):
+    return client.post(f"/contacts/{contact_id}/stages", headers=headers,
+                       json={"stage_id": stage_id, "changed_by": admin["id"]})
 
 
 def test_partner_walks_its_own_pipeline(client, login, lead_source_id):
     headers, admin = login("admin")
     partner = _partner(client, headers, lead_source_id)
-    for stage in ("connected", "demo_introduction", "aware", "interested", "active_referral", "inactive"):
-        assert _move(client, headers, admin, partner, stage).status_code == 201, stage
+    for stage in ("connected", "demo_introduction", "aware", "interested", "active", "referral", "inactive"):
+        sid = _stage_id(stage, "partner")
+        assert _move(client, headers, admin, partner["id"], sid).status_code == 201, stage
 
 
 def test_partner_cannot_use_consumer_only_stages(client, login, lead_source_id):
     headers, admin = login("admin")
     partner = _partner(client, headers, lead_source_id)
-    for stage in ("first_call", "quoted", "negotiating", "won", "repeat_customer"):
-        response = _move(client, headers, admin, partner, stage)
+    for stage in ("quotation", "won", "after_sales_referring"):
+        sid = _stage_id(stage, "consumer")
+        response = _move(client, headers, admin, partner["id"], sid)
         assert response.status_code == 400, stage
         assert "partner pipeline" in response.json()["detail"]
 
@@ -41,17 +53,18 @@ def test_partner_cannot_use_consumer_only_stages(client, login, lead_source_id):
 def test_consumer_cannot_use_partner_only_stages(client, login, lead_source_id):
     headers, admin = login("admin")
     consumer = _contact(client, headers, lead_source_id)
-    for stage in ("demo_introduction", "active_referral", "inactive"):
-        response = _move(client, headers, admin, consumer, stage)
+    for stage in ("demo_introduction", "active", "inactive"):
+        sid = _stage_id(stage, "partner")
+        response = _move(client, headers, admin, consumer["id"], sid)
         assert response.status_code == 400, stage
-        assert "only for partners" in response.json()["detail"]
-    assert _move(client, headers, admin, consumer, "first_call").status_code == 201
+        assert "consumer pipeline" in response.json()["detail"]
+    assert _move(client, headers, admin, consumer["id"], _stage_id("first_call", "consumer")).status_code == 201
 
 
 def test_partner_stages_do_not_appear_on_the_consumer_board(client, login):
     headers, _ = login("anu")
-    ids = [s["id"] for s in client.get("/contacts/stage-types", headers=headers).json()]
-    assert not {"demo_introduction", "active_referral", "inactive"} & set(ids)
+    slugs = [s["slug"] for s in client.get("/contacts/stage-types?contact_type=consumer", headers=headers).json()]
+    assert not {"demo_introduction", "active", "inactive"} & set(slugs)
 
 
 def test_tasks_filter_by_consumer_or_partner_and_list_all_dates_when_none_given(client, login, lead_source_id):

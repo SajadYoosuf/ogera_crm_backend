@@ -1,7 +1,17 @@
 """Endpoints the mobile app depends on, exercised through the real app."""
 import datetime
 
+from database import SessionLocal
+from models import StageType
+
 TODAY = datetime.date.today()
+
+
+def _stage_id(slug: str, contact_type: str = "consumer") -> int:
+    with SessionLocal() as db:
+        row = db.query(StageType).filter(StageType.slug == slug, StageType.contact_type == contact_type).first()
+        assert row is not None, f"Stage '{slug}' for '{contact_type}' not seeded"
+        return row.id
 
 
 def _contact(client, headers, sources, **overrides):
@@ -63,7 +73,7 @@ def test_map_returns_only_contacts_with_a_location(client, login, lead_source_id
     pin = body["items"][0]
     assert pin["name"] == "Site Visit"
     assert pin["latitude"] == 11.25 and pin["longitude"] == 75.78
-    assert pin["stage"] == "new_lead"
+    assert pin["stage_slug"] == "new_lead"
 
 
 def test_map_honours_contact_type_filter(client, login, lead_source_id):
@@ -80,24 +90,24 @@ def test_map_honours_contact_type_filter(client, login, lead_source_id):
 
 def test_stage_types_are_ordered_and_skip_legacy_referral(client, login):
     headers, _ = login("anu")
-    stages = client.get("/contacts/stage-types", headers=headers).json()
-    ids = [s["id"] for s in stages]
-    assert ids[0] == "new_lead" and "referral" not in ids
+    stages = client.get("/contacts/stage-types?contact_type=consumer", headers=headers).json()
+    slugs = [s["slug"] for s in stages]
+    assert slugs[0] == "new_lead" and "referral" not in slugs
     assert [s["order_index"] for s in stages] == list(range(len(stages)))
-    assert {"won", "lost"} <= set(ids)
+    assert {"won", "lost"} <= set(slugs)
 
 
 def test_stage_change_needs_verified_details(client, login, lead_source_id):
     headers, admin = login("admin")
     unverified = _contact(client, headers, lead_source_id, consumer_profile=None)
     blocked = client.post(f"/contacts/{unverified['id']}/stages",
-                          json={"stage": "first_call", "changed_by": admin["id"]}, headers=headers)
+                          json={"stage_id": _stage_id("first_call"), "changed_by": admin["id"]}, headers=headers)
     assert blocked.status_code == 409
     assert "house_stage" in blocked.json()["detail"]["missing_fields"]
 
     verified = _contact(client, headers, lead_source_id, name="Ok", phone="9111111111")
     moved = client.post(f"/contacts/{verified['id']}/stages",
-                        json={"stage": "first_call", "changed_by": admin["id"]}, headers=headers)
+                        json={"stage_id": _stage_id("first_call"), "changed_by": admin["id"]}, headers=headers)
     assert moved.status_code == 201
 
 
@@ -151,7 +161,7 @@ def test_performance_team_view_for_managers_self_view_for_staff(client, login, l
     _contact(client, anu_headers, lead_source_id, assigned_to=anu["id"])
     aware = _contact(client, anu_headers, lead_source_id, name="B", phone="9222222222")
     # Awareness is the Aware stage now (not a profile flag)
-    client.post(f"/contacts/{aware['id']}/stages", json={"stage": "aware", "changed_by": anu["id"]}, headers=anu_headers)
+    client.post(f"/contacts/{aware['id']}/stages", json={"stage_id": _stage_id("aware"), "changed_by": anu["id"]}, headers=anu_headers)
     _contact(client, admin_headers, lead_source_id, name="C", phone="9333333333")
 
     window = {"start_date": TODAY.isoformat(), "end_date": TODAY.isoformat()}
@@ -413,6 +423,6 @@ def test_stage_history_is_newest_first_even_within_one_second(client, login, lea
     contact = _contact(client, headers, lead_source_id)
     for stage in ("first_call", "connected"):
         assert client.post(f"/contacts/{contact['id']}/stages", headers=headers,
-                           json={"stage": stage, "changed_by": admin["id"]}).status_code == 201
+                           json={"stage_id": _stage_id(stage), "changed_by": admin["id"]}).status_code == 201
     history = client.get(f"/contacts/{contact['id']}/stages", headers=headers).json()
-    assert [row["stage"] for row in history] == ["connected", "first_call", "new_lead"]
+    assert [row["stage_slug"] for row in history] == ["connected", "first_call", "new_lead"]

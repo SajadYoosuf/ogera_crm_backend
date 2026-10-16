@@ -1,13 +1,11 @@
-from typing import Annotated, Literal
+from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
+from .enums import HouseStage, TankType
 
 
 class ConsumerProfileBase(BaseModel):
-    # Three-state: None=not assessed, 0=sales-ready, 1=needs education
-    # Literal enforces the constraint at schema level (no runtime validator needed)
-    awareness_mode: Literal[0, 1] | None = None
-    house_stage: str | None = None
-    current_tank_type: str | None = None
+    house_stage: HouseStage | None = None
+    current_tank_type: TankType | None = None
     current_tank_capacity: Annotated[int, Field(ge=0)] | None = None  # litres
     current_tank_age: Annotated[int, Field(ge=0)] | None = None       # years
 
@@ -17,15 +15,19 @@ class ConsumerProfileCreate(ConsumerProfileBase):
 
 
 class ConsumerProfileUpdate(BaseModel):
-    awareness_mode: Literal[0, 1] | None = None
-    house_stage: str | None = None
-    current_tank_type: str | None = None
+    house_stage: HouseStage | None = None
+    current_tank_type: TankType | None = None
     current_tank_capacity: Annotated[int, Field(ge=0)] | None = None
     current_tank_age: Annotated[int, Field(ge=0)] | None = None
 
 
-class ConsumerProfileResponse(ConsumerProfileBase):
+class ConsumerProfileResponse(BaseModel):
+    """Responses read as text: rows written before the fixed lists may still hold old values until migrated."""
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     contact_id: int
+    house_stage: str | None = None
+    current_tank_type: str | None = None
+    current_tank_capacity: int | None = None
+    current_tank_age: int | None = None

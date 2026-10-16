@@ -301,7 +301,7 @@ def test_commit_each_imported_contact_has_new_lead_stage(client, login, lead_sou
     assert len(contacts) == 1
     contact_id = contacts[0]["id"]
     stages = client.get(f"/contacts/{contact_id}/stages", headers=headers).json()
-    assert stages[0]["stage"] == "new_lead"
+    assert stages[0]["stage_slug"] == "new_lead"
 
 
 def test_commit_duplicate_skip_does_not_overwrite(client, login, lead_source_id):

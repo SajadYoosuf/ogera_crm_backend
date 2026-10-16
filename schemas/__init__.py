@@ -2,7 +2,6 @@ from .enums import (
     RoleEnum,
     ContactType,
     ProfessionType,
-    StageEnum,
     LossReasonEnum,
     HouseStageEnum,
     TankTypeEnum,
@@ -29,13 +28,14 @@ from .partner_profile import (
     PartnerProfileUpdate,
     PartnerProfileResponse,
 )
-from .lead_stage import LeadStageBase, LeadStageCreate, LeadStageUpdate, LeadStageResponse
+from .lead_stage import LeadStageCreate, LeadStageResponse
 from .contact import ContactSummary, ContactBase, ContactCreate, ContactUpdate, ContactResponse
 from .contact import ContactListItem, ContactListResponse, LeadStageSummary, NameRef
+from .contact import ContactMapPin, ContactMapResponse, StageTypeItem
 
 __all__ = [
     # Enums
-    "RoleEnum", "ContactType", "ProfessionType", "StageEnum", "LossReasonEnum", "HouseStageEnum", "TankTypeEnum",
+    "RoleEnum", "ContactType", "ProfessionType", "LossReasonEnum", "HouseStageEnum", "TankTypeEnum",
     # Role
     "RoleCreate", "RoleUpdate", "RoleResponse", "RoleListResponse",
     # Employee
@@ -47,8 +47,9 @@ __all__ = [
     # PartnerProfile
     "PartnerProfileBase", "PartnerProfileCreate", "PartnerProfileUpdate", "PartnerProfileResponse",
     # LeadStage
-    "LeadStageBase", "LeadStageCreate", "LeadStageUpdate", "LeadStageResponse",
+    "LeadStageCreate", "LeadStageResponse",
     # Contact
     "ContactSummary", "ContactBase", "ContactCreate", "ContactUpdate", "ContactResponse",
     "ContactListItem", "ContactListResponse", "LeadStageSummary", "NameRef",
+    "ContactMapPin", "ContactMapResponse", "StageTypeItem",
 ]

@@ -10,9 +10,7 @@ class ConsumerProfile(Base):
     contact_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("contacts.id", ondelete="CASCADE"), unique=True
     )
-    # None = not assessed, 1 = needs education (aware stage), 0 = sales-ready
-    awareness_mode: Mapped[int | None] = mapped_column(SmallInteger)
-    # VARCHAR so values like "Under Construction - Structure" / "Pvc" are stored as-is
+    # Fixed list in code (schemas/enums.py HouseStage); VARCHAR so legacy text can still be read until migrated
     house_stage: Mapped[str | None] = mapped_column(String(50))
     current_tank_type: Mapped[str | None] = mapped_column(String(50))
     current_tank_capacity: Mapped[int | None] = mapped_column(Integer)  # litres

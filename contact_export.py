@@ -18,7 +18,7 @@ MEDIA_TYPES = {
 HEADERS = [
     "ID", "Type", "Name", "Phone", "Alternate phone", "District", "Address", "Lead source",
     "Stage", "Assigned to", "Created by", "Created at", "Verified",
-    "Profession", "Work area", "House stage", "Current tank", "Notes",
+    "Profession", "Work area", "House stage", "Current tank", "Notes", "Owner name", "Owner email",
 ]
 PDF_COLUMNS = ["Name", "Phone", "Type", "District", "Lead source", "Stage", "Assigned to", "Created at"]
 
@@ -31,17 +31,18 @@ def build_rows(items: list[tuple[Contact, object, bool]]) -> list[list[str]]:
     """items: (contact, current lead stage or None, is_verified)."""
     rows = []
     for c, stage, verified in items:
-        consumer, partner = c.consumer_profile, c.partner_profile
+        consumer, partner, dealer = c.consumer_profile, c.partner_profile, c.dealer_profile
         tank = ""
         if consumer and (consumer.current_tank_type or consumer.current_tank_capacity):
             tank = " ".join(str(x) for x in (consumer.current_tank_type, f"{consumer.current_tank_capacity} L" if consumer.current_tank_capacity else None) if x)
         rows.append([
-            str(c.id), _label(c.contact_type), c.name, c.phone, c.phone_alt or "", c.district, c.address or "",
-            c.lead_source.name if c.lead_source else "", _label(stage.stage) if stage else "",
+            str(c.id), _label(c.contact_type), c.name, c.phone, c.phone_alt or "", c.district or "", c.address or "",
+            c.lead_source.name if c.lead_source else "", _label(stage) if stage else "",
             c.assigned_employee.name if c.assigned_employee else "", c.creator.name if c.creator else "",
             c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "", "Yes" if verified else "No",
             _label(partner.profession_type) if partner else "", partner.work_area or "" if partner else "",
             consumer.house_stage or "" if consumer else "", tank, c.notes or "",
+            dealer.owner_name if dealer else "", (dealer.email or "") if dealer else "",
         ])
     return rows
 

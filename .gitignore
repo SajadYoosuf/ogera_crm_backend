@@ -39,3 +39,6 @@ __pycache__/
 # Local data exports
 contacts_*.json
 professionals_*.json
+
+# ---- Uploaded files (company logo) ----
+uploads/

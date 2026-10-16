@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
-from models import ConsumerProfile, Contact, DealerProfile, LeadSource, LeadStage, PartnerProfile
+from models import ConsumerProfile, Contact, DealerProfile, LeadSource, LeadStage, PartnerProfile, StageType
 from schemas.enums import HouseStage, ProfessionType, profession_key
 from phone_utils import phone_key
 import settings_catalog as catalog
@@ -307,9 +307,23 @@ def summarize(results: list[RowResult]) -> dict:
     return {"total": len(results), **counts}
 
 
+def _new_lead_stage_id(db: Session, contact_type: str) -> int:
+    """Return the stage_types.id for the 'new_lead' stage of the given contact_type."""
+    st = db.query(StageType).filter(
+        StageType.slug == "new_lead",
+        StageType.contact_type == contact_type,
+        StageType.is_active == 1,
+    ).first()
+    if not st:
+        raise RuntimeError(f"Pipeline not seeded: new_lead stage missing for {contact_type}")
+    return st.id
+
+
 def run_import(db: Session, results: list[RowResult], options: Options, assignee_ids: list[int], created_by: int) -> dict:
     """Write ready/warning rows (and fill blanks on duplicates when asked). One commit."""
     created = updated = 0
+    # Cache new_lead stage ids per type so we don't query per row
+    new_lead_ids: dict[str, int] = {}
     for r in results:
         if r.status in ("ready", "warning"):
             d = dict(r.data)
@@ -320,14 +334,17 @@ def run_import(db: Session, results: list[RowResult], options: Options, assignee
             profession = d.pop("profession_type", None)
             if d.get("created_at") is None:
                 d.pop("created_at", None)
+            ct = d["contact_type"]
+            if ct not in new_lead_ids:
+                new_lead_ids[ct] = _new_lead_stage_id(db, ct)
             contact = Contact(**d, phone_key=phone_key(d["phone"]), assigned_to=random.choice(assignee_ids), created_by=created_by)
-            if d["contact_type"] == "consumer":
+            if ct == "consumer":
                 contact.consumer_profile = ConsumerProfile(house_stage=house_stage)
-            elif d["contact_type"] == "partner":
+            elif ct == "partner":
                 contact.partner_profile = PartnerProfile(profession_type=profession, work_area=work_area)
-            elif d["contact_type"] == "dealer":
+            elif ct == "dealer":
                 contact.dealer_profile = DealerProfile(owner_name=owner_name, email=owner_email)
-            contact.lead_stages.append(LeadStage(stage="new_lead", changed_by=created_by))
+            contact.lead_stages.append(LeadStage(stage_id=new_lead_ids[ct], changed_by=created_by))
             db.add(contact)
             created += 1
         elif r.status == "duplicate" and options.duplicates == "update_blank":

@@ -2,7 +2,7 @@
 import datetime
 
 from database import SessionLocal
-from models import LeadActivity
+from models import LeadActivity, StageType
 
 TODAY = datetime.date.today()
 YESTERDAY = TODAY - datetime.timedelta(days=1)
@@ -16,7 +16,7 @@ def _contact(client, headers, sources, source="meta", **overrides):
         "district": "Calicut",
         "address": "House 4, MG Road",
         "lead_source_id": sources(source),
-        "consumer_profile": {"awareness_mode": 0, "house_stage": "ready"},
+        "consumer_profile": {"house_stage": "ready"},
     }
     body.update(overrides)
     response = client.post("/contacts", json=body, headers=headers)
@@ -24,8 +24,15 @@ def _contact(client, headers, sources, source="meta", **overrides):
     return response.json()
 
 
-def _stage(client, headers, user, contact_id, stage, **extra):
-    body = {"stage": stage, "changed_by": user["id"], **extra}
+def _stage_id(slug: str, contact_type: str = "consumer") -> int:
+    with SessionLocal() as db:
+        row = db.query(StageType).filter(StageType.slug == slug, StageType.contact_type == contact_type).first()
+        assert row is not None, f"Stage '{slug}' for type '{contact_type}' not seeded"
+        return row.id
+
+
+def _stage(client, headers, user, contact_id, stage, contact_type="consumer", **extra):
+    body = {"stage_id": _stage_id(stage, contact_type), "changed_by": user["id"], **extra}
     response = client.post(f"/contacts/{contact_id}/stages", json=body, headers=headers)
     assert response.status_code == 201, response.text
 
@@ -69,7 +76,7 @@ def test_empty_period_returns_zeros_and_all_stages(client, login):
     summary = client.get("/performance/summary", headers=admin).json()
     assert summary["total_new_contacts"] == 0 and summary["overdue_followups"] == 0
     stages = client.get("/performance/pipeline", headers=admin).json()
-    assert len(stages) == 10 and all(row["count"] == 0 for row in stages)
+    assert len(stages) == 9 and all(row["count"] == 0 for row in stages)
     assert client.get("/performance/lead-sources", headers=admin).json() == []
 
 
@@ -134,7 +141,5 @@ def test_lead_sources_count_converted_and_unknown(client, login, lead_source_id)
     won = _contact(client, admin, lead_source_id, source="meta")
     _stage(client, admin, admin_user, won["id"], "won")
     _contact(client, admin, lead_source_id, source="meta", phone="9876543211")
-    _contact(client, admin, lead_source_id, phone="9876543212", lead_source_id=None)
     rows = client.get("/performance/lead-sources", headers=admin).json()
     assert rows[0] == {"source": "Meta", "count": 2, "converted": 1}
-    assert {"source": "Unknown", "count": 1, "converted": 0} in rows

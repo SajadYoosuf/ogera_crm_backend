@@ -1,43 +1,26 @@
 import datetime
 from pydantic import BaseModel, ConfigDict, model_validator
-from .enums import StageEnum, LossReasonEnum
 
 
-class LeadStageBase(BaseModel):
-    stage: StageEnum
-    loss_reason: LossReasonEnum | None = None
-    loss_notes: str | None = None
-    awareness_note: str | None = None
-
-    @model_validator(mode="after")
-    def validate_stage_fields(self) -> "LeadStageBase":
-        if self.stage == StageEnum.lost and self.loss_reason is None:
-            raise ValueError("loss_reason is required when stage is 'lost'")
-        if self.stage != StageEnum.lost and (
-            self.loss_reason is not None or self.loss_notes is not None
-        ):
-            raise ValueError("loss_reason and loss_notes are only valid when stage is 'lost'")
-        if self.stage != StageEnum.aware and self.awareness_note is not None:
-            raise ValueError("awareness_note is only valid when stage is 'aware'")
-        return self
-
-
-class LeadStageCreate(LeadStageBase):
-    # contact_id is NOT here — it comes from the URL path: POST /contacts/{contact_id}/stages
+class LeadStageCreate(BaseModel):
+    stage_id: int   # FK to stage_types.id
     changed_by: int  # employee id
-
-
-class LeadStageUpdate(BaseModel):
-    # Stage entries are append-only. Only supplementary fields can be corrected.
-    loss_reason: LossReasonEnum | None = None
+    loss_reason: str | None = None  # required when moving to a 'lost' stage
     loss_notes: str | None = None
     awareness_note: str | None = None
 
 
-class LeadStageResponse(LeadStageBase):
+class LeadStageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    # contact_id omitted — always accessed in context of a contact
+    stage_id: int
+    stage_slug: str = ""
+    stage_name: str = ""
+    contact_type: str = ""
+    is_terminal: bool = False
     changed_by: int
     changed_at: datetime.datetime
+    loss_reason: str | None = None
+    loss_notes: str | None = None
+    awareness_note: str | None = None
