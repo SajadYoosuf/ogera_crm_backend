@@ -1,4 +1,5 @@
 import datetime
+from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import case, exists, func
 from sqlalchemy.orm import Session
@@ -10,6 +11,8 @@ from models.followup_schedule import FollowupSchedule
 from schemas.enums import ContactType
 
 router = APIRouter(prefix="/performance", tags=["performance"])
+
+_IST = timedelta(hours=5, minutes=30)
 
 # Roles that see the whole team; everyone else is pinned to their own numbers.
 TEAM_ROLES = {"admin", "manager"}
@@ -40,8 +43,8 @@ def performance_report(
         )
         .filter(
             Contact.deleted_at.is_(None),
-            Contact.created_at >= start_date,
-            Contact.created_at < end_date + datetime.timedelta(days=1),
+            Contact.created_at >= datetime.datetime.combine(start_date, datetime.time.min) - _IST,
+            Contact.created_at < datetime.datetime.combine(end_date + datetime.timedelta(days=1), datetime.time.min) - _IST,
         )
         .group_by(Contact.created_by)
     )
@@ -79,14 +82,14 @@ NON_SELLING_ROLES = {"admin", "manager", "support"}
 
 
 def _period(start_date: datetime.date | None, end_date: datetime.date | None):
-    """(start, end, lo, hi): inclusive dates (default: this month so far) and the matching [lo, hi) datetimes."""
+    """(start, end, lo, hi): inclusive dates (default: this month so far) and the matching [lo, hi) datetimes in UTC."""
     today = datetime.date.today()
     start = start_date or today.replace(day=1)
     end = end_date or today
     if end < start:
         raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
-    lo = datetime.datetime.combine(start, datetime.time.min)
-    hi = datetime.datetime.combine(end + datetime.timedelta(days=1), datetime.time.min)
+    lo = datetime.datetime.combine(start, datetime.time.min) - _IST
+    hi = datetime.datetime.combine(end + datetime.timedelta(days=1), datetime.time.min) - _IST
     return start, end, lo, hi
 
 

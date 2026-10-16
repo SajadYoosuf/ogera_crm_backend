@@ -199,10 +199,13 @@ def contact_query(db: Session, f: dict, entities, user: Employee):
         q = q.filter(verified_clause())
     elif f.get("verified") is False:
         q = q.filter(~verified_clause())
+    # created_from / created_to are IST calendar dates from the client.
+    # The DB stores UTC, so midnight IST = 18:30 UTC the previous day.
+    _IST = timedelta(hours=5, minutes=30)
     if "created_from" in f:
-        q = q.filter(Contact.created_at >= f["created_from"])
+        q = q.filter(Contact.created_at >= datetime.combine(f["created_from"], datetime.min.time()) - _IST)
     if "created_to" in f:
-        q = q.filter(Contact.created_at < f["created_to"] + timedelta(days=1))
+        q = q.filter(Contact.created_at < datetime.combine(f["created_to"] + timedelta(days=1), datetime.min.time()) - _IST)
     return q
 
 
