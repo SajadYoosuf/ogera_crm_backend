@@ -63,9 +63,10 @@ DEFAULT_STAGES: list[tuple[str, str, str, str, int]] = [
     ("aware",                "Aware",                   "Needs education before hearing a price.",             "consumer", 4),
     ("interested",           "Interested",              "Ready for demo or detailed info.",                    "consumer", 5),
     ("quotation",            "Quotation",               "Quote sent. 3-day follow-up clock starts.",           "consumer", 6),
-    ("won",                  "Won",                     "Deal closed.",                                        "consumer", 7),
-    ("lost",                 "Lost",                    "Did not buy. Reason captured.",                       "consumer", 8),
-    ("after_sales_referring","After Sales / Referring", "Post-sale support and referral tracking.",            "consumer", 9),
+    ("negotiation",          "Negotiation",             "Price and terms under discussion.",                   "consumer", 7),
+    ("won",                  "Won",                     "Deal closed.",                                        "consumer", 8),
+    ("lost",                 "Lost",                    "Did not buy. Reason captured.",                       "consumer", 9),
+    ("after_sales_referring","After Sales / Referring", "Post-sale support and referral tracking.",            "consumer", 10),
     # Partner pipeline
     ("new_lead",             "New Lead",               "Just entered.",                                        "partner", 1),
     ("first_call",           "First Call",              "First contact made.",                                 "partner", 2),

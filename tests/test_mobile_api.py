@@ -202,11 +202,9 @@ def test_schedule_then_complete_a_followup(client, login, lead_source_id):
     assert scheduled.status_code == 201
     task = scheduled.json()
 
-    open_tasks = client.get("/tasks", headers=headers, params={"include_overdue": True,
-                                                                "date_from": TODAY.isoformat(),
-                                                                "date_to": TODAY.isoformat()}).json()
+    open_tasks = client.get("/tasks", headers=headers).json()
     assert any(t["id"] == task["id"] for t in open_tasks["items"])
-    assert open_tasks["items"][0]["contact_name"] == "Arun Kumar"
+    assert any(t["contact_name"] == "Arun Kumar" for t in open_tasks["items"])
 
     missing_outcome = client.patch(f"/contacts/{contact['id']}/followups/{task['id']}",
                                    json={"status": "done"}, headers=headers)

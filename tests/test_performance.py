@@ -81,7 +81,7 @@ def test_empty_period_returns_zeros_and_all_stages(client, login):
     summary = client.get("/performance/summary", headers=admin).json()
     assert summary["total_new_contacts"] == 0 and summary["overdue_followups"] == 0
     stages = client.get("/performance/pipeline", headers=admin).json()
-    assert len(stages) == 9 and all(row["count"] == 0 for row in stages)
+    assert len(stages) == 10 and all(row["count"] == 0 for row in stages)
     assert client.get("/performance/lead-sources", headers=admin).json() == []
 
 
