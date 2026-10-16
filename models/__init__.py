@@ -7,6 +7,8 @@ from .company_setting import CompanySetting
 from .contact import Contact
 from .lead_stage import LeadStage
 from .lead_activity import LeadActivity
+from .followup_schedule import FollowupSchedule
+from .activity_log import ActivityLog
 from .consumer_profile import ConsumerProfile
 from .partner_profile import PartnerProfile
 from .sale import Sale
@@ -27,6 +29,8 @@ __all__ = [
     "Contact",
     "LeadStage",
     "LeadActivity",
+    "FollowupSchedule",
+    "ActivityLog",
     "ConsumerProfile",
     "PartnerProfile",
     "Sale",

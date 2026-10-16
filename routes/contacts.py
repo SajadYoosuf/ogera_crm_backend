@@ -15,7 +15,7 @@ from database import get_db
 from phone_utils import phone_key
 from request_context import client_platform
 from verification import missing_fields, verified_clause
-from models import Contact, ConsumerProfile, DealerProfile, Employee, LeadSource, LeadStage, PartnerProfile, StageType
+from models import Contact, ConsumerProfile, DealerProfile, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, StageType
 from schemas import (
     ContactCreate,
     ContactListItem,
@@ -51,7 +51,6 @@ def _stage_response(stage: LeadStage) -> LeadStageResponse:
         r.stage_slug = st.slug
         r.stage_name = st.name
         r.contact_type = st.contact_type
-        r.is_terminal = bool(st.is_terminal)
     return r
 
 
@@ -350,7 +349,6 @@ def list_stage_types(
             label=r.name,
             order_index=i,
             contact_type=r.contact_type,
-            is_terminal=bool(r.is_terminal),
         )
         for i, r in enumerate(rows)
     ]
@@ -827,25 +825,6 @@ def add_contact_stage(
             detail=f"Stage '{stage_type.slug}' is not part of the {contact.contact_type} pipeline",
         )
 
-    # A lead can only leave new_lead once its required details are complete
-    if stage_type.slug not in ("new_lead", "lost"):
-        latest = (
-            db.query(LeadStage)
-            .filter(LeadStage.contact_id == contact_id)
-            .order_by(LeadStage.id.desc())
-            .first()
-        )
-        latest_slug = latest.stage_type.slug if latest and latest.stage_type else "new_lead"
-        pending = missing_fields(contact)
-        if latest_slug == "new_lead" and pending:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "Complete the lead's details before moving it to the next stage",
-                    "missing_fields": pending,
-                },
-            )
-
     # loss_reason is required when moving to 'lost'
     if stage_type.slug == "lost" and body.loss_reason is None:
         raise HTTPException(status_code=400, detail="loss_reason is required when moving to Lost")
@@ -856,6 +835,12 @@ def add_contact_stage(
 
     if body.loss_reason is not None:
         catalog.ensure_allowed(db, catalog.LOSS_REASON, body.loss_reason)
+
+    # Cannot leave new_lead until the contact has all required details
+    if stage_type.slug != "new_lead":
+        pending = missing_fields(contact)
+        if pending:
+            raise HTTPException(status_code=409, detail={"missing_fields": pending, "message": "Complete the contact's details before advancing the stage"})
 
     new_stage = LeadStage(
         contact_id=contact_id,

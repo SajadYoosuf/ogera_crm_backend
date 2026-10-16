@@ -206,7 +206,6 @@ class StageTypeItem(BaseModel):
     label: str
     order_index: int
     contact_type: str
-    is_terminal: bool = False
 
 
 class ContactListResponse(BaseModel):

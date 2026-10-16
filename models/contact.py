@@ -48,6 +48,7 @@ class Contact(Base):
     )
     lead_source: Mapped["LeadSource | None"] = relationship("LeadSource", back_populates="contacts")
     lead_stages: Mapped[list["LeadStage"]] = relationship("LeadStage", back_populates="contact")
+    followup_schedules: Mapped[list["FollowupSchedule"]] = relationship("FollowupSchedule", back_populates="contact")
     consumer_profile: Mapped["ConsumerProfile | None"] = relationship(
         "ConsumerProfile", back_populates="contact", uselist=False
     )

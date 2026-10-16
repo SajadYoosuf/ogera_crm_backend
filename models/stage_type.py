@@ -13,7 +13,6 @@ class StageType(Base):
     description: Mapped[str | None] = mapped_column(String(255))
     order: Mapped[int] = mapped_column(SmallInteger)
     is_active: Mapped[int] = mapped_column(SmallInteger, default=1)
-    is_terminal: Mapped[int] = mapped_column(SmallInteger, default=0)
 
     __table_args__ = (
         UniqueConstraint("slug", "contact_type", name="uq_stage_type_slug_per_type"),

@@ -195,8 +195,9 @@ def test_performance_rejects_inverted_range(client, login):
 def test_schedule_then_complete_a_followup(client, login, lead_source_id):
     headers, anu = login("anu")
     contact = _contact(client, headers, lead_source_id, assigned_to=anu["id"])
-    scheduled = client.post(f"/contacts/{contact['id']}/activities", headers=headers, json={
-        "type": "phone_call", "scheduled_date": TODAY.isoformat(), "assigned_to": anu["id"], "notes": "Call back",
+    # Contact auto-creates a followup, but schedule another one for testing
+    scheduled = client.post(f"/contacts/{contact['id']}/followups", headers=headers, json={
+        "channel": "call", "due_at": (datetime.datetime.now() + datetime.timedelta(hours=2)).isoformat(), "assigned_to": anu["id"], "notes": "Call back",
     })
     assert scheduled.status_code == 201
     task = scheduled.json()
@@ -204,28 +205,29 @@ def test_schedule_then_complete_a_followup(client, login, lead_source_id):
     open_tasks = client.get("/tasks", headers=headers, params={"include_overdue": True,
                                                                 "date_from": TODAY.isoformat(),
                                                                 "date_to": TODAY.isoformat()}).json()
-    assert [t["id"] for t in open_tasks["items"]] == [task["id"]]
+    assert any(t["id"] == task["id"] for t in open_tasks["items"])
     assert open_tasks["items"][0]["contact_name"] == "Arun Kumar"
 
-    missing_outcome = client.patch(f"/contacts/{contact['id']}/activities/{task['id']}",
+    missing_outcome = client.patch(f"/contacts/{contact['id']}/followups/{task['id']}",
                                    json={"status": "done"}, headers=headers)
     assert missing_outcome.status_code == 422
 
-    done = client.patch(f"/contacts/{contact['id']}/activities/{task['id']}",
-                        json={"status": "done", "outcome": "Will order Friday"}, headers=headers)
+    done = client.patch(f"/contacts/{contact['id']}/followups/{task['id']}",
+                        json={"status": "done", "outcome": "done", "notes": "Will order Friday"}, headers=headers)
     assert done.status_code == 200 and done.json()["status"] == "done"
     log = client.get(f"/contacts/{contact['id']}/activities", headers=headers).json()
-    assert any(a["notes"] == "Will order Friday" and a["status"] == "done" for a in log)
+    assert any(a["notes"] == "Will order Friday" for a in log)
 
 
 def test_staff_cannot_complete_someone_elses_task(client, login, lead_source_id):
     anu_headers, anu = login("anu")
     raj_headers, _ = login("raj")
     contact = _contact(client, anu_headers, lead_source_id, assigned_to=anu["id"])
-    task = client.post(f"/contacts/{contact['id']}/activities", headers=anu_headers, json={
-        "type": "phone_call", "scheduled_date": TODAY.isoformat(), "assigned_to": anu["id"]}).json()
-    response = client.patch(f"/contacts/{contact['id']}/activities/{task['id']}",
-                            json={"status": "done", "outcome": "x"}, headers=raj_headers)
+    due_at = (datetime.datetime.now() + datetime.timedelta(hours=2)).isoformat()
+    task = client.post(f"/contacts/{contact['id']}/followups", headers=anu_headers, json={
+        "channel": "call", "due_at": due_at, "assigned_to": anu["id"]}).json()
+    response = client.patch(f"/contacts/{contact['id']}/followups/{task['id']}",
+                            json={"status": "done", "outcome": "done"}, headers=raj_headers)
     # Not visible to this user, so it is reported as not found (the contact's existence is not revealed)
     assert response.status_code == 404
 

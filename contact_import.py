@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
-from models import ConsumerProfile, Contact, DealerProfile, LeadSource, LeadStage, PartnerProfile, StageType
+from models import ConsumerProfile, Contact, DealerProfile, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, StageType
 from schemas.enums import HouseStage, ProfessionType, profession_key
 from phone_utils import phone_key
 import settings_catalog as catalog
@@ -345,6 +345,14 @@ def run_import(db: Session, results: list[RowResult], options: Options, assignee
             elif ct == "dealer":
                 contact.dealer_profile = DealerProfile(owner_name=owner_name, email=owner_email)
             contact.lead_stages.append(LeadStage(stage_id=new_lead_ids[ct], changed_by=created_by))
+            # Auto-schedule initial follow-up (24 hours from now)
+            contact.followup_schedules = [FollowupSchedule(
+                assigned_to=contact.assigned_to,
+                due_at=datetime.datetime.now() + datetime.timedelta(hours=24),
+                status="pending",
+                channel="call",
+                notes="Initial contact regarding new lead",
+            )]
             db.add(contact)
             created += 1
         elif r.status == "duplicate" and options.duplicates == "update_blank":

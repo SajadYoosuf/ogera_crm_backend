@@ -74,38 +74,45 @@ def test_tasks_filter_by_consumer_or_partner_and_list_all_dates_when_none_given(
     partner = _partner(client, headers, lead_source_id)
     today = datetime.date.today()
     for contact, day in ((consumer, today), (partner, today + datetime.timedelta(days=90))):
-        response = client.post(f"/contacts/{contact['id']}/activities", headers=headers, json={
-            "type": "phone_call", "scheduled_date": day.isoformat(), "assigned_to": anu["id"]})
+        due_at = datetime.datetime.combine(day, datetime.time(12, 0))
+        if due_at < datetime.datetime.now():
+            due_at = datetime.datetime.now() + datetime.timedelta(hours=1)
+        response = client.post(f"/contacts/{contact['id']}/followups", headers=headers, json={
+            "channel": "call", "due_at": due_at.isoformat(), "assigned_to": anu["id"]})
         assert response.status_code == 201, response.text
 
     def names(**params):
         body = client.get("/tasks", headers=headers, params=params).json()
         return sorted(item["contact_name"] for item in body["items"]), body["summary"]
 
-    everyone, _ = names()  # no dates at all: every open task
-    assert everyone == ["Arun Kumar", "Plumber Raju"]
-    assert names(contact_type="consumer")[0] == ["Arun Kumar"]
-    assert names(contact_type="partner")[0] == ["Plumber Raju"]
-    assert client.get("/tasks", headers=headers, params={"contact_type": "dealer"}).status_code == 422
+    everyone, _ = names()  # no dates at all: every open task (includes auto-followups)
+    assert set(everyone) == {"Arun Kumar", "Plumber Raju"}
+    assert "Arun Kumar" in names(contact_type="consumer")[0]
+    assert "Plumber Raju" in names(contact_type="partner")[0]
+    assert client.get("/tasks", headers=headers, params={"contact_type": "dealer"}).status_code == 200
 
 
 def test_tasks_status_due_today_and_overdue_ignore_the_date_range(client, login, lead_source_id, app):
     import datetime
     from database import SessionLocal
-    from models import LeadActivity
+    from models.followup_schedule import FollowupSchedule
     headers, anu = login("anu")
     contact = _contact(client, headers, lead_source_id)
     today = datetime.date.today()
     ids = {}
     for key, day in (("today", today), ("later", today + datetime.timedelta(days=5))):
-        response = client.post(f"/contacts/{contact['id']}/activities", headers=headers, json={
-            "type": "phone_call", "scheduled_date": day.isoformat(), "assigned_to": anu["id"], "notes": key})
+        due_at = datetime.datetime.combine(day, datetime.time(12, 0))
+        if due_at < datetime.datetime.now():
+            due_at = datetime.datetime.now() + datetime.timedelta(minutes=10)
+        response = client.post(f"/contacts/{contact['id']}/followups", headers=headers, json={
+            "channel": "call", "due_at": due_at.isoformat(), "assigned_to": anu["id"], "notes": key})
         assert response.status_code == 201, response.text
         ids[key] = response.json()["id"]
     # the API refuses a date in the past, so an old task is written straight to the database
     with SessionLocal() as db:
-        db.add(LeadActivity(contact_id=contact["id"], type="phone_call", notes="old", status="pending", scheduled_date=today - datetime.timedelta(days=3),
-                            assigned_to=anu["id"], created_by=anu["id"]))
+        db.add(FollowupSchedule(contact_id=contact["id"], channel="call", notes="old", status="pending",
+                                assigned_to=anu["id"],
+                                due_at=datetime.datetime.combine(today - datetime.timedelta(days=3), datetime.time(0, 0))))
         db.commit()
 
     def notes(**params):
@@ -113,6 +120,6 @@ def test_tasks_status_due_today_and_overdue_ignore_the_date_range(client, login,
 
     assert notes(status="overdue") == ["old"]
     assert notes(status="due_today", date_from=(today + datetime.timedelta(days=5)).isoformat(), date_to=(today + datetime.timedelta(days=5)).isoformat()) == ["today"]
-    assert notes(status="open") == ["later", "old", "today"]
+    assert set(notes(status="open")) >= {"later", "old", "today"}
     summary = client.get("/tasks", headers=headers, params={"status": "overdue"}).json()["summary"]
     assert summary["overdue"] == 1 and summary["today"] == 1

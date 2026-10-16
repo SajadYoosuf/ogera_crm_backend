@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import BigInteger, ForeignKey, DateTime, String, Text, func, Index
+from sqlalchemy import BigInteger, Integer, ForeignKey, DateTime, String, Text, func, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
@@ -9,7 +9,7 @@ class LeadStage(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     contact_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("contacts.id"))
-    stage_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("stage_types.id"))
+    stage_id: Mapped[int] = mapped_column(Integer, ForeignKey("stage_types.id"))
     changed_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("employees.id"))
     changed_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 

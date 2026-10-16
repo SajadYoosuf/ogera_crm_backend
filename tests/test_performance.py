@@ -2,7 +2,8 @@
 import datetime
 
 from database import SessionLocal
-from models import LeadActivity, StageType
+from models import StageType
+from models.followup_schedule import FollowupSchedule
 
 TODAY = datetime.date.today()
 YESTERDAY = TODAY - datetime.timedelta(days=1)
@@ -39,17 +40,21 @@ def _stage(client, headers, user, contact_id, stage, contact_type="consumer", **
 
 def _task(client, headers, user, contact_id, when):
     """A pending follow-up. The API refuses past dates, so an overdue one is backdated in the database."""
-    body = {"type": "phone_call", "status": "pending", "scheduled_date": max(when, TODAY).isoformat(), "assigned_to": user["id"]}
-    response = client.post(f"/contacts/{contact_id}/activities", json=body, headers=headers)
+    due_dt = datetime.datetime.combine(max(when, TODAY), datetime.time(9, 0))
+    if due_dt < datetime.datetime.now():
+        due_dt = datetime.datetime.now() + datetime.timedelta(hours=1)
+    body = {"channel": "call", "due_at": due_dt.isoformat(), "assigned_to": user["id"]}
+    response = client.post(f"/contacts/{contact_id}/followups", json=body, headers=headers)
     assert response.status_code == 201, response.text
     if when < TODAY:
         with SessionLocal() as db:
-            db.query(LeadActivity).filter(LeadActivity.id == response.json()["id"]).update({"scheduled_date": when})
+            past_dt = datetime.datetime.combine(when, datetime.time(9, 0))
+            db.query(FollowupSchedule).filter(FollowupSchedule.id == response.json()["id"]).update({"due_at": past_dt})
             db.commit()
 
 
 def _log(client, headers, contact_id):
-    response = client.post(f"/contacts/{contact_id}/activities", json={"type": "phone_call", "notes": "spoke"}, headers=headers)
+    response = client.post(f"/contacts/{contact_id}/activities", json={"activity_type": "phone_call", "notes": "spoke"}, headers=headers)
     assert response.status_code == 201, response.text
 
 

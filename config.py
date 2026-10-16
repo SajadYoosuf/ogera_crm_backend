@@ -35,3 +35,6 @@ SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Ogera CRM")
 # "starttls" (port 587), "ssl" (port 465) or "none"
 SMTP_SECURITY = os.getenv("SMTP_SECURITY", "starttls").lower()
 APP_LOGIN_URL = os.getenv("APP_LOGIN_URL", "http://localhost:3000")
+
+# Lead lifecycle: days before a retry follow-up is auto-scheduled on no_answer / not_now
+RETRY_FOLLOWUP_DAYS = int(os.getenv("RETRY_FOLLOWUP_DAYS", "3"))

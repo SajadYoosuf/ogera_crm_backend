@@ -54,38 +54,38 @@ DEFAULT_ENUMS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
-# Pipeline stages per contact type. (slug, name, description, contact_type, display_order, is_terminal)
-DEFAULT_STAGES: list[tuple[str, str, str, str, int, bool]] = [
+# Pipeline stages per contact type. (slug, name, description, contact_type, display_order)
+DEFAULT_STAGES: list[tuple[str, str, str, str, int]] = [
     # Consumer pipeline
-    ("new_lead",             "New Lead",               "Just entered. Not yet contacted.",                    "consumer", 1, False),
-    ("first_call",           "First Call",              "First call attempted. Waiting to reach them.",        "consumer", 2, False),
-    ("connected",            "Connected",               "Spoke to them. Qualify and decide next step.",        "consumer", 3, False),
-    ("aware",                "Aware",                   "Needs education before hearing a price.",             "consumer", 4, False),
-    ("interested",           "Interested",              "Ready for demo or detailed info.",                    "consumer", 5, False),
-    ("quotation",            "Quotation",               "Quote sent. 3-day follow-up clock starts.",           "consumer", 6, False),
-    ("won",                  "Won",                     "Deal closed.",                                        "consumer", 7, True),
-    ("lost",                 "Lost",                    "Did not buy. Reason captured.",                       "consumer", 8, True),
-    ("after_sales_referring","After Sales / Referring", "Post-sale support and referral tracking.",            "consumer", 9, False),
+    ("new_lead",             "New Lead",               "Just entered. Not yet contacted.",                    "consumer", 1),
+    ("first_call",           "First Call",              "First call attempted. Waiting to reach them.",        "consumer", 2),
+    ("connected",            "Connected",               "Spoke to them. Qualify and decide next step.",        "consumer", 3),
+    ("aware",                "Aware",                   "Needs education before hearing a price.",             "consumer", 4),
+    ("interested",           "Interested",              "Ready for demo or detailed info.",                    "consumer", 5),
+    ("quotation",            "Quotation",               "Quote sent. 3-day follow-up clock starts.",           "consumer", 6),
+    ("won",                  "Won",                     "Deal closed.",                                        "consumer", 7),
+    ("lost",                 "Lost",                    "Did not buy. Reason captured.",                       "consumer", 8),
+    ("after_sales_referring","After Sales / Referring", "Post-sale support and referral tracking.",            "consumer", 9),
     # Partner pipeline
-    ("new_lead",             "New Lead",               "Just entered.",                                        "partner", 1, False),
-    ("first_call",           "First Call",              "First contact made.",                                 "partner", 2, False),
-    ("connected",            "Connected",               "Qualified partner prospect.",                         "partner", 3, False),
-    ("demo_introduction",    "Demo / Introduction",     "Product demo scheduled or delivered.",                "partner", 4, False),
-    ("aware",                "Aware",                   "Partner understands the product.",                    "partner", 5, False),
-    ("interested",           "Interested",              "Partner ready to commit.",                            "partner", 6, False),
-    ("active",               "Active",                  "Active partner.",                                     "partner", 7, False),
-    ("referral",             "Referral",                "Partner sending referrals.",                          "partner", 8, False),
-    ("inactive",             "Inactive",                "Partner no longer active.",                           "partner", 9, True),
+    ("new_lead",             "New Lead",               "Just entered.",                                        "partner", 1),
+    ("first_call",           "First Call",              "First contact made.",                                 "partner", 2),
+    ("connected",            "Connected",               "Qualified partner prospect.",                         "partner", 3),
+    ("demo_introduction",    "Demo / Introduction",     "Product demo scheduled or delivered.",                "partner", 4),
+    ("aware",                "Aware",                   "Partner understands the product.",                    "partner", 5),
+    ("interested",           "Interested",              "Partner ready to commit.",                            "partner", 6),
+    ("active",               "Active",                  "Active partner.",                                     "partner", 7),
+    ("referral",             "Referral",                "Partner sending referrals.",                          "partner", 8),
+    ("inactive",             "Inactive",                "Partner no longer active.",                           "partner", 9),
     # Dealer pipeline
-    ("new_lead",             "New Lead",               "Just entered.",                                        "dealer", 1, False),
-    ("connected",            "Connected",               "Initial contact made.",                               "dealer", 2, False),
-    ("meeting_done",         "Meeting Done",            "In-person or video meeting completed.",               "dealer", 3, False),
-    ("terms_agreed",         "Terms Agreed",            "Commercial terms discussed and agreed.",              "dealer", 4, False),
-    ("sample_sent",          "Sample Sent",             "Product sample dispatched.",                          "dealer", 5, False),
-    ("first_order",          "First Order",             "First order placed.",                                 "dealer", 6, False),
-    ("placed",               "Placed",                  "Order confirmed and in fulfilment.",                  "dealer", 7, False),
-    ("active_dealer",        "Active Dealer",           "Recurring active dealer.",                            "dealer", 8, False),
-    ("inactive_dealer",      "Inactive Dealer",         "Dealer no longer ordering.",                          "dealer", 9, True),
+    ("new_lead",             "New Lead",               "Just entered.",                                        "dealer", 1),
+    ("connected",            "Connected",               "Initial contact made.",                               "dealer", 2),
+    ("meeting_done",         "Meeting Done",            "In-person or video meeting completed.",               "dealer", 3),
+    ("terms_agreed",         "Terms Agreed",            "Commercial terms discussed and agreed.",              "dealer", 4),
+    ("sample_sent",          "Sample Sent",             "Product sample dispatched.",                          "dealer", 5),
+    ("first_order",          "First Order",             "First order placed.",                                 "dealer", 6),
+    ("placed",               "Placed",                  "Order confirmed and in fulfilment.",                  "dealer", 7),
+    ("active_dealer",        "Active Dealer",           "Recurring active dealer.",                            "dealer", 8),
+    ("inactive_dealer",      "Inactive Dealer",         "Dealer no longer ordering.",                          "dealer", 9),
 ]
 
 DEFAULT_COMPANY = {"company_name": "Ogera", "company_logo_url": None}
@@ -117,11 +117,11 @@ def seed_defaults(db: Session) -> None:
             if (category, value) not in have:
                 db.add(EnumValue(category=category, value=value, label=label, sort_order=order))
     existing = {(s, ct) for s, ct in db.query(StageType.slug, StageType.contact_type).all()}
-    for slug, name, description, contact_type, order, is_terminal in DEFAULT_STAGES:
+    for slug, name, description, contact_type, order in DEFAULT_STAGES:
         if (slug, contact_type) not in existing:
             db.add(StageType(
                 slug=slug, name=name, description=description,
-                contact_type=contact_type, order=order, is_terminal=int(is_terminal),
+                contact_type=contact_type, order=order,
             ))
     keys = {k for (k,) in db.query(CompanySetting.setting_key).all()}
     for key, value in DEFAULT_COMPANY.items():

@@ -4,7 +4,9 @@ from sqlalchemy import case, exists, func
 from sqlalchemy.orm import Session
 from auth import get_current_user
 from database import get_db
-from models import Contact, Employee, LeadActivity, LeadSource, LeadStage, StageType
+from models import Contact, Employee, LeadSource, LeadStage, StageType
+from models.activity_log import ActivityLog
+from models.followup_schedule import FollowupSchedule
 from schemas.enums import ContactType
 
 router = APIRouter(prefix="/performance", tags=["performance"])
@@ -105,21 +107,12 @@ def _stage_changes(db: Session, stage: str, lo, hi, group_by_assignee: bool, onl
     return int(query.scalar() or 0)
 
 
-def _activity_owner():
-    """Who an activity counts for: whoever completed it, else whoever logged it."""
-    return func.coalesce(LeadActivity.completed_by, LeadActivity.created_by)
-
-
-def _activity_when():
-    return func.coalesce(LeadActivity.completed_at, LeadActivity.created_at)
-
-
 def _open_followups(db: Session):
     """Pending scheduled follow-ups on live contacts."""
     return (
-        db.query(LeadActivity)
-        .join(Contact, Contact.id == LeadActivity.contact_id)
-        .filter(LeadActivity.status == "pending", Contact.deleted_at.is_(None))
+        db.query(FollowupSchedule)
+        .join(Contact, Contact.id == FollowupSchedule.contact_id)
+        .filter(FollowupSchedule.status == "pending", Contact.deleted_at.is_(None))
     )
 
 
@@ -135,12 +128,12 @@ def performance_summary(
     own = None if current_user.role in TEAM_ROLES else current_user.id
 
     contacts = db.query(func.count(Contact.id)).filter(Contact.deleted_at.is_(None), Contact.created_at >= lo, Contact.created_at < hi)
-    activities = db.query(func.count(LeadActivity.id)).filter(LeadActivity.status == "done", _activity_when() >= lo, _activity_when() < hi)
-    overdue = _open_followups(db).filter(LeadActivity.scheduled_date < datetime.date.today())
+    activities = db.query(func.count(ActivityLog.id)).filter(ActivityLog.logged_at >= lo, ActivityLog.logged_at < hi)
+    overdue = _open_followups(db).filter(func.date(FollowupSchedule.due_at) < datetime.date.today())
     if own is not None:
         contacts = contacts.filter(Contact.assigned_to == own)
-        activities = activities.filter(_activity_owner() == own)
-        overdue = overdue.filter(LeadActivity.assigned_to == own)
+        activities = activities.filter(ActivityLog.done_by == own)
+        overdue = overdue.filter(FollowupSchedule.assigned_to == own)
 
     return {
         "scope": "self" if own is not None else "team",
@@ -173,14 +166,14 @@ def performance_team(
         .group_by(Contact.created_by).all()
     )
     activities = dict(
-        db.query(_activity_owner(), func.count(LeadActivity.id))
-        .filter(LeadActivity.status == "done", _activity_when() >= lo, _activity_when() < hi)
-        .group_by(_activity_owner()).all()
+        db.query(ActivityLog.done_by, func.count(ActivityLog.id))
+        .filter(ActivityLog.logged_at >= lo, ActivityLog.logged_at < hi)
+        .group_by(ActivityLog.done_by).all()
     )
-    pending = dict(_open_followups(db).with_entities(LeadActivity.assigned_to, func.count(LeadActivity.id)).group_by(LeadActivity.assigned_to).all())
+    pending = dict(_open_followups(db).with_entities(FollowupSchedule.assigned_to, func.count(FollowupSchedule.id)).group_by(FollowupSchedule.assigned_to).all())
     overdue = dict(
-        _open_followups(db).filter(LeadActivity.scheduled_date < today)
-        .with_entities(LeadActivity.assigned_to, func.count(LeadActivity.id)).group_by(LeadActivity.assigned_to).all()
+        _open_followups(db).filter(func.date(FollowupSchedule.due_at) < today)
+        .with_entities(FollowupSchedule.assigned_to, func.count(FollowupSchedule.id)).group_by(FollowupSchedule.assigned_to).all()
     )
     won = _stage_changes(db, "won", lo, hi, True)
 

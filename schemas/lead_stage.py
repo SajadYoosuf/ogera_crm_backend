@@ -18,7 +18,6 @@ class LeadStageResponse(BaseModel):
     stage_slug: str = ""
     stage_name: str = ""
     contact_type: str = ""
-    is_terminal: bool = False
     changed_by: int
     changed_at: datetime.datetime
     loss_reason: str | None = None
