@@ -14,13 +14,15 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
-from models import ConsumerProfile, Contact, LeadSource, LeadStage, PartnerProfile
-from schemas import ProfessionType
+from models import ConsumerProfile, Contact, DealerProfile, LeadSource, LeadStage, PartnerProfile
+from schemas.enums import HouseStage, ProfessionType, profession_key
+from phone_utils import phone_key
+import settings_catalog as catalog
 
 MAX_ROWS = 5000
 MAX_BYTES = 5 * 1024 * 1024
 HEADER_SCAN_ROWS = 10
-MISSING_DISTRICT = "Unknown"  # contacts.district is NOT NULL
+MISSING_DISTRICT = None  # district is optional on the web; the mobile app requires it
 
 FIELDS = {
     "name": "Name",
@@ -32,6 +34,8 @@ FIELDS = {
     "lead_source": "Lead source",
     "profession_type": "Profession (partners)",
     "house_stage": "House stage (consumers)",
+    "owner_name": "Owner name (dealers)",
+    "owner_email": "Owner email (dealers)",
     "work_area": "Work area (partners)",
     "notes": "Notes",
     "created_at": "Created date",
@@ -50,6 +54,8 @@ ALIASES = {
     "lead_source": ["source", "leadsource", "sourceofsale", "origin", "channel"],
     "profession_type": ["profession", "professiontype", "occupation", "trade", "partnertype"],
     "house_stage": ["housestage", "constructionstage", "buildingstage"],
+    "owner_name": ["owner", "ownername", "proprietor", "contactperson"],
+    "owner_email": ["owneremail", "email", "emailid", "mail"],
     "work_area": ["workarea", "servicearea", "operatingarea"],
     "notes": ["notes", "note", "remarks", "remark", "comments", "comment", "description"],
     "created_at": ["createdat", "createddate", "date", "created", "enquirydate", "saledate"],
@@ -130,6 +136,23 @@ def detect_header(rows: list[list[str]]) -> tuple[int, dict[int, str]]:
     return best_row, best_map
 
 
+def _house_stage_value(raw: str | None, r: "RowResult") -> str | None:
+    """Map a free-text house stage from a sheet onto the fixed list (ready, under_construction, renovation)."""
+    if not raw or not raw.strip():
+        return None
+    key = re.sub(r"[^a-z]+", "_", raw.lower()).strip("_")
+    if key in {s.value for s in HouseStage}:
+        return key
+    if key.startswith("under_construction") or key.startswith("construction"):
+        return HouseStage.under_construction.value
+    if key.startswith("renovat"):
+        return HouseStage.renovation.value
+    if key.startswith("ready"):
+        return HouseStage.ready.value
+    r.warn(f"House stage '{raw}' is not ready, under construction or renovation; left blank")
+    return None
+
+
 def normalize_phone(raw: str) -> str | None:
     """+<digits>, or None when the number cannot be trusted."""
     p = re.sub(r"[\s\-().]", "", raw or "")
@@ -191,6 +214,7 @@ class Options:
 
 
 def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[int, str], options: Options) -> list[RowResult]:
+    professions = {p.value for p in ProfessionType}
     sources = {}
     for s in db.query(LeadSource).filter(LeadSource.is_active == 1):
         sources[_key(s.name)] = s.id
@@ -206,10 +230,7 @@ def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[i
         d = {f: (raw[col].strip() if col < len(raw) else "") for col, f in mapping.items()}
         out = r.data
 
-        out["name"] = d.get("name", "")
-        if not out["name"]:
-            r.fail("Name is missing")
-        out["name"] = out["name"][:150]
+        out["name"] = (d.get("name") or "")[:150] or None
 
         phone = normalize_phone(d.get("phone", ""))
         if phone is None:
@@ -232,7 +253,7 @@ def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[i
             if out["phone_alt"] is None:
                 r.warn("Alternate phone is not valid and was left out")
 
-        out["district"] = (d.get("district") or "")[:80]
+        out["district"] = (d.get("district") or None) and d["district"][:80]
         if not out["district"]:
             out["district"] = MISSING_DISTRICT
             r.warn("District is missing; contact will be unverified")
@@ -257,13 +278,19 @@ def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[i
                 r.warn(f"Unknown lead source '{src}'")
 
         if out["contact_type"] == "consumer":
-            out["house_stage"] = (d.get("house_stage") or None) and d["house_stage"][:50]
+            out["house_stage"] = _house_stage_value(d.get("house_stage"), r)
         elif out["contact_type"] == "partner":
             out["work_area"] = (d.get("work_area") or None) and d["work_area"][:120]
             prof = d.get("profession_type", "")
-            out["profession_type"] = ProfessionType.normalise(prof).value if prof else "other"
+            key = profession_key(prof) if prof else ""
+            out["profession_type"] = key if key in professions else "other"
             if not prof:
                 r.warn("Profession is missing; used 'other'")
+        elif out["contact_type"] == "dealer":
+            out["owner_name"] = (d.get("owner_name") or None) and d["owner_name"][:120]
+            out["owner_email"] = (d.get("owner_email") or None) and d["owner_email"][:180]
+            if not out["owner_name"]:
+                r.fail("Owner name is required for dealers")
 
         if d.get("created_at"):
             out["created_at"] = parse_date(d["created_at"])
@@ -287,15 +314,19 @@ def run_import(db: Session, results: list[RowResult], options: Options, assignee
         if r.status in ("ready", "warning"):
             d = dict(r.data)
             house_stage = d.pop("house_stage", None)
+            owner_name = d.pop("owner_name", None)
+            owner_email = d.pop("owner_email", None)
             work_area = d.pop("work_area", None)
             profession = d.pop("profession_type", None)
             if d.get("created_at") is None:
                 d.pop("created_at", None)
-            contact = Contact(**d, assigned_to=random.choice(assignee_ids), created_by=created_by)
+            contact = Contact(**d, phone_key=phone_key(d["phone"]), assigned_to=random.choice(assignee_ids), created_by=created_by)
             if d["contact_type"] == "consumer":
                 contact.consumer_profile = ConsumerProfile(house_stage=house_stage)
             elif d["contact_type"] == "partner":
                 contact.partner_profile = PartnerProfile(profession_type=profession, work_area=work_area)
+            elif d["contact_type"] == "dealer":
+                contact.dealer_profile = DealerProfile(owner_name=owner_name, email=owner_email)
             contact.lead_stages.append(LeadStage(stage="new_lead", changed_by=created_by))
             db.add(contact)
             created += 1
@@ -306,7 +337,7 @@ def run_import(db: Session, results: list[RowResult], options: Options, assignee
                 if getattr(contact, col) in (None, "") and r.data.get(col):
                     setattr(contact, col, r.data[col])
                     changed = True
-            if contact.district in ("", MISSING_DISTRICT) and r.data.get("district") not in (None, "", MISSING_DISTRICT):
+            if not contact.district and r.data.get("district"):
                 contact.district = r.data["district"]
                 changed = True
             updated += changed

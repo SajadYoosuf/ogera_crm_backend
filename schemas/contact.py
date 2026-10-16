@@ -1,7 +1,7 @@
 import datetime
 from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
-from .enums import ContactType, ProfessionType, StageEnum
+from .enums import ContactType, StageEnum
 from .employee import EmployeeSummary
 from .lead_source import LeadSourceSummary
 from .lead_stage import LeadStageResponse
@@ -11,6 +11,9 @@ from .consumer_profile import (
     ConsumerProfileUpdate,
 )
 from .partner_profile import PartnerProfileBase, PartnerProfileResponse, PartnerProfileUpdate
+from .dealer_profile import DealerProfileBase, DealerProfileResponse, DealerProfileUpdate
+from phone_utils import clean_phone
+from pydantic import field_validator
 
 
 class ContactSummary(BaseModel):
@@ -18,10 +21,10 @@ class ContactSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    name: str
+    name: str | None = None
     phone: str
     contact_type: ContactType
-    district: str
+    district: str | None = None
 
 
 class NameRef(BaseModel):
@@ -42,14 +45,26 @@ class LeadStageSummary(BaseModel):
 
 class ContactBase(BaseModel):
     contact_type: ContactType = ContactType.consumer
-    name: Annotated[str, Field(min_length=1, max_length=150)]
+    # Dealers: the account (shop or business) name. Optional — phone is used as display name when absent.
+    name: Annotated[str, Field(min_length=1, max_length=150)] | None = None
     phone: Annotated[str, Field(min_length=1, max_length=20)]
     phone_alt: Annotated[str, Field(max_length=20)] | None = None
-    district: Annotated[str, Field(min_length=1, max_length=80)]
-    address: Annotated[str, Field(min_length=1, max_length=255)]
-    # Optional: contact that referred this one
+    # Required from the mobile app only (checked in the route, see request_context.client_platform)
+    district: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+    address: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    # Optional: contact that referred this one (linking to existing contacts is pending)
     referred_by_id: int | None = None
     lead_source_id: int | None = None
+
+    @field_validator("phone", "phone_alt", mode="before")
+    @classmethod
+    def _clean_phone(cls, value):
+        if value is None:
+            return value
+        try:
+            return clean_phone(value)
+        except ValueError as exc:
+            raise ValueError(str(exc))
 
 
 Latitude = Annotated[float, Field(ge=-90, le=90)]
@@ -57,15 +72,17 @@ Longitude = Annotated[float, Field(ge=-180, le=180)]
 
 
 class ContactCreate(ContactBase):
+    # Phone and lead source are always required
+    lead_source_id: int
     # Omit to auto-assign a random eligible employee (not admin / manager / support)
     assigned_to: int | None = None
     # Required for Offline (field visit) leads, not allowed for other sources
     latitude: Latitude | None = None
     longitude: Longitude | None = None
-    # Optional consumer details, created in the same transaction (consumer contacts only)
+    # Type details, created in the same transaction. Each one is only allowed for its own contact type.
     consumer_profile: ConsumerProfileBase | None = None
-    # Optional partner details (partner contacts only); profession_type picks from ProfessionType
     partner_profile: PartnerProfileBase | None = None
+    dealer_profile: DealerProfileBase | None = None
 
 
 class ContactUpdate(BaseModel):
@@ -80,10 +97,21 @@ class ContactUpdate(BaseModel):
     assigned_to: int | None = None
     referred_by_id: int | None = None
     lead_source_id: int | None = None
+
     # Creates the profile if the contact has none, otherwise updates the given fields
     consumer_profile: ConsumerProfileUpdate | None = None
-    # Same for partners; a profile created here must include profession_type
     partner_profile: PartnerProfileUpdate | None = None
+    dealer_profile: DealerProfileUpdate | None = None
+
+    @field_validator("phone", "phone_alt", mode="before")
+    @classmethod
+    def _clean_phone(cls, value):
+        if value is None:
+            return value
+        try:
+            return clean_phone(value)
+        except ValueError as exc:
+            raise ValueError(str(exc))
 
 
 class ContactResponse(ContactBase):
@@ -122,6 +150,7 @@ class ContactResponse(ContactBase):
     current_stage: LeadStageResponse | None = None
     consumer_profile: ConsumerProfileResponse | None = None
     partner_profile: PartnerProfileResponse | None = None
+    dealer_profile: DealerProfileResponse | None = None
 
 
 class ContactListItem(BaseModel):
@@ -130,19 +159,49 @@ class ContactListItem(BaseModel):
 
     id: int
     contact_type: ContactType
-    name: str
+    name: str | None = None
     phone: str
     address: str | None = None
-    district: str
-    profession_type: ProfessionType | None = None  # partners only
+    district: str | None = None
+    profession_type: str | None = None  # partners only
+    house_stage: str | None = None  # consumers only
+    owner_name: str | None = None  # dealers only
+    work_area: str | None = None  # partners only
+    latitude: float | None = None
+    longitude: float | None = None
     lead_stage: LeadStageSummary | None = None
-    lead_source: NameRef | None = None
+    lead_source: LeadSourceSummary | None = None
     assigned_to: NameRef
     created_by: NameRef | None = None
     created_at: datetime.datetime
     # Computed on read: verified once no required detail is pending
     is_verified: bool = False
     missing_fields: list[str] = []
+
+
+class ContactMapPin(BaseModel):
+    """Trimmed row for the mobile map: only contacts that have a location."""
+    id: int
+    contact_type: ContactType
+    name: str | None = None
+    phone: str
+    address: str | None = None
+    latitude: float
+    longitude: float
+    stage: StageEnum | None = None
+    house_stage: str | None = None
+
+
+class ContactMapResponse(BaseModel):
+    items: list[ContactMapPin]
+    total: int
+
+
+class StageTypeItem(BaseModel):
+    """One pipeline stage, in board order."""
+    id: StageEnum
+    label: str
+    order_index: int
 
 
 class ContactListResponse(BaseModel):

@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -10,23 +10,31 @@ import json
 import contact_export
 import contact_import
 from auth import get_current_user, require_roles
+from contact_access import get_visible_contact, has_full_access, visible_to
 from database import get_db
+from phone_utils import phone_key
+from request_context import client_platform
 from verification import missing_fields, verified_clause
-from models import Contact, ConsumerProfile, Employee, LeadSource, LeadStage, PartnerProfile
+from models import Contact, ConsumerProfile, DealerProfile, Employee, LeadSource, LeadStage, PartnerProfile, StageType
 from schemas import (
     ContactCreate,
     ContactListItem,
     ContactListResponse,
+    ContactMapPin,
+    ContactMapResponse,
     ContactResponse,
     ContactType,
-    ProfessionType,
     StageEnum,
     ContactUpdate,
     ConsumerProfileResponse,
     ConsumerProfileUpdate,
     LeadStageCreate,
     LeadStageResponse,
+    StageTypeItem,
 )
+from schemas.dealer_profile import DealerProfileResponse, DealerProfileUpdate
+from schemas.enums import HouseStage, ProfessionType, TankType, profession_key
+import settings_catalog as catalog
 
 router = APIRouter(
     prefix="/contacts", tags=["contacts"], dependencies=[Depends(get_current_user)]
@@ -34,7 +42,7 @@ router = APIRouter(
 
 # Roles that never receive auto-assigned leads
 NON_ASSIGNABLE_ROLES = ("admin", "manager", "support")
-# Roles that may import contacts and export everyone's contacts
+# Roles that may import contacts
 MANAGER_ROLES = ("admin", "manager")
 
 
@@ -47,7 +55,7 @@ def _pick_random_assignee(db: Session) -> int:
             Employee.is_active == 1,
             Employee.role.notin_(NON_ASSIGNABLE_ROLES),
         )
-        .order_by(func.rand())
+        .order_by(func.rand() if db.get_bind().dialect.name == "mysql" else func.random())
         .first()
     )
     if employee is None:
@@ -55,6 +63,20 @@ def _pick_random_assignee(db: Session) -> int:
             status_code=409, detail="No eligible employee available to assign this lead"
         )
     return employee.id
+
+
+def _ensure_phone_free(db: Session, phone: str, user: Employee, exclude_id: int | None = None) -> None:
+    """One phone number belongs to one live contact, whatever its type. Compared on the last 10 digits.
+    The message names the other contact only for admins and managers, so a restricted user cannot probe contacts."""
+    q = db.query(Contact.id).filter(Contact.phone_key == phone_key(phone), Contact.deleted_at.is_(None))
+    if exclude_id is not None:
+        q = q.filter(Contact.id != exclude_id)
+    hit = q.first()
+    if hit is not None:
+        detail = "A contact with this phone number already exists"
+        if has_full_access(user):
+            detail += f" (contact {hit.id})"
+        raise HTTPException(status_code=409, detail=detail)
 
 
 def _ensure_referrer(db: Session, referred_by_id: int | None, contact_id: int | None = None):
@@ -80,15 +102,26 @@ def _check_location(source: LeadSource | None, latitude, longitude, creating: bo
         )
 
 
+def _check_type_profiles(contact_type: str, consumer_profile, partner_profile, dealer_profile) -> None:
+    """Each type details block is only allowed on its own contact type."""
+    if consumer_profile is not None and contact_type != "consumer":
+        raise HTTPException(status_code=400, detail="consumer_profile is only allowed for consumer contacts")
+    if partner_profile is not None and contact_type != "partner":
+        raise HTTPException(status_code=400, detail="partner_profile is only allowed for partner contacts")
+    if dealer_profile is not None and contact_type != "dealer":
+        raise HTTPException(status_code=400, detail="dealer_profile is only allowed for dealer contacts")
+
+
 def contact_filters(
     contact_type: ContactType | None = None,
-    profession_type: ProfessionType | None = Query(None, description="Partner profession, e.g. plumber"),
+    profession_type: str | None = Query(None, description="Partner profession, e.g. plumber"),
     district: str | None = None,
     search: str | None = Query(None, description="Matches name or phone"),
     stage: StageEnum | None = None,
     lead_source_id: int | None = None,
     assigned_to: int | None = None,
     created_by: int | None = None,
+    unattributed: bool | None = Query(None, description="true = only contacts with no recorded creator"),
     verified: bool | None = Query(None, description="true = only verified, false = only unverified"),
     created_from: date | None = Query(None, description="Created on or after this date"),
     created_to: date | None = Query(None, description="Created on or before this date"),
@@ -98,8 +131,8 @@ def contact_filters(
     return {k: v for k, v in params.items() if v is not None}
 
 
-def contact_query(db: Session, f: dict, entities):
-    """Contacts matching the filters. `entities(current_stage)` picks what to select."""
+def contact_query(db: Session, f: dict, entities, user: Employee):
+    """Contacts matching the filters and visible to the user. `entities(current_stage)` picks what to select."""
     # Latest stage per contact. Stage rows are append-only, so max(id) is the newest.
     latest = (
         db.query(
@@ -117,12 +150,15 @@ def contact_query(db: Session, f: dict, entities):
         .outerjoin(current, current.id == latest.c.stage_id)
         .filter(Contact.deleted_at.is_(None))  # Exclude soft-deleted
     )
+    scope = visible_to(user)
+    if scope is not None:  # staff see only their own creations and assignments
+        q = q.filter(scope)
     if "contact_type" in f:
         q = q.filter(Contact.contact_type == f["contact_type"].value)
     if "profession_type" in f:
         q = q.join(PartnerProfile, PartnerProfile.contact_id == Contact.id).filter(
             # Legacy rows hold free text ("Plumber", "Interior Designer"), so compare normalised
-            func.replace(func.lower(PartnerProfile.profession_type), " ", "_") == f["profession_type"].value
+            func.replace(func.lower(PartnerProfile.profession_type), " ", "_") == f["profession_type"]
         )
     if "district" in f:
         q = q.filter(Contact.district.ilike(f"%{f['district']}%"))
@@ -137,6 +173,8 @@ def contact_query(db: Session, f: dict, entities):
         q = q.filter(Contact.assigned_to == f["assigned_to"])
     if "created_by" in f:
         q = q.filter(Contact.created_by == f["created_by"])
+    if f.get("unattributed") is True:
+        q = q.filter(Contact.created_by.is_(None))
     if f.get("verified") is True:
         q = q.filter(verified_clause())
     elif f.get("verified") is False:
@@ -164,20 +202,22 @@ def list_contacts(
     sort: Literal["newest", "oldest", "name_asc", "name_desc"] = Query("newest"),
     f: dict = Depends(contact_filters),
     db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
 ):
     """Paged list of contacts of every type, each with its current stage, lead source, owner and verification status.
     Filter by type, stage, district, owner, creator, verified state, creation dates and search text. `sort` sets the order.
-    Requires sign-in. The list is not limited to the caller's own contacts.
+    Admins and managers see every contact. Everyone else sees only contacts they created or are assigned to.
     """
-    total = contact_query(db, f, lambda cur: (func.count(Contact.id),)).scalar() or 0
+    total = contact_query(db, f, lambda cur: (func.count(Contact.id),), current_user).scalar() or 0
     rows = (
-        contact_query(db, f, lambda cur: (Contact, cur))
+        contact_query(db, f, lambda cur: (Contact, cur), current_user)
         .options(
             joinedload(Contact.lead_source),
             joinedload(Contact.assigned_employee),
             joinedload(Contact.creator),
             joinedload(Contact.partner_profile),
             joinedload(Contact.consumer_profile),
+            joinedload(Contact.dealer_profile),
         )
         .order_by(*CONTACT_ORDERINGS[sort])
         .offset(skip)
@@ -196,7 +236,12 @@ def list_contacts(
                 "phone": contact.phone,
                 "address": contact.address,
                 "district": contact.district,
-                "profession_type": ProfessionType.normalise(contact.partner_profile.profession_type) if contact.partner_profile else None,
+                "profession_type": profession_key(contact.partner_profile.profession_type) if contact.partner_profile else None,
+                "house_stage": contact.consumer_profile.house_stage if contact.consumer_profile else None,
+                "owner_name": contact.dealer_profile.owner_name if contact.dealer_profile else None,
+                "work_area": contact.partner_profile.work_area if contact.partner_profile else None,
+                "latitude": contact.latitude,
+                "longitude": contact.longitude,
                 "lead_stage": current_stage,
                 "lead_source": contact.lead_source,
                 "assigned_to": contact.assigned_employee,
@@ -212,14 +257,84 @@ def list_contacts(
     return ContactListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
-@router.get("/profession-types", summary="List profession types")
-def list_profession_types():
-    """Partner profession options for the partner type picker. The `value` is the key the API stores."""
-    return [
-        {"value": p.value, "label": p.value.replace("_", " ").title()}
-        for p in ProfessionType
-        if p is not ProfessionType.other
+@router.get("/map", response_model=ContactMapResponse, summary="Contacts for the map")
+def contact_map_pins(
+    limit: int = Query(2000, ge=1, le=5000),
+    f: dict = Depends(contact_filters),
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """Contacts that have a saved location, trimmed to what the mobile map needs. Takes the same filters as the list and the same visibility."""
+    rows = (
+        contact_query(db, f, lambda cur: (Contact, cur), current_user)
+        .filter(Contact.latitude.is_not(None), Contact.longitude.is_not(None))
+        .order_by(Contact.created_at.desc(), Contact.id.desc())
+        .limit(limit)
+        .all()
+    )
+    items = [
+        ContactMapPin(
+            id=c.id,
+            contact_type=c.contact_type,
+            name=c.name,
+            phone=c.phone,
+            address=c.address,
+            latitude=float(c.latitude),
+            longitude=float(c.longitude),
+            stage=stage.stage if stage else None,
+            house_stage=c.consumer_profile.house_stage if c.consumer_profile else None,
+        )
+        for c, stage in rows
     ]
+    return ContactMapResponse(items=items, total=len(items))
+
+
+# Board order of the pipeline. `referral` is a legacy value that is still accepted but not offered.
+# Partners have their own, shorter pipeline; new_lead, connected, aware and interested are shared with consumers.
+PARTNER_STAGES = {
+    StageEnum.new_lead, StageEnum.connected, StageEnum.demo_introduction, StageEnum.aware, StageEnum.interested,
+    StageEnum.active_referral, StageEnum.inactive,
+}
+PARTNER_ONLY_STAGES = {StageEnum.demo_introduction, StageEnum.active_referral, StageEnum.inactive}
+
+STAGE_ORDER = [
+    StageEnum.new_lead, StageEnum.first_call, StageEnum.connected, StageEnum.aware, StageEnum.interested,
+    StageEnum.quoted, StageEnum.negotiating, StageEnum.won, StageEnum.lost, StageEnum.repeat_customer,
+]
+
+
+@router.get("/stage-types", response_model=list[StageTypeItem], summary="List pipeline stages")
+def list_stage_types(db: Session = Depends(get_db)):
+    """Pipeline stages in board order, with the names and order managed in Settings."""
+    known = {s.value for s in StageEnum}
+    rows = [
+        r for r in db.query(StageType).filter(StageType.is_active == 1).order_by(StageType.order, StageType.id).all()
+        if r.slug in known
+    ]
+    if not rows:  # stage_types not seeded yet: fall back to the built-in order
+        return [
+            StageTypeItem(id=stage, label=stage.value.replace("_", " ").title(), order_index=i)
+            for i, stage in enumerate(STAGE_ORDER)
+        ]
+    return [StageTypeItem(id=r.slug, label=r.name, order_index=i) for i, r in enumerate(rows)]
+
+
+@router.get("/partner-types", summary="List partner profession types")
+def list_profession_types():
+    """Partner profession options. Fixed in code: the `value` is what the API stores."""
+    return [{"value": p.value, "label": p.value.replace("_", " ").title()} for p in ProfessionType]
+
+
+@router.get("/house-stages", summary="List house stages")
+def list_house_stages():
+    """Consumer house stages. Fixed in code, not in Settings."""
+    return [{"value": s.value, "label": s.value.replace("_", " ").title()} for s in HouseStage]
+
+
+@router.get("/tank-types", summary="List tank types")
+def list_tank_types():
+    """Consumer tank types. Fixed in code, not in Settings."""
+    return [{"value": t.value, "label": t.value.replace("_", " ").title()} for t in TankType]
 
 
 @router.get("/export", summary="Export contacts")
@@ -230,12 +345,9 @@ def export_contacts(
     current_user: Employee = Depends(get_current_user),
 ):
     """Downloads the contacts matching the list filters as CSV, Excel or PDF (`format`).
-    It uses the same filters as the list, so the export matches what is on screen.
+    It uses the same filters and the same visibility as the list, so the export matches what is on screen.
     """
-    if current_user.role not in MANAGER_ROLES:
-        f["assigned_to"] = current_user.id  # everyone else exports only their own contacts
-
-    total = contact_query(db, f, lambda cur: (func.count(Contact.id),)).scalar() or 0
+    total = contact_query(db, f, lambda cur: (func.count(Contact.id),), current_user).scalar() or 0
     limit = contact_export.MAX_ROWS[format]
     if total > limit:
         raise HTTPException(
@@ -243,13 +355,14 @@ def export_contacts(
             detail=f"{total} contacts match; a {format.upper()} export holds at most {limit}. Narrow the filters.",
         )
     rows = (
-        contact_query(db, f, lambda cur: (Contact, cur))
+        contact_query(db, f, lambda cur: (Contact, cur), current_user)
         .options(
             joinedload(Contact.lead_source),
             joinedload(Contact.assigned_employee),
             joinedload(Contact.creator),
             joinedload(Contact.partner_profile),
             joinedload(Contact.consumer_profile),
+            joinedload(Contact.dealer_profile),
         )
         .order_by(Contact.created_at.desc(), Contact.id.desc())
         .all()
@@ -383,15 +496,33 @@ def commit_import(
     return contact_import.run_import(db, results, options, assignees, current_user.id)
 
 
-@router.get("/{contact_id}", response_model=ContactResponse, summary="Get a contact")
-def get_contact(contact_id: int, db: Session = Depends(get_db)):
-    """One contact with its current stage, referral count and verification status (`is_verified`, `missing_fields`).
-    Returns 404 if the id is unknown or the contact is deleted.
-    """
-    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+@router.get("/type-counts", summary="Count contacts per type")
+def contact_type_counts(
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """A live count of the contacts this user can see, per type (consumer, partner, dealer), for the tab badges."""
+    q = db.query(Contact.contact_type, func.count(Contact.id)).filter(Contact.deleted_at.is_(None))
+    scope = visible_to(current_user)
+    if scope is not None:
+        q = q.filter(scope)
+    rows = q.group_by(Contact.contact_type).all()
+    counts = {"consumer": 0, "partner": 0, "dealer": 0}
+    for kind, total in rows:
+        counts[str(getattr(kind, "value", kind))] = total
+    return {"all": sum(counts.values()), **counts}
 
-    if not contact or contact.deleted_at:
-        raise HTTPException(status_code=404, detail="Contact not found")
+
+@router.get("/{contact_id}", response_model=ContactResponse, summary="Get a contact")
+def get_contact(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """One contact with its current stage, referral count and verification status (`is_verified`, `missing_fields`).
+    Returns 404 if the id is unknown, the contact is deleted, or the user is not allowed to see it.
+    """
+    contact = get_visible_contact(db, current_user, contact_id)
 
     response = ContactResponse.model_validate(contact, from_attributes=True)
 
@@ -420,24 +551,33 @@ def create_contact(
     body: ContactCreate,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
+    platform: str = Depends(client_platform),
 ):
     """Creates a consumer, partner or dealer contact. The signed-in user is recorded as the creator.
+
+    Always required: name, phone and lead source. Mobile requests (`X-Client: mobile`) also need address and district.
+    A consumer, partner or dealer needs its own details block: a partner needs `partner_profile` (with profession_type),
+    a dealer needs `dealer_profile` (with owner_name). Consumer details are optional.
     If `assigned_to` is omitted, an owner is picked automatically from the staff who take leads.
-    Offline leads need latitude and longitude. A consumer profile is allowed only on consumer contacts, and a partner profile only on partner contacts.
-    Returns 400 for an unknown source, owner or referrer.
+    Offline leads need latitude and longitude. Returns 400 for an unknown source, owner, referrer or a details block on the wrong type.
+    Returns 409 when the phone number already belongs to another contact.
     """
-    source = None
-    if body.lead_source_id is not None:
-        source = db.query(LeadSource).filter(LeadSource.id == body.lead_source_id).first()
-        if not source:
-            raise HTTPException(status_code=400, detail="Lead source not found")
+    if platform == "mobile":
+        missing = [name for name in ("address", "district") if not getattr(body, name)]
+        if missing:
+            raise HTTPException(status_code=400, detail=f"{' and '.join(missing).capitalize()} required from the mobile app")
+
+    source = db.query(LeadSource).filter(LeadSource.id == body.lead_source_id).first()
+    if not source:
+        raise HTTPException(status_code=400, detail="Lead source not found")
     _check_location(source, body.latitude, body.longitude, creating=True)
     _ensure_referrer(db, body.referred_by_id)
-
-    if body.consumer_profile is not None and body.contact_type != "consumer":
-        raise HTTPException(
-            status_code=400, detail="consumer_profile is only allowed for consumer contacts"
-        )
+    _check_type_profiles(body.contact_type, body.consumer_profile, body.partner_profile, body.dealer_profile)
+    if body.contact_type == "partner" and body.partner_profile is None:
+        raise HTTPException(status_code=400, detail="partner_profile (with profession_type) is required for a partner")
+    if body.contact_type == "dealer" and body.dealer_profile is None:
+        raise HTTPException(status_code=400, detail="dealer_profile (with owner_name) is required for a dealer")
+    _ensure_phone_free(db, body.phone, current_user)
 
     if body.assigned_to is None:
         assigned_to = _pick_random_assignee(db)
@@ -446,17 +586,14 @@ def create_contact(
             raise HTTPException(status_code=400, detail="Assigned employee not found")
         assigned_to = body.assigned_to
 
-    if body.partner_profile is not None and body.contact_type != "partner":
-        raise HTTPException(
-            status_code=400, detail="partner_profile is only allowed for partner contacts"
-        )
-
-    data = body.model_dump(exclude={"consumer_profile", "partner_profile", "assigned_to"})
-    contact = Contact(**data, assigned_to=assigned_to, created_by=current_user.id)
+    data = body.model_dump(exclude={"consumer_profile", "partner_profile", "dealer_profile", "assigned_to"})
+    contact = Contact(**data, phone_key=phone_key(body.phone), assigned_to=assigned_to, created_by=current_user.id)
     if body.consumer_profile is not None:
-        contact.consumer_profile = ConsumerProfile(**body.consumer_profile.model_dump())
+        contact.consumer_profile = ConsumerProfile(**body.consumer_profile.model_dump(mode="json"))
     if body.partner_profile is not None:
         contact.partner_profile = PartnerProfile(**body.partner_profile.model_dump(mode="json"))
+    if body.dealer_profile is not None:
+        contact.dealer_profile = DealerProfile(**body.dealer_profile.model_dump(mode="json"))
     # Every contact starts as a New Lead; Aware is only reached by moving the lead there
     contact.lead_stages.append(LeadStage(stage="new_lead", changed_by=current_user.id))
     db.add(contact)
@@ -465,6 +602,8 @@ def create_contact(
 
     response = ContactResponse.model_validate(contact, from_attributes=True)
     response.referrals_count = 0
+    response.missing_fields = missing_fields(contact)
+    response.is_verified = not response.missing_fields
     response.current_stage = LeadStageResponse.model_validate(
         contact.lead_stages[0], from_attributes=True
     )
@@ -476,26 +615,27 @@ def update_contact(
     contact_id: int,
     body: ContactUpdate,
     db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+    platform: str = Depends(client_platform),
 ):
     """Changes a contact's details. Only the fields sent are changed.
-    The same rules as create apply: the profile must match the contact type, offline leads need a location, and the referrer must exist and cannot be the contact itself.
+    The same rules as create apply: details must match the contact type, offline leads need a location, the referrer must exist and cannot be the contact itself.
+    Address and district cannot be cleared, and a changed phone number must not belong to another contact.
     """
-    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    contact = get_visible_contact(db, current_user, contact_id)
 
-    if not contact or contact.deleted_at:
-        raise HTTPException(status_code=404, detail="Contact not found")
-
-    # Validate assigned_to if provided
     if body.assigned_to is not None:
-        from models import Employee
-
-        employee = db.query(Employee).filter(Employee.id == body.assigned_to).first()
-        if not employee:
+        if not db.query(Employee).filter(Employee.id == body.assigned_to).first():
             raise HTTPException(status_code=400, detail="Assigned employee not found")
 
     _ensure_referrer(db, body.referred_by_id, contact_id)
 
     fields = body.model_fields_set
+    if platform == "mobile":
+        for name in ("address", "district"):
+            if name in fields and not getattr(body, name):
+                raise HTTPException(status_code=400, detail=f"{name.capitalize()} required from the mobile app")
+
     if fields & {"lead_source_id", "latitude", "longitude"}:
         source_id = body.lead_source_id if "lead_source_id" in fields else contact.lead_source_id
         source = (
@@ -511,20 +651,24 @@ def update_contact(
             body.longitude if "longitude" in fields else contact.longitude,
         )
 
-    update_data = body.model_dump(exclude_unset=True, exclude={"consumer_profile", "partner_profile"})
+    final_type = body.contact_type.value if body.contact_type is not None else contact.contact_type
+    _check_type_profiles(final_type, body.consumer_profile, body.partner_profile, body.dealer_profile)
+
+    if "phone" in fields and body.phone is not None:
+        _ensure_phone_free(db, body.phone, current_user, exclude_id=contact.id)
+
+    update_data = body.model_dump(exclude_unset=True, exclude={"consumer_profile", "partner_profile", "dealer_profile"})
     # Required columns can't be cleared
-    for key in ("contact_type", "name", "phone", "district", "address", "assigned_to"):
+    for key in ("contact_type", "name", "phone", "assigned_to"):
         if key in update_data and update_data[key] is None:
             del update_data[key]
     for field, value in update_data.items():
         setattr(contact, field, value)
+    if "phone" in update_data:
+        contact.phone_key = phone_key(update_data["phone"])
 
     if body.consumer_profile is not None:
-        if contact.contact_type != "consumer":
-            raise HTTPException(
-                status_code=400, detail="consumer_profile is only allowed for consumer contacts"
-            )
-        profile_data = body.consumer_profile.model_dump(exclude_unset=True)
+        profile_data = body.consumer_profile.model_dump(exclude_unset=True, mode="json")
         if contact.consumer_profile is None:
             contact.consumer_profile = ConsumerProfile(**profile_data)
         else:
@@ -532,10 +676,6 @@ def update_contact(
                 setattr(contact.consumer_profile, field, value)
 
     if body.partner_profile is not None:
-        if contact.contact_type != "partner":
-            raise HTTPException(
-                status_code=400, detail="partner_profile is only allowed for partner contacts"
-            )
         profile_data = body.partner_profile.model_dump(exclude_unset=True, mode="json")
         if contact.partner_profile is None:
             if not profile_data.get("profession_type"):
@@ -549,6 +689,18 @@ def update_contact(
                     continue
                 setattr(contact.partner_profile, field, value)
 
+    if body.dealer_profile is not None:
+        profile_data = body.dealer_profile.model_dump(exclude_unset=True, mode="json")
+        if contact.dealer_profile is None:
+            if not profile_data.get("owner_name"):
+                raise HTTPException(status_code=400, detail="owner_name is required for a dealer")
+            contact.dealer_profile = DealerProfile(**profile_data)
+        else:
+            for field, value in profile_data.items():
+                if field == "owner_name" and value is None:
+                    continue
+                setattr(contact.dealer_profile, field, value)
+
     db.add(contact)
     db.commit()
     db.refresh(contact)
@@ -559,6 +711,8 @@ def update_contact(
         .filter(Contact.referred_by_id == contact_id)
         .scalar() or 0
     )
+    response.missing_fields = missing_fields(contact)
+    response.is_verified = not response.missing_fields
 
     if contact.lead_stages:
         latest_stage = max(contact.lead_stages, key=lambda s: s.changed_at)
@@ -570,14 +724,13 @@ def update_contact(
 
 
 @router.delete("/{contact_id}", status_code=204, summary="Delete a contact")
-def delete_contact(contact_id: int, db: Session = Depends(get_db)):
-    """Soft delete. The contact disappears from lists, but its row and history are kept. Returns 404 if it is already gone."""
-    contact = db.query(Contact).filter(Contact.id == contact_id).first()
-
-    if not contact or contact.deleted_at:
-        raise HTTPException(status_code=404, detail="Contact not found")
-
-    from datetime import datetime
+def delete_contact(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """Soft delete. The contact disappears from lists, but its row and history are kept. Returns 404 if it is gone or not visible to you."""
+    contact = get_visible_contact(db, current_user, contact_id)
 
     contact.deleted_at = datetime.utcnow()
     db.add(contact)
@@ -589,18 +742,16 @@ def upsert_consumer_profile(
     contact_id: int,
     body: ConsumerProfileUpdate,
     db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
 ):
-    """Creates or updates the consumer details of a contact (house stage, current tank, awareness mode).
+    """Creates or updates the consumer details of a contact (house stage, current tank).
     Returns 400 if the contact is not a consumer.
     """
-    contact = db.query(Contact).filter(Contact.id == contact_id).first()
-
-    if not contact or contact.deleted_at:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    contact = get_visible_contact(db, current_user, contact_id)
     if contact.contact_type != "consumer":
         raise HTTPException(status_code=400, detail="Contact is not a consumer")
 
-    data = body.model_dump(exclude_unset=True)
+    data = body.model_dump(exclude_unset=True, mode="json")
     if contact.consumer_profile is None:
         contact.consumer_profile = ConsumerProfile(**data)
     else:
@@ -613,12 +764,13 @@ def upsert_consumer_profile(
 
 
 @router.delete("/{contact_id}/consumer-profile", status_code=204, summary="Remove consumer profile")
-def delete_consumer_profile(contact_id: int, db: Session = Depends(get_db)):
+def delete_consumer_profile(
+    contact_id: int,
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
     """Removes a contact's consumer profile. The contact itself is kept."""
-    contact = db.query(Contact).filter(Contact.id == contact_id).first()
-
-    if not contact or contact.deleted_at:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    contact = get_visible_contact(db, current_user, contact_id)
     if contact.consumer_profile is None:
         raise HTTPException(status_code=404, detail="Consumer profile not found")
 
@@ -630,17 +782,15 @@ def delete_consumer_profile(contact_id: int, db: Session = Depends(get_db)):
 def get_contact_stages(
     contact_id: int,
     db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
 ):
     """Every stage a contact has been in, ordered by the time it was set. The newest entry is the current stage."""
-    contact = db.query(Contact).filter(Contact.id == contact_id).first()
-
-    if not contact or contact.deleted_at:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    get_visible_contact(db, current_user, contact_id)
 
     stages = (
         db.query(LeadStage)
         .filter(LeadStage.contact_id == contact_id)
-        .order_by(LeadStage.changed_at.desc())
+        .order_by(LeadStage.changed_at.desc(), LeadStage.id.desc())  # id breaks ties within one second
         .all()
     )
 
@@ -652,22 +802,26 @@ def add_contact_stage(
     contact_id: int,
     body: LeadStageCreate,
     db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
 ):
     """Adds a new stage to a contact's history and returns it with status 201.
     Partner-only stages are refused for consumers, and consumer-only stages for partners. A loss reason must be one configured in Settings.
     The signed-in user and the time are recorded.
     """
-    contact = db.query(Contact).filter(Contact.id == contact_id).first()
-
-    if not contact or contact.deleted_at:
-        raise HTTPException(status_code=404, detail="Contact not found")
+    contact = get_visible_contact(db, current_user, contact_id)
 
     # Validate employee exists
-    from models import Employee
+    from models import Employee as EmployeeModel
 
-    employee = db.query(Employee).filter(Employee.id == body.changed_by).first()
+    employee = db.query(EmployeeModel).filter(EmployeeModel.id == body.changed_by).first()
     if not employee:
         raise HTTPException(status_code=400, detail="Employee not found")
+
+    # Each contact type moves through its own pipeline
+    if contact.contact_type == "partner" and body.stage not in PARTNER_STAGES:
+        raise HTTPException(status_code=400, detail="This stage is not part of the partner pipeline")
+    if contact.contact_type != "partner" and body.stage in PARTNER_ONLY_STAGES:
+        raise HTTPException(status_code=400, detail="This stage is only for partners")
 
     # A lead only moves on from New Lead once its details are verified (Lost is always allowed)
     if body.stage not in (StageEnum.new_lead, StageEnum.lost):
@@ -686,6 +840,14 @@ def add_contact_stage(
                     "missing_fields": pending,
                 },
             )
+
+    if body.stage != StageEnum.referral and contact.contact_type != "partner":  # the partner pipeline is fixed in code
+        latest_slug = (
+            db.query(LeadStage.stage).filter(LeadStage.contact_id == contact_id).order_by(LeadStage.id.desc()).limit(1).scalar()
+        )
+        catalog.ensure_allowed(db, catalog.LEAD_STAGE, body.stage.value, current=latest_slug)
+    if body.loss_reason is not None:
+        catalog.ensure_allowed(db, catalog.LOSS_REASON, body.loss_reason)
 
     # Create stage with contact_id from URL
     stage_data = body.model_dump()

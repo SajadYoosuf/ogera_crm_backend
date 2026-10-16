@@ -12,7 +12,7 @@ def _contact(client, headers, sources, **overrides):
         "district": "Calicut",
         "address": "House 4, MG Road",
         "lead_source_id": sources("meta"),
-        "consumer_profile": {"awareness_mode": 0, "house_stage": "ready"},
+        "consumer_profile": {"house_stage": "ready"},
     }
     body.update(overrides)
     response = client.post("/contacts", json=body, headers=headers)
@@ -42,14 +42,14 @@ def test_protected_routes_need_a_token(client):
 
 # --- contacts: list, map, stages ------------------------------------------------------------
 
-def test_list_rows_carry_awareness_and_location(client, login, lead_source_id):
+def test_list_rows_carry_house_stage_and_location(client, login, lead_source_id):
     headers, _ = login("admin")
     _contact(client, headers, lead_source_id)
     _contact(client, headers, lead_source_id, name="Beena", phone="9876500000",
-             consumer_profile={"awareness_mode": 1, "house_stage": "ready"})
+             consumer_profile={"house_stage": "under_construction"})
     rows = {r["name"]: r for r in client.get("/contacts", headers=headers).json()["items"]}
-    assert rows["Arun Kumar"]["awareness_mode"] == 0
-    assert rows["Beena"]["awareness_mode"] == 1
+    assert rows["Arun Kumar"]["house_stage"] == "ready"
+    assert rows["Beena"]["house_stage"] == "under_construction"
     assert rows["Arun Kumar"]["latitude"] is None
 
 
@@ -149,8 +149,9 @@ def test_performance_team_view_for_managers_self_view_for_staff(client, login, l
     admin_headers, _ = login("admin")
     anu_headers, anu = login("anu")
     _contact(client, anu_headers, lead_source_id, assigned_to=anu["id"])
-    _contact(client, anu_headers, lead_source_id, name="B", phone="9222222222",
-             consumer_profile={"awareness_mode": 1, "house_stage": "ready"})
+    aware = _contact(client, anu_headers, lead_source_id, name="B", phone="9222222222")
+    # Awareness is the Aware stage now (not a profile flag)
+    client.post(f"/contacts/{aware['id']}/stages", json={"stage": "aware", "changed_by": anu["id"]}, headers=anu_headers)
     _contact(client, admin_headers, lead_source_id, name="C", phone="9333333333")
 
     window = {"start_date": TODAY.isoformat(), "end_date": TODAY.isoformat()}
@@ -215,7 +216,8 @@ def test_staff_cannot_complete_someone_elses_task(client, login, lead_source_id)
         "type": "phone_call", "scheduled_date": TODAY.isoformat(), "assigned_to": anu["id"]}).json()
     response = client.patch(f"/contacts/{contact['id']}/activities/{task['id']}",
                             json={"status": "done", "outcome": "x"}, headers=raj_headers)
-    assert response.status_code == 403
+    # Not visible to this user, so it is reported as not found (the contact's existence is not revealed)
+    assert response.status_code == 404
 
 
 # --- staff locations ------------------------------------------------------------------------
@@ -280,23 +282,6 @@ def test_sales_staff_can_read_but_only_managers_write(client, login):
 
 # --- awareness filter, source slug, partners ------------------------------------------------
 
-def test_awareness_filter_splits_leads_from_awareness_contacts(client, login, lead_source_id):
-    headers, _ = login("admin")
-    _contact(client, headers, lead_source_id, name="Lead one", phone="9100000001")
-    _contact(client, headers, lead_source_id, name="Unassessed", phone="9100000002", consumer_profile=None)
-    _contact(client, headers, lead_source_id, name="Aware one", phone="9100000003",
-             consumer_profile={"awareness_mode": 1, "house_stage": "ready"})
-
-    def names(**params):
-        body = client.get("/contacts", params={"contact_type": "consumer", **params}, headers=headers).json()
-        return sorted(r["name"] for r in body["items"]), body["total"]
-
-    assert names(awareness_mode=1) == (["Aware one"], 1)
-    assert names(awareness_mode=0) == (["Lead one", "Unassessed"], 2)  # not assessed counts as a lead
-    assert names()[1] == 3
-    assert client.get("/contacts", params={"awareness_mode": 2}, headers=headers).status_code == 422
-
-
 def test_list_rows_expose_source_slug_and_partner_work_area(client, login, lead_source_id):
     headers, _ = login("admin")
     _contact(client, headers, lead_source_id)
@@ -308,14 +293,13 @@ def test_list_rows_expose_source_slug_and_partner_work_area(client, login, lead_
     assert rows["Plumber Joy"]["profession_type"] == "plumber"
 
 
-def test_map_pins_carry_awareness_mode(client, login, lead_source_id):
+def test_map_pins_carry_house_stage(client, login, lead_source_id):
     headers, _ = login("admin")
-    _contact(client, headers, lead_source_id, name="Aware", phone="9100000010",
+    _contact(client, headers, lead_source_id, name="Site", phone="9100000010",
              lead_source_id=lead_source_id("offline"), latitude=11.0, longitude=75.0,
-             consumer_profile={"awareness_mode": 1, "house_stage": "ready"})
-    pins = client.get("/contacts/map", params={"awareness_mode": 1}, headers=headers).json()["items"]
-    assert [p["awareness_mode"] for p in pins] == [1]
-    assert client.get("/contacts/map", params={"awareness_mode": 0}, headers=headers).json()["total"] == 0
+             consumer_profile={"house_stage": "renovation"})
+    pins = client.get("/contacts/map", headers=headers).json()["items"]
+    assert [p["house_stage"] for p in pins] == ["renovation"]
 
 
 def test_unattributed_filter_finds_contacts_without_a_creator(client, login, lead_source_id):
@@ -348,6 +332,80 @@ def test_create_and_update_report_what_is_still_missing(client, login, lead_sour
 
     again = client.put(f"/contacts/{created['id']}", headers=headers, json={"district": "Kannur"}).json()
     assert again["missing_fields"] == []
+
+
+# --- name-optional edge cases -------------------------------------------------------------------
+
+def test_create_contact_without_name_succeeds(client, login, lead_source_id):
+    headers, _ = login("admin")
+    body = {
+        "contact_type": "consumer",
+        "phone": "9800000001",
+        "lead_source_id": lead_source_id("meta"),
+    }
+    r = client.post("/contacts", json=body, headers=headers)
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] is None
+
+
+def test_nameless_contact_appears_in_list_without_crash(client, login, lead_source_id):
+    headers, _ = login("admin")
+    client.post("/contacts", json={
+        "contact_type": "consumer", "phone": "9800000002",
+        "lead_source_id": lead_source_id("meta"),
+    }, headers=headers)
+    items = client.get("/contacts", headers=headers).json()["items"]
+    nameless = [r for r in items if r["phone"] == "9800000002"]
+    assert len(nameless) == 1
+    assert nameless[0]["name"] is None
+
+
+def test_nameless_contact_get_by_id_works(client, login, lead_source_id):
+    headers, _ = login("admin")
+    created = client.post("/contacts", json={
+        "contact_type": "consumer", "phone": "9800000003",
+        "lead_source_id": lead_source_id("meta"),
+    }, headers=headers).json()
+    fetched = client.get(f"/contacts/{created['id']}", headers=headers).json()
+    assert fetched["name"] is None
+    assert fetched["phone"] == "9800000003"
+
+
+def test_nameless_contact_with_all_other_fields_is_verified(client, login, lead_source_id):
+    headers, _ = login("admin")
+    created = client.post("/contacts", json={
+        "contact_type": "consumer",
+        "phone": "9800000004",
+        "district": "Calicut",
+        "address": "MG Road",
+        "lead_source_id": lead_source_id("meta"),
+        "consumer_profile": {"house_stage": "ready"},
+    }, headers=headers).json()
+    assert created["is_verified"] is True
+    assert created["missing_fields"] == []
+
+
+def test_nameless_contact_missing_fields_does_not_include_name(client, login, lead_source_id):
+    headers, _ = login("admin")
+    created = client.post("/contacts", json={
+        "contact_type": "consumer",
+        "phone": "9800000005",
+        "lead_source_id": lead_source_id("meta"),
+    }, headers=headers).json()
+    assert "name" not in created["missing_fields"]
+
+
+def test_phone_uniqueness_works_for_nameless_contact(client, login, lead_source_id):
+    headers, _ = login("admin")
+    client.post("/contacts", json={
+        "contact_type": "consumer", "phone": "9800000006",
+        "lead_source_id": lead_source_id("meta"),
+    }, headers=headers)
+    duplicate = client.post("/contacts", json={
+        "contact_type": "consumer", "phone": "9800000006",
+        "lead_source_id": lead_source_id("meta"),
+    }, headers=headers)
+    assert duplicate.status_code == 409
 
 
 def test_stage_history_is_newest_first_even_within_one_second(client, login, lead_source_id):

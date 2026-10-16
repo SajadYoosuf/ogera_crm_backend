@@ -11,10 +11,13 @@ class Contact(Base):
     contact_type: Mapped[str] = mapped_column(
         SAEnum("consumer", "partner", "dealer"), default="consumer"
     )
-    name: Mapped[str] = mapped_column(String(150))
+    name: Mapped[str | None] = mapped_column(String(150))
     phone: Mapped[str] = mapped_column(String(20))
+    # Last 10 digits of phone; the duplicate check compares this across every contact type
+    phone_key: Mapped[str] = mapped_column(String(10))
     phone_alt: Mapped[str | None] = mapped_column(String(20))
-    district: Mapped[str] = mapped_column(String(80))
+    # Required from the mobile app only (see client_platform); the web form may leave it blank
+    district: Mapped[str | None] = mapped_column(String(80))
     address: Mapped[str | None] = mapped_column(String(255))
     # Captured only for offline (field visit) leads
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
@@ -51,8 +54,12 @@ class Contact(Base):
     partner_profile: Mapped["PartnerProfile | None"] = relationship(
         "PartnerProfile", back_populates="contact", uselist=False
     )
+    dealer_profile: Mapped["DealerProfile | None"] = relationship(
+        "DealerProfile", back_populates="contact", uselist=False
+    )
 
     __table_args__ = (
+        Index("idx_contacts_phone_key", "phone_key"),
         Index("idx_contacts_type", "contact_type"),
         Index("idx_contacts_assigned", "assigned_to"),
         Index("idx_contacts_district", "district"),
