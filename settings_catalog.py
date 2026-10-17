@@ -41,6 +41,7 @@ DEFAULT_ENUMS: dict[str, list[tuple[str, str]]] = {
     ACTIVITY_TYPE: [
         ("phone_call", "Phone call"), ("field_visit", "Field visit"), ("whatsapp", "WhatsApp"),
         ("quote", "Quote"), ("demo", "Demo"), ("internal_note", "Internal note"),
+        ("other", "Other"),
     ],
     LOSS_REASON: [
         ("price", "Price too high"), ("competitor", "Went to a competitor"), ("timing", "Timing"),
