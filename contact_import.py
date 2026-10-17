@@ -7,6 +7,7 @@ CRM) or `error` (skipped, with a reason).
 
 import csv
 import datetime
+from business_time import ist_now
 import io
 import random
 import re
@@ -348,7 +349,7 @@ def run_import(db: Session, results: list[RowResult], options: Options, assignee
             # Auto-schedule initial follow-up (24 hours from now)
             contact.followup_schedules = [FollowupSchedule(
                 assigned_to=contact.assigned_to,
-                due_at=datetime.datetime.now() + datetime.timedelta(hours=24),
+                due_at=ist_now() + datetime.timedelta(hours=24),
                 status="pending",
                 channel="call",
                 notes="Initial contact regarding new lead",

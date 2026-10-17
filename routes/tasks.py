@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
+from business_time import ist_now, today_ist
 from database import get_db
 from models import Contact, Employee
 from models.followup_schedule import FollowupSchedule
@@ -96,7 +97,7 @@ class StandaloneTaskCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_due_at(self) -> "StandaloneTaskCreate":
-        if self.due_at.replace(tzinfo=None) < datetime.datetime.now() - datetime.timedelta(minutes=5):
+        if self.due_at.replace(tzinfo=None) < ist_now() - datetime.timedelta(minutes=5):
             raise ValueError("due_at cannot be in the past")
         return self
 
@@ -122,8 +123,7 @@ def list_tasks(
     if current_user.role not in TASK_MANAGER_ROLES:
         assigned_to = current_user.id
 
-    now = datetime.datetime.now()
-    today = now.date()
+    today = today_ist()
 
     scope = []
     if assigned_to is not None:

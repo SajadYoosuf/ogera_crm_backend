@@ -1,4 +1,5 @@
 import datetime
+from business_time import today_ist
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -33,7 +34,7 @@ class LeadActivityCreate(BaseModel):
                 raise ValueError("an internal note cannot be scheduled")
             if self.assigned_to is None:
                 raise ValueError("assigned_to is required for a scheduled follow-up")
-            if self.scheduled_date < datetime.date.today():
+            if self.scheduled_date < today_ist():
                 raise ValueError("scheduled_date cannot be in the past")
             if self.status == "done":
                 raise ValueError("a scheduled follow-up starts as pending")
@@ -69,7 +70,7 @@ class LeadActivityUpdate(BaseModel):
             raise ValueError("outcome is required to mark a follow-up done")
         if self.status is None and self.outcome is not None:
             raise ValueError("outcome is only for marking a follow-up done")
-        if self.scheduled_date is not None and self.scheduled_date < datetime.date.today():
+        if self.scheduled_date is not None and self.scheduled_date < today_ist():
             raise ValueError("scheduled_date cannot be in the past")
         return self
 

@@ -2,6 +2,7 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
+from business_time import ist_now
 from contact_access import get_visible_contact
 from database import get_db
 import config
@@ -43,7 +44,7 @@ def checked_channel(db: Session, channel: str | None) -> str | None:
 def _task_state(fs: FollowupSchedule, now: datetime.datetime | None = None) -> tuple[str, int]:
     if fs.status == "completed":
         return "completed", 0
-    now = now or datetime.datetime.now()
+    now = now or ist_now()
     today = now.date()
     due_date = fs.due_at.date()
     if due_date < today:
@@ -158,7 +159,7 @@ def update_followup(
                 retry = FollowupSchedule(
                     contact_id=fs.contact_id,
                     assigned_to=fs.assigned_to,
-                    due_at=datetime.datetime.now() + datetime.timedelta(days=config.RETRY_FOLLOWUP_DAYS),
+                    due_at=ist_now() + datetime.timedelta(days=config.RETRY_FOLLOWUP_DAYS),
                     status="todo",
                     priority=fs.priority,
                     channel=fs.channel,

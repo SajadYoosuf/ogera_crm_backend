@@ -9,6 +9,7 @@ import json
 
 import contact_export
 import contact_import
+from business_time import ist_day_start_utc
 from auth import get_current_user, require_roles
 from contact_access import get_visible_contact, has_full_access, visible_to
 from database import get_db
@@ -203,11 +204,10 @@ def contact_query(db: Session, f: dict, entities, user: Employee):
         q = q.filter(~verified_clause())
     # created_from / created_to are IST calendar dates from the client.
     # The DB stores UTC, so midnight IST = 18:30 UTC the previous day.
-    _IST = timedelta(hours=5, minutes=30)
     if "created_from" in f:
-        q = q.filter(Contact.created_at >= datetime.combine(f["created_from"], datetime.min.time()) - _IST)
+        q = q.filter(Contact.created_at >= ist_day_start_utc(f["created_from"]))
     if "created_to" in f:
-        q = q.filter(Contact.created_at < datetime.combine(f["created_to"] + timedelta(days=1), datetime.min.time()) - _IST)
+        q = q.filter(Contact.created_at < ist_day_start_utc(f["created_to"] + timedelta(days=1)))
     return q
 
 

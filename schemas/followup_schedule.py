@@ -1,4 +1,5 @@
 import datetime
+from business_time import ist_now
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -17,7 +18,7 @@ class FollowupScheduleCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_due_at(self) -> "FollowupScheduleCreate":
-        if self.due_at.replace(tzinfo=None) < datetime.datetime.now() - datetime.timedelta(minutes=5):
+        if self.due_at.replace(tzinfo=None) < ist_now() - datetime.timedelta(minutes=5):
             raise ValueError("due_at cannot be in the past")
         return self
 
@@ -42,7 +43,7 @@ class FollowupScheduleUpdate(BaseModel):
             raise ValueError("outcome is only for marking done")
         if self.outcome and self.status != "done":
             raise ValueError("outcome is only valid with status=done")
-        if self.due_at is not None and self.due_at.replace(tzinfo=None) < datetime.datetime.now() - datetime.timedelta(minutes=5):
+        if self.due_at is not None and self.due_at.replace(tzinfo=None) < ist_now() - datetime.timedelta(minutes=5):
             raise ValueError("due_at cannot be in the past")
         return self
 
