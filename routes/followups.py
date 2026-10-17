@@ -6,6 +6,7 @@ from contact_access import get_visible_contact
 from database import get_db
 import config
 from models import Contact, Employee, FollowupSchedule
+from models.followup_reschedule import FollowupReschedule
 from schemas.followup_schedule import (
     FollowupScheduleCreate,
     FollowupScheduleResponse,
@@ -13,6 +14,7 @@ from schemas.followup_schedule import (
 )
 from schemas.activity_log import ActivityLogCreate
 from models.activity_log import ActivityLog
+import settings_catalog as catalog
 
 router = APIRouter(
     prefix="/contacts", tags=["followups"], dependencies=[Depends(get_current_user)]
@@ -21,22 +23,34 @@ router = APIRouter(
 MONITORING_ROLES = {"admin", "manager"}
 TASK_MANAGER_ROLES = {"admin", "manager", "sales_head"}
 RETRY_OUTCOMES = {"no_answer", "not_now"}
-CHANNEL_TO_ACTIVITY_TYPE = {"call": "phone_call", "visit": "field_visit", "whatsapp": "whatsapp"}
+# Older clients send these short names. They stay as stored names so existing rows and apps keep matching.
+LEGACY_CHANNELS = {"call": "phone_call", "visit": "field_visit"}
+STORED_CHANNELS = {activity_type: name for name, activity_type in LEGACY_CHANNELS.items()}
+NOT_SCHEDULABLE = {"internal_note"}
+
+
+def checked_channel(db: Session, channel: str | None) -> str | None:
+    """The stored channel for a follow-up's activity type. The type must be active in Settings -> Activity types."""
+    if channel is None:
+        return None
+    activity_type = LEGACY_CHANNELS.get(channel, channel)
+    if activity_type in NOT_SCHEDULABLE:
+        raise HTTPException(status_code=400, detail="Internal notes cannot be scheduled")
+    catalog.ensure_allowed(db, catalog.ACTIVITY_TYPE, activity_type)
+    return STORED_CHANNELS.get(activity_type, activity_type)
 
 
 def _task_state(fs: FollowupSchedule, now: datetime.datetime | None = None) -> tuple[str, int]:
-    if fs.status != "pending":
-        return fs.status, 0
+    if fs.status == "completed":
+        return "completed", 0
     now = now or datetime.datetime.now()
-    due = fs.due_at
-    if due < now - datetime.timedelta(days=0):
-        today = now.date()
-        due_date = due.date()
-        if due_date < today:
-            return "overdue", (today - due_date).days
-        if due_date == today:
-            return "due_today", 0
-    return "pending", 0
+    today = now.date()
+    due_date = fs.due_at.date()
+    if due_date < today:
+        return "overdue", (today - due_date).days
+    if due_date == today:
+        return "due_today", 0
+    return fs.status, 0  # "todo" or "inprogress"
 
 
 def _followup_response(fs: FollowupSchedule) -> FollowupScheduleResponse:
@@ -95,10 +109,10 @@ def create_followup(
         assigned_to=body.assigned_to,
         title=(body.title or "").strip() or None,
         due_at=body.due_at,
-        status="pending",
-        channel=body.channel,
+        status="todo",
+        priority=body.priority,
+        channel=checked_channel(db, body.channel),
         notes=(body.notes or "").strip() or None,
-        whatsapp_reminder=body.whatsapp_reminder,
     )
     db.add(fs)
     db.commit()
@@ -123,38 +137,41 @@ def update_followup(
     get_visible_contact(db, current_user, contact_id)
     fs = _get_followup_or_404(db, contact_id, followup_id)
 
-    if fs.status != "pending":
-        raise HTTPException(status_code=409, detail=f"Follow-up is already {fs.status}")
+    if fs.status == "completed":
+        raise HTTPException(status_code=409, detail="Follow-up is already completed")
     if current_user.role not in TASK_MANAGER_ROLES and fs.assigned_to != current_user.id:
         raise HTTPException(status_code=403, detail="This follow-up is assigned to someone else")
 
-    if body.status == "done":
-        fs.status = "done"
-        # Write activity_log row
-        log = ActivityLog(
-            contact_id=contact_id,
-            done_by=current_user.id,
-            activity_type=CHANNEL_TO_ACTIVITY_TYPE.get(fs.channel, fs.channel),
-            outcome=body.outcome,
-            notes=(body.notes or "").strip() or None,
-            followup_id=fs.id,
-        )
-        db.add(log)
-        # Auto-retry on no_answer / not_now
-        if body.outcome in RETRY_OUTCOMES:
-            retry = FollowupSchedule(
-                contact_id=contact_id,
-                assigned_to=fs.assigned_to,
-                due_at=datetime.datetime.now() + datetime.timedelta(days=config.RETRY_FOLLOWUP_DAYS),
-                status="pending",
-                channel=fs.channel,
+    if body.status == "completed":
+        fs.status = "completed"
+        if fs.contact_id:
+            log = ActivityLog(
+                contact_id=fs.contact_id,
+                done_by=current_user.id,
+                activity_type=LEGACY_CHANNELS.get(fs.channel or "", fs.channel or "other"),
+                outcome=body.outcome,
+                notes=(body.notes or "").strip() or None,
+                followup_id=fs.id,
             )
-            db.add(retry)
+            db.add(log)
+            if body.outcome in RETRY_OUTCOMES:
+                retry = FollowupSchedule(
+                    contact_id=fs.contact_id,
+                    assigned_to=fs.assigned_to,
+                    due_at=datetime.datetime.now() + datetime.timedelta(days=config.RETRY_FOLLOWUP_DAYS),
+                    status="todo",
+                    priority=fs.priority,
+                    channel=fs.channel,
+                )
+                db.add(retry)
 
-    elif body.status == "skipped":
-        fs.status = "skipped"
+    elif body.status in ("todo", "inprogress"):
+        fs.status = body.status
 
     else:  # reschedule
+        db.add(FollowupReschedule(
+            followup_id=fs.id, contact_id=fs.contact_id, from_due_at=fs.due_at, to_due_at=body.due_at, changed_by=current_user.id,
+        ))
         fs.due_at = body.due_at
 
     db.commit()

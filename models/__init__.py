@@ -8,12 +8,11 @@ from .contact import Contact
 from .lead_stage import LeadStage
 from .lead_activity import LeadActivity
 from .followup_schedule import FollowupSchedule
+from .followup_reschedule import FollowupReschedule
 from .activity_log import ActivityLog
+from .contact_assignment import ContactAssignment
 from .consumer_profile import ConsumerProfile
 from .partner_profile import PartnerProfile
-from .sale import Sale
-from .product import Product, ProductOption
-from .staff_location import StaffLocation, StaffLocationState
 from .password_reset import PasswordResetCode
 from .dealer_profile import DealerProfile
 
@@ -30,14 +29,11 @@ __all__ = [
     "LeadStage",
     "LeadActivity",
     "FollowupSchedule",
+    "FollowupReschedule",
     "ActivityLog",
+    "ContactAssignment",
     "ConsumerProfile",
     "PartnerProfile",
-    "Sale",
-    "Product",
-    "ProductOption",
-    "StaffLocation",
-    "StaffLocationState",
     "PasswordResetCode",
     "DealerProfile",
 ]
