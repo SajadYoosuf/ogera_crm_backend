@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-17 — `6578d3a` (branch `phase1-redesign`)
+
+**Task list accepts To do and In Progress status filters**
+
+Author: sajad yoosuf
+Previous commit on this side: `691f49b` Add title, date/time override, logged-by and stage author fields (2026-10-17)
+
+### Summary
+`GET /tasks` accepts `status=todo` and `status=inprogress` in addition to the existing values, so the Tasks page can show To do and In Progress tabs. Both use the same date range and overdue rules as `open`.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Modified | `routes/tasks.py` | `status` accepts todo and inprogress; shares the open-branch filters |
+
+### Notes
+No new tests for the new status values yet. Existing task tests pass (3).
+
 ## 2026-10-15 — `5d54032` (branch `phase1-redesign`)
 
 **Swagger descriptions for every API; password length 6-15 and change emails**
