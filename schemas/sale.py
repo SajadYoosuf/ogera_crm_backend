@@ -29,7 +29,6 @@ class SaleBase(BaseModel):
     alt_phone: str | None = None
     address: str | None = None
     purchased_product: str | None = Field(default=None, max_length=150)
-    product_id: int | None = None  # catalogue product; the server fills purchased_product from it
 
     _text = field_validator("address", "purchased_product", mode="before")(_blank_to_none)
     _phones = field_validator("phone", "alt_phone", mode="before")(_clean_phone)
@@ -53,7 +52,6 @@ class SaleUpdate(BaseModel):
     alt_phone: str | None = None
     address: str | None = None
     purchased_product: str | None = Field(default=None, max_length=150)
-    product_id: int | None = None  # catalogue product; the server fills purchased_product from it
 
     _text = field_validator("address", "purchased_product", mode="before")(_blank_to_none)
     _phones = field_validator("phone", "alt_phone", mode="before")(_clean_phone)
