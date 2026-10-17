@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-10-17 — `7da9092` (branch `phase1-redesign`)
+
+**Home dashboard summary API and IST business clock**
+
+Author: sajad yoosuf
+Previous commit on this side: `0e893bd` Lead actions from the Tasks screen, reschedule history, live e2e tests (2026-10-17)
+
+### Summary
+New `GET /dashboard/summary?range=today|7d|30d|month|all` returns the home dashboard's numbers and lists in one call: KPIs with change from the previous period, leads by current stage, today's and overdue follow-ups, and recent leads. Scope matches Contacts and Tasks.
+
+Follow-up validation, Tasks "today", retry dates, activity dates, contact import and the contact date filter now use IST through `business_time.py`, not the server clock.
+
 ## 2026-10-17 — `6578d3a` (branch `phase1-redesign`)
 
 **Task list accepts To do and In Progress status filters**
