@@ -10,6 +10,7 @@ class ActivityLog(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     contact_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("contacts.id"))
     done_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("employees.id"))
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     activity_type: Mapped[str] = mapped_column(String(20))  # call / visit / whatsapp / note
     outcome: Mapped[str | None] = mapped_column(String(20))  # interested / not_now / no_answer / won / lost
     notes: Mapped[str | None] = mapped_column(Text)

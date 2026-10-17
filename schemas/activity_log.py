@@ -11,10 +11,13 @@ class Coordinates(BaseModel):
 
 
 class ActivityLogCreate(BaseModel):
+    title: str | None = None
     activity_type: str
     outcome: Outcome | None = None
     notes: str | None = None
     coordinates: Coordinates | None = None
+    logged_at: datetime.datetime | None = None  # defaults to server time if omitted
+    done_by: int | None = None  # admin/manager only: log on behalf of another employee
 
     @model_validator(mode="after")
     def validate_activity(self) -> "ActivityLogCreate":
@@ -30,6 +33,7 @@ class ActivityLogResponse(BaseModel):
     contact_id: int
     done_by: int
     done_by_name: str | None = None
+    title: str | None = None
     activity_type: str
     outcome: str | None
     notes: str | None

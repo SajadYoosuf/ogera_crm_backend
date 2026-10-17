@@ -26,7 +26,7 @@ def get_history(
     # Stage changes
     stages = (
         db.query(LeadStage)
-        .options(joinedload(LeadStage.stage_type))
+        .options(joinedload(LeadStage.stage_type), joinedload(LeadStage.changed_by_employee))
         .filter(LeadStage.contact_id == contact_id)
         .all()
     )
@@ -35,6 +35,7 @@ def get_history(
             event_type="stage",
             timestamp=s.changed_at,
             actor_id=s.changed_by,
+            actor_name=s.changed_by_employee.name if s.changed_by_employee else None,
             stage_slug=s.stage_type.slug if s.stage_type else None,
             stage_name=s.stage_type.name if s.stage_type else None,
             stage_note=s.loss_notes or s.awareness_note,

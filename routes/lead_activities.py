@@ -15,6 +15,7 @@ router = APIRouter(
 
 MONITORING_ROLES = {"admin", "manager"}
 TASK_MANAGER_ROLES = {"admin", "manager", "sales_head"}
+_CAN_LOG_AS_OTHER = {"admin", "manager"}
 
 
 def can_manage_tasks(user: Employee) -> bool:
@@ -56,9 +57,20 @@ def create_activity(
     """Log an interaction that was not pre-scheduled (no followup_id). For completing a scheduled follow-up, use PATCH /followups/{id}."""
     get_visible_contact(db, current_user, contact_id)
     catalog.ensure_allowed(db, catalog.ACTIVITY_TYPE, body.activity_type)
+
+    done_by = current_user.id
+    if body.done_by is not None and body.done_by != current_user.id:
+        if current_user.role not in _CAN_LOG_AS_OTHER:
+            raise HTTPException(status_code=403, detail="Only admin or manager can log on behalf of another employee")
+        emp = db.query(Employee).filter(Employee.id == body.done_by, Employee.deleted_at.is_(None)).first()
+        if not emp:
+            raise HTTPException(status_code=404, detail="Employee not found")
+        done_by = body.done_by
+
     log = ActivityLog(
         contact_id=contact_id,
-        done_by=current_user.id,
+        done_by=done_by,
+        title=(body.title or "").strip() or None,
         activity_type=body.activity_type,
         outcome=body.outcome,
         notes=(body.notes or "").strip() or None,
@@ -66,6 +78,8 @@ def create_activity(
         latitude=body.coordinates.lat if body.coordinates else None,
         longitude=body.coordinates.lng if body.coordinates else None,
     )
+    if body.logged_at is not None:
+        log.logged_at = body.logged_at
     db.add(log)
     db.commit()
     db.refresh(log)

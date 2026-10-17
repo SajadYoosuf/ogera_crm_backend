@@ -51,6 +51,8 @@ def _stage_response(stage: LeadStage) -> LeadStageResponse:
         r.stage_slug = st.slug
         r.stage_name = st.name
         r.contact_type = st.contact_type
+    if stage.changed_by_employee:
+        r.changed_by_name = stage.changed_by_employee.name
     return r
 
 
@@ -788,6 +790,7 @@ def get_contact_stages(
 
     stages = (
         db.query(LeadStage)
+        .options(joinedload(LeadStage.stage_type), joinedload(LeadStage.changed_by_employee))
         .filter(LeadStage.contact_id == contact_id)
         .order_by(LeadStage.changed_at.desc(), LeadStage.id.desc())
         .all()

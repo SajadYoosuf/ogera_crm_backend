@@ -8,10 +8,12 @@ Outcome = Literal["done", "not_now", "no_answer"]
 
 
 class FollowupScheduleCreate(BaseModel):
+    title: str | None = None
     channel: Channel
     due_at: datetime.datetime
     assigned_to: int
     notes: str | None = None
+    whatsapp_reminder: bool = False
 
     @model_validator(mode="after")
     def validate_due_at(self) -> "FollowupScheduleCreate":
@@ -52,9 +54,11 @@ class FollowupScheduleResponse(BaseModel):
     contact_id: int
     assigned_to: int
     assigned_to_name: str | None = None
+    title: str | None = None
     due_at: datetime.datetime
     status: str
     channel: str
+    whatsapp_reminder: bool = False
     created_at: datetime.datetime
     # enriched contact fields (populated by route)
     contact_name: str | None = None

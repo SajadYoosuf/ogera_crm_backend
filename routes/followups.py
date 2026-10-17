@@ -93,10 +93,12 @@ def create_followup(
     fs = FollowupSchedule(
         contact_id=contact_id,
         assigned_to=body.assigned_to,
+        title=(body.title or "").strip() or None,
         due_at=body.due_at,
         status="pending",
         channel=body.channel,
         notes=(body.notes or "").strip() or None,
+        whatsapp_reminder=body.whatsapp_reminder,
     )
     db.add(fs)
     db.commit()

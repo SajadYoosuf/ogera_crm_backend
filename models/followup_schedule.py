@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
@@ -12,8 +12,10 @@ class FollowupSchedule(Base):
     assigned_to: Mapped[int] = mapped_column(BigInteger, ForeignKey("employees.id"))
     due_at: Mapped[datetime.datetime] = mapped_column(DateTime)
     status: Mapped[str] = mapped_column(String(10), default="pending")  # pending / done / skipped
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     channel: Mapped[str] = mapped_column(String(15))  # call / visit / whatsapp
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    whatsapp_reminder: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     contact: Mapped["Contact"] = relationship("Contact", back_populates="followup_schedules")
