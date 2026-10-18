@@ -16,6 +16,7 @@ from .partner_profile import PartnerProfile
 from .password_reset import PasswordResetCode
 from .dealer_profile import DealerProfile
 from .sale import Sale
+from .product import Product, ProductOption
 
 __all__ = [
     "Role",
@@ -38,4 +39,6 @@ __all__ = [
     "PasswordResetCode",
     "DealerProfile",
     "Sale",
+    "Product",
+    "ProductOption",
 ]
