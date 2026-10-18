@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-18 — `5d7f4fc` (branch `phase1-redesign`)
+
+**fix: production URLs instead of localhost defaults**
+
+Author: sajad yoosuf
+Previous commit on this side: `2d48eca` docs: update changelog for the commits from 946afa4 to 9cfef38
+
+### Summary
+CORS default now also allows the Vercel web app; password-reset emails link to the Vercel login page.
+
+### Files
+| Status | File | Lines |
+| --- | --- | --- |
+| Modified | `config.py` | +2 / -2 |
+
+### Notes
+A CORS_ORIGINS variable set on Render overrides the default. Check it includes https://ogera-45upilrar-sajadyoosufs-projects.vercel.app. Render auto-deploys phase1-redesign, so this push deployed the backend.
+
 ## 2026-10-18 — `861b575` (branch `phase1-redesign`)
 
 **feat: team links, contact assignment, role actions and settings logic (backend)**
