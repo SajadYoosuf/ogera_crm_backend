@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-18 — `0f9e42f` (branch `phase1-redesign`)
+
+**fix: allow the second production web domain in the CORS default**
+
+Author: sajad yoosuf
+Previous commit on this side: `81a5625` docs: update changelog for 5d7f4fc
+
+### Summary
+The CORS default now lists localhost:3000, the Vercel deployment URL and https://ogera-crm.vercel.app.
+
+### Files
+| Status | File | Lines |
+| --- | --- | --- |
+| Modified | `config.py` | +1 / -1 |
+
+### Notes
+Live CORS_ORIGINS on Render already allows the Vercel origins (checked by preflight). Keep Render and this default in step when a web domain changes.
+
 ## 2026-10-18 — `5d7f4fc` (branch `phase1-redesign`)
 
 **fix: production URLs instead of localhost defaults**
