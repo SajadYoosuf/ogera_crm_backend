@@ -1,5 +1,100 @@
 # Changelog
 
+## 2026-10-18 — `861b575` (branch `phase1-redesign`)
+
+**feat: team links, contact assignment, role actions and settings logic (backend)**
+
+Author: sajad yoosuf
+Previous commit on this side: `eb13d6d` feat: forgot-password flow on the web with 6-digit email code
+
+### Summary
+Adds team links (team_lead_id), contact assignment, the role action matrix and the settings enum/permission endpoints.
+
+### Files
+| Status | File | Lines |
+| --- | --- | --- |
+| Modified | `contact_access.py` | +72 / -10 |
+| Modified | `contact_import.py` | +1 / -1 |
+| Modified | `database.py` | +2 / -1 |
+| Added | `docs/changes/2026-10-09-settings.md` | +27 / -0 |
+| Added | `docs/modules/contacts.md` | +138 / -0 |
+| Modified | `middleware.py` | +24 / -12 |
+| Modified | `models/activity_log.py` | +1 / -4 |
+| Added | `models/contact_assignment.py` | +23 / -0 |
+| Modified | `models/employee.py` | +5 / -1 |
+| Modified | `models/followup_schedule.py` | +6 / -6 |
+| Added | `role_access.py` | +51 / -0 |
+| Modified | `routes/contacts.py` | +15 / -42 |
+| Modified | `routes/dashboard.py` | +4 / -3 |
+| Modified | `routes/employees.py` | +18 / -0 |
+| Modified | `routes/followups.py` | +7 / -4 |
+| Modified | `routes/lead_activities.py` | +2 / -12 |
+| Modified | `routes/tasks.py` | +11 / -6 |
+| Modified | `schemas/__init__.py` | +2 / -2 |
+| Modified | `schemas/contact.py` | +0 / -18 |
+| Modified | `schemas/followup_schedule.py` | +17 / -18 |
+| Modified | `schemas/lead_activity.py` | +1 / -1 |
+| Added | `schemas/settings.py` | +83 / -0 |
+| Modified | `scripts/migrate_activity_followup_fields.sql` | +21 / -5 |
+| Added | `scripts/migrate_admin_email.sql` | +17 / -0 |
+| Added | `scripts/migrate_employee_team_lead.sql` | +9 / -0 |
+| Added | `scripts/migrate_settings.sql` | +7 / -0 |
+| Added | `scripts/remove_new_lead_stage.py` | +64 / -0 |
+| Modified | `tests/test_contacts_module.py` | +3 / -3 |
+| Modified | `tests/test_mobile_api.py` | +42 / -136 |
+| Modified | `tests/test_partner_stages.py` | +1 / -1 |
+| Added | `tests/test_team_access.py` | +214 / -0 |
+
+### Notes
+Migrations to run in order: migrate_activity_followup_fields.sql, migrate_employee_team_lead.sql, migrate_settings.sql, migrate_admin_email.sql. Visibility rules in rule.md sections 7, 7a and 7b. Tests: tests/test_team_access.py. Full backend suite: 208 passed on the working tree before commit.
+
+## 2026-10-18 — `0cac251` (branch `phase1-redesign`)
+
+**feat: products catalogue reinstated with a modal editor**
+
+Author: sajad yoosuf
+Previous commit on this side: `946afa4` refactor: remove retired modules and superseded files (rule 9)
+
+### Summary
+Restores the products list API: admin and manager add, edit and archive; everyone signed in can read.
+
+### Files
+| Status | File | Lines |
+| --- | --- | --- |
+| Added | `docs/changes/2026-10-17-products-reinstated.md` | +21 / -0 |
+| Modified | `routes/products.py` | +5 / -2 |
+| Modified | `schemas/product.py` | +9 / -1 |
+| Modified | `tests/test_products.py` | +36 / -0 |
+
+### Notes
+Archive sets `is_active` off and can be undone. Sales keep product names as free text, not links to the catalogue. Notes: docs/changes/2026-10-17-products-reinstated.md.
+
+## 2026-10-18 — `946afa4` (branch `phase1-redesign`)
+
+**refactor: remove retired modules and superseded files (rule 9)**
+
+Author: sajad yoosuf
+Previous commit on this side: `37788c1` feat: add the settings router and permission matrix
+
+### Summary
+Removes the performance dashboard, staff location tracking and the sales-to-product import script (rule.md section 9).
+
+### Files
+| Status | File | Lines |
+| --- | --- | --- |
+| Modified | `main.py` | +1 / -3 |
+| Modified | `models/__init__.py` | +3 / -0 |
+| Deleted | `models/staff_location.py` | +0 / -39 |
+| Modified | `routes/__init__.py` | +1 / -3 |
+| Deleted | `routes/performance.py` | +0 / -274 |
+| Deleted | `routes/staff_locations.py` | +0 / -243 |
+| Deleted | `scripts/import_sales.py` | +0 / -40 |
+| Deleted | `tests/test_performance.py` | +0 / -150 |
+| Deleted | `tests/test_sales_products.py` | +0 / -79 |
+
+### Notes
+Staff location and performance routes/models/tests removed; main.py and routes/__init__.py updated to match. Migration scripts for removed tables are kept for later cleanup (rule 9).
+
 ## 2026-10-17 — `7da9092` (branch `phase1-redesign`)
 
 **Home dashboard summary API and IST business clock**
