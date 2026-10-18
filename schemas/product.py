@@ -23,6 +23,11 @@ def _blank_to_none(v):
     return (v.strip() or None) if isinstance(v, str) else v
 
 
+def _none_to_list(v):
+    # Rows saved before features existed hold NULL; they read as an empty list.
+    return [] if v is None else v
+
+
 class ProductOptionCreate(BaseModel):
     kind: OptionKind
     name: Annotated[str, Field(min_length=1, max_length=80)]
@@ -81,6 +86,7 @@ class ProductFields(BaseModel):
     main_image_url: Annotated[str, Field(max_length=500)] | None = None
 
     _blank = field_validator("sku", "model_number", "main_image_url", mode="before")(_blank_to_none)
+    _features = field_validator("features", mode="before")(_none_to_list)
 
     @model_validator(mode="after")
     def sale_not_above_mrp(self):
@@ -92,7 +98,6 @@ class ProductFields(BaseModel):
 class ProductCreate(ProductFields):
     name: Annotated[str, Field(min_length=1, max_length=200)]
     slug: Annotated[str, Field(min_length=1, max_length=220)]
-    main_image_url: Annotated[str, Field(min_length=1, max_length=500)]
 
     _slug = field_validator("slug")(_check_slug)
 
@@ -132,6 +137,7 @@ class ProductUpdate(BaseModel):
 
     _slug = field_validator("slug")(_check_slug)
     _blank = field_validator("sku", "model_number", "main_image_url", mode="before")(_blank_to_none)
+    _features = field_validator("features", mode="before")(_none_to_list)
 
 
 class ProductResponse(ProductFields):
@@ -156,6 +162,7 @@ class ProductListItem(BaseModel):
     id: int
     name: str
     slug: str
+    tagline: str | None = None
     brand: ProductOptionRef | None = None
     category: ProductOptionRef | None = None
     model_number: str | None = None
@@ -164,6 +171,7 @@ class ProductListItem(BaseModel):
     orientation: str | None = None
     mrp: Decimal | None = None
     sale_price: Decimal | None = None
+    special_price_active: bool = False
     is_popular: bool = False
     is_active: bool = True
     main_image_url: str | None = None

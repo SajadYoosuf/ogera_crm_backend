@@ -121,6 +121,7 @@ def list_products(
     q: str | None = None,
     brand_id: int | None = None,
     category_id: int | None = None,
+    material_id: int | None = None,
     is_active: bool | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
@@ -136,6 +137,8 @@ def list_products(
         query = query.filter(Product.brand_id == brand_id)
     if category_id is not None:
         query = query.filter(Product.category_id == category_id)
+    if material_id is not None:
+        query = query.filter(Product.material_id == material_id)
     if is_active is not None:
         query = query.filter(Product.is_active == int(is_active))
     total = query.count()
@@ -187,8 +190,8 @@ def update_product(
     product = _get_product(db, product_id)
     changes = body.model_dump(exclude_unset=True)
 
-    # name, slug and the main image are required, so they can't be cleared
-    for column in ("name", "slug", "main_image_url"):
+    # name and slug are required, so they can't be cleared
+    for column in ("name", "slug"):
         if column in changes and not changes[column]:
             raise HTTPException(status_code=422, detail=f"{column.replace('_', ' ').capitalize()} cannot be empty")
 

@@ -95,3 +95,39 @@ def test_non_editor_can_read_but_not_write(client):
     client.user.role = "sales_executive"
     assert client.get("/products").status_code == 200
     assert client.post("/products", json={**PRODUCT, "slug": "x"}).status_code == 403
+
+
+
+def test_archive_and_restore_through_is_active(client):
+    product_id = client.post("/products", json=PRODUCT).json()["id"]
+    assert client.patch(f"/products/{product_id}", json={"is_active": False}).json()["is_active"] is False
+    assert client.get("/products", params={"is_active": True}).json()["total"] == 0
+    assert client.get("/products", params={"is_active": False}).json()["total"] == 1
+    assert client.patch(f"/products/{product_id}", json={"is_active": True}).json()["is_active"] is True
+
+
+def test_null_features_in_old_rows_read_as_empty_list():
+    """Rows saved before features existed hold NULL. Reading one must not 500."""
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as seed:
+        seed.add(models.Product(name="Old row", slug="old-row", features=None, is_active=1, currency="INR", special_price_active=0, tax_included=1))
+        seed.commit()
+        product_id = seed.query(models.Product.id).scalar()
+
+    app = FastAPI()
+    app.include_router(router)
+
+    def db():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = db
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(is_active=True, role="admin")
+    response = TestClient(app).get(f"/products/{product_id}")
+    assert response.status_code == 200
+    assert response.json()["features"] == []
