@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-10-18 — `3ccaebf` (branch `phase1-redesign`)
+
+**feat(backend): settings API for roles, partner types and my account**
+
+Previous commit on this side: `0f9e42f` fix: allow the second production web domain in the CORS default
+
+### Summary
+- Role permission matrix stored in `role_permissions` (`models/role_permission.py`), read and switched through `/settings/roles`. Admin keeps every permission; admin and manager can change staff and custom roles; only admin changes what managers may do. `role_access` checks each action against it.
+- Partner types move from a fixed enum to Settings > Lists & Options (`settings_catalog.PROFESSIONAL_TYPE`). Contacts and imports accept only active types and keep a record's current type after it is hidden.
+- My account: `PATCH /auth/me` and `POST /auth/change-password`, with the password rules and the emailed change notice.
+
+### Files
+| Status | File | Lines |
+| --- | --- | --- |
+| New | `models/role_permission.py`, `tests/test_settings.py`, `tests/test_partner_types.py`, `tests/test_auth.py` | see commit |
+| Modified | `role_access.py`, `routes/auth.py`, `routes/contacts.py`, `routes/followups.py`, `routes/settings.py`, `routes/tasks.py`, `schemas/enums.py`, `schemas/partner_profile.py`, `schemas/settings.py`, `settings_catalog.py`, `contact_import.py`, `models/__init__.py`, `schemas/__init__.py`, `tests/seed_data.py`, `tests/test_employee_duplicates.py` | see commit |
+
+### Test results
+`python -m pytest -q` in `ogera_crm_backend`: 247 passed.
+
+---
+
 ## 2026-10-18 — `0f9e42f` (branch `phase1-redesign`)
 
 **fix: allow the second production web domain in the CORS default**
