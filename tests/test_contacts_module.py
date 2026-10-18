@@ -231,13 +231,13 @@ def test_tele_caller_support_and_team_lead_follow_the_same_rule(client, login, l
         assert client.get("/contacts", headers=headers).json()["total"] == 0, role
 
 
-def test_type_counts_and_map_respect_visibility(client, login, lead_source_id, staff):
+def test_type_counts_respect_visibility(client, login, lead_source_id, staff):
     anu_headers, _ = staff["anu"]
-    _contact(client, staff["admin"], lead_source_id("meta"), phone="9100000045")  # not Anu's
+    _, raj_id = staff["raj"]
+    _contact(client, staff["admin"], lead_source_id("meta"), phone="9100000045", assigned_to=raj_id)  # not Anu's
     _contact(client, anu_headers, lead_source_id("meta"), phone="9100000046")  # Anu's
     assert client.get("/contacts/type-counts", headers=anu_headers).json()["consumer"] == 1
     assert client.get("/contacts/type-counts", headers=staff["admin"]).json()["consumer"] == 2
-    assert client.get("/contacts/map", headers=anu_headers).json()["total"] == 0
 
 
 def test_activities_on_a_hidden_contact_are_not_found(client, login, lead_source_id, staff):

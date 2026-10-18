@@ -1,7 +1,7 @@
 import datetime
-from business_time import today_ist
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from business_time import today_ist
 
 ActivityType = str  # an active option of Settings -> Activity types, checked by the route
 TaskState = Literal["pending", "due_today", "overdue", "done"]

@@ -19,7 +19,7 @@ from contact_access import visible_to
 from database import get_db
 from models import Contact, Employee, FollowupSchedule, LeadStage, StageType
 from routes.contacts import contact_query
-from routes.followups import TASK_MANAGER_ROLES
+from contact_access import visible_assignee_ids
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"], dependencies=[Depends(get_current_user)])
 
@@ -188,8 +188,9 @@ def _open_followups(db: Session, user: Employee, today: datetime.date):
             func.date(FollowupSchedule.due_at) <= today,
         )
     )
-    if user.role not in TASK_MANAGER_ROLES:
-        q = q.filter(FollowupSchedule.assigned_to == user.id)
+    visible = visible_assignee_ids(db, user)
+    if visible is not None:
+        q = q.filter(FollowupSchedule.assigned_to.in_(visible))
     return q
 
 

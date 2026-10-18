@@ -110,7 +110,7 @@ def test_tasks_status_due_today_and_overdue_ignore_the_date_range(client, login,
         ids[key] = response.json()["id"]
     # the API refuses a date in the past, so an old task is written straight to the database
     with SessionLocal() as db:
-        db.add(FollowupSchedule(contact_id=contact["id"], channel="call", notes="old", status="pending",
+        db.add(FollowupSchedule(contact_id=contact["id"], channel="call", notes="old", status="todo",
                                 assigned_to=anu["id"],
                                 due_at=datetime.datetime.combine(today - datetime.timedelta(days=3), datetime.time(0, 0))))
         db.commit()

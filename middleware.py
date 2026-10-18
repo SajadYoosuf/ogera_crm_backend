@@ -1,6 +1,8 @@
 import json
 import time
 import traceback
+from datetime import datetime
+from http import HTTPStatus
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -45,6 +47,17 @@ def _format_body(raw: bytes, content_type: str) -> str:
     return text
 
 
+def _timestamp() -> str:
+    return f"{DIM}{datetime.now():%H:%M:%S}{RESET}"
+
+
+def _status_phrase(status_code: int) -> str:
+    try:
+        return HTTPStatus(status_code).phrase
+    except ValueError:
+        return ""
+
+
 def _status_color(status_code: int) -> str:
     if status_code < 300:
         return GREEN
@@ -63,6 +76,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         request_body = b""
         if log_bodies:
             request_body = await request.body()  # Starlette caches it for the route handler
+
+        client = request.client.host if request.client else "-"
+        query = f"?{request.url.query}" if request.url.query else ""
+        target = f"{request.method} {request.url.path}{query}"
+        print(f"{_timestamp()}  {BOLD}-> {target}{RESET}  {DIM}from {client}{RESET}")
+        if log_bodies and request_body:
+            print(f"{DIM}           body    {_format_body(request_body, request.headers.get('content-type', ''))}{RESET}")
 
         try:
             response = await call_next(request)
@@ -86,20 +106,12 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         duration_ms = (time.perf_counter() - start_time) * 1000
         color = _status_color(response.status_code)
-        client = request.client.host if request.client else "-"
-
         print(
-            f"{BOLD}{request.method:<7}{RESET} "
-            f"{request.url.path:<40} "
-            f"{color}{response.status_code}{RESET} "
-            f"{duration_ms:>7.2f}ms "
-            f"from {client}"
+            f"{_timestamp()}  {color}{BOLD}<- {response.status_code} {_status_phrase(response.status_code)}{RESET}  "
+            f"{DIM}{duration_ms:.1f} ms  {request.method} {request.url.path}{RESET}"
         )
-        if log_bodies:
-            query = f"?{request.url.query}" if request.url.query else ""
-            print(f"{DIM}  request  {request.method} {request.url.path}{query} "
-                  f"{_format_body(request_body, request.headers.get('content-type', ''))}{RESET}")
-            print(f"{DIM}  response {response.status_code} "
+        if log_bodies and (response_body or response.body):
+            print(f"{DIM}           result  "
                   f"{_format_body(response_body or response.body, response.headers.get('content-type', ''))}{RESET}")
 
         return response

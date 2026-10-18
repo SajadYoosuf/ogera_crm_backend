@@ -181,24 +181,6 @@ class ContactListItem(BaseModel):
     missing_fields: list[str] = []
 
 
-class ContactMapPin(BaseModel):
-    """Trimmed row for the mobile map: only contacts that have a location."""
-    id: int
-    contact_type: ContactType
-    name: str | None = None
-    phone: str
-    address: str | None = None
-    latitude: float
-    longitude: float
-    stage_slug: str | None = None
-    house_stage: str | None = None
-
-
-class ContactMapResponse(BaseModel):
-    items: list[ContactMapPin]
-    total: int
-
-
 class StageTypeItem(BaseModel):
     """One pipeline stage, in board order."""
     id: int        # stage_types.id — use this as stage_id when moving a contact

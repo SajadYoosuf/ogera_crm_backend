@@ -12,17 +12,16 @@ import contact_import
 from business_time import ist_day_start_utc
 from auth import get_current_user, require_roles
 from contact_access import get_visible_contact, has_full_access, visible_to
+from role_access import ensure_can_create_type, ensure_can_move_to, require_action
 from database import get_db
 from phone_utils import phone_key
 from request_context import client_platform
 from verification import missing_fields, verified_clause
-from models import Contact, ConsumerProfile, DealerProfile, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, StageType
+from models import Contact, ConsumerProfile, ContactAssignment, DealerProfile, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, StageType
 from schemas import (
     ContactCreate,
     ContactListItem,
     ContactListResponse,
-    ContactMapPin,
-    ContactMapResponse,
     ContactResponse,
     ContactType,
     ContactUpdate,
@@ -298,45 +297,6 @@ def list_contacts(
     return ContactListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
-@router.get("/map", response_model=ContactMapResponse, summary="Contacts for the map")
-def contact_map_pins(
-    limit: int = Query(2000, ge=1, le=5000),
-    f: dict = Depends(contact_filters),
-    db: Session = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
-):
-    """Contacts that have a saved location, trimmed to what the mobile map needs. Takes the same filters as the list and the same visibility."""
-    rows = (
-        contact_query(db, f, lambda cur: (Contact, cur), current_user)
-        .filter(Contact.latitude.is_not(None), Contact.longitude.is_not(None))
-        .order_by(Contact.created_at.desc(), Contact.id.desc())
-        .limit(limit)
-        .all()
-    )
-    # Batch-load stage slugs for map pin stage indicators
-    map_stage_ids = {s.stage_id for _, s in rows if s is not None}
-    map_stage_slugs: dict[int, str] = {}
-    if map_stage_ids:
-        for st in db.query(StageType).filter(StageType.id.in_(map_stage_ids)).all():
-            map_stage_slugs[st.id] = st.slug
-
-    items = [
-        ContactMapPin(
-            id=c.id,
-            contact_type=c.contact_type,
-            name=c.name,
-            phone=c.phone,
-            address=c.address,
-            latitude=float(c.latitude),
-            longitude=float(c.longitude),
-            stage_slug=map_stage_slugs.get(stage.stage_id) if stage else None,
-            house_stage=c.consumer_profile.house_stage if c.consumer_profile else None,
-        )
-        for c, stage in rows
-    ]
-    return ContactMapResponse(items=items, total=len(items))
-
-
 @router.get("/stage-types", response_model=list[StageTypeItem], summary="List pipeline stages")
 def list_stage_types(
     contact_type: ContactType | None = Query(None, description="Filter stages to one pipeline (consumer, partner or dealer)"),
@@ -387,6 +347,7 @@ def export_contacts(
     """Downloads the contacts matching the list filters as CSV, Excel or PDF (`format`).
     It uses the same filters and the same visibility as the list, so the export matches what is on screen.
     """
+    require_action(current_user, "export")
     total = contact_query(db, f, lambda cur: (func.count(Contact.id),), current_user).scalar() or 0
     limit = contact_export.MAX_ROWS[format]
     if total > limit:
@@ -606,6 +567,8 @@ def create_contact(
     Offline leads need latitude and longitude. Returns 400 for an unknown source, owner, referrer or a details block on the wrong type.
     Returns 409 when the phone number already belongs to another contact.
     """
+    require_action(current_user, "create_contact")
+    ensure_can_create_type(current_user, body.contact_type.value if body.contact_type else "consumer")
     if platform == "mobile":
         missing = [name for name in ("address", "district") if not getattr(body, name)]
         if missing:
@@ -641,6 +604,8 @@ def create_contact(
     new_lead_type = _get_new_lead_stage(db, body.contact_type.value if body.contact_type else "consumer")
     contact.lead_stages.append(LeadStage(stage_id=new_lead_type.id, changed_by=current_user.id))
     db.add(contact)
+    db.flush()
+    db.add(ContactAssignment(contact_id=contact.id, assigned_to=assigned_to, changed_by=current_user.id))
     db.commit()
     db.refresh(contact)
 
@@ -704,8 +669,14 @@ def update_contact(
     for key in ("contact_type", "name", "phone", "assigned_to"):
         if key in update_data and update_data[key] is None:
             del update_data[key]
+    previous_owner = contact.assigned_to
     for field, value in update_data.items():
         setattr(contact, field, value)
+    if "assigned_to" in update_data and update_data["assigned_to"] != previous_owner:
+        db.add(ContactAssignment(
+            contact_id=contact.id, assigned_from=previous_owner,
+            assigned_to=update_data["assigned_to"], changed_by=current_user.id,
+        ))
     if "phone" in update_data:
         contact.phone_key = phone_key(update_data["phone"])
 
@@ -823,6 +794,8 @@ def add_contact_stage(
     ).first()
     if not stage_type:
         raise HTTPException(status_code=400, detail="Stage not found")
+
+    ensure_can_move_to(current_user, stage_type.slug)
 
     # The stage must belong to this contact's pipeline (lost is allowed from any pipeline)
     if stage_type.slug != "lost" and stage_type.contact_type != contact.contact_type:

@@ -6,27 +6,19 @@ from contact_access import get_visible_contact
 from database import get_db
 from models import Employee
 from models.activity_log import ActivityLog
-from schemas.activity_log import ActivityLogCreate, ActivityLogResponse, Coordinates
+from schemas.activity_log import ActivityLogCreate, ActivityLogResponse
 import settings_catalog as catalog
 
 router = APIRouter(
     prefix="/contacts", tags=["activity-log"], dependencies=[Depends(get_current_user)]
 )
 
-MONITORING_ROLES = {"admin", "manager"}
-TASK_MANAGER_ROLES = {"admin", "manager", "sales_head"}
 _CAN_LOG_AS_OTHER = {"admin", "manager"}
-
-
-def can_manage_tasks(user: Employee) -> bool:
-    return user.role in TASK_MANAGER_ROLES
 
 
 def _activity_response(log: ActivityLog) -> ActivityLogResponse:
     r = ActivityLogResponse.model_validate(log, from_attributes=True)
     r.done_by_name = log.doer.name if log.doer else None
-    if log.latitude is not None and log.longitude is not None:
-        r.coordinates = Coordinates(lat=float(log.latitude), lng=float(log.longitude))
     return r
 
 
@@ -54,7 +46,7 @@ def create_activity(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Log an interaction that was not pre-scheduled (no followup_id). For completing a scheduled follow-up, use PATCH /followups/{id}."""
+    """Log an interaction that was not pre-scheduled (no followup_id). For completing a scheduled follow-up, use PATCH /tasks/{id}."""
     get_visible_contact(db, current_user, contact_id)
     catalog.ensure_allowed(db, catalog.ACTIVITY_TYPE, body.activity_type)
 
@@ -75,8 +67,6 @@ def create_activity(
         outcome=body.outcome,
         notes=(body.notes or "").strip() or None,
         followup_id=None,
-        latitude=body.coordinates.lat if body.coordinates else None,
-        longitude=body.coordinates.lng if body.coordinates else None,
     )
     if body.logged_at is not None:
         log.logged_at = body.logged_at

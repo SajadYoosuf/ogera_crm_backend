@@ -2,8 +2,8 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
-from business_time import ist_now
-from contact_access import get_visible_contact
+from contact_access import ensure_can_assign, get_visible_contact, visible_assignee_ids
+from role_access import ensure_can_schedule_for
 from database import get_db
 import config
 from models import Contact, Employee, FollowupSchedule
@@ -16,13 +16,13 @@ from schemas.followup_schedule import (
 from schemas.activity_log import ActivityLogCreate
 from models.activity_log import ActivityLog
 import settings_catalog as catalog
+from business_time import ist_now
 
 router = APIRouter(
     prefix="/contacts", tags=["followups"], dependencies=[Depends(get_current_user)]
 )
 
 MONITORING_ROLES = {"admin", "manager"}
-TASK_MANAGER_ROLES = {"admin", "manager", "sales_head"}
 RETRY_OUTCOMES = {"no_answer", "not_now"}
 # Older clients send these short names. They stay as stored names so existing rows and apps keep matching.
 LEGACY_CHANNELS = {"call": "phone_call", "visit": "field_visit"}
@@ -105,6 +105,8 @@ def create_followup(
         raise HTTPException(status_code=400, detail="Assigned employee not found or inactive")
     if assignee.role in MONITORING_ROLES:
         raise HTTPException(status_code=400, detail="Follow-ups cannot be assigned to an admin or manager")
+    ensure_can_schedule_for(current_user, body.assigned_to)
+    ensure_can_assign(db, current_user, body.assigned_to)
     fs = FollowupSchedule(
         contact_id=contact_id,
         assigned_to=body.assigned_to,
@@ -140,7 +142,8 @@ def update_followup(
 
     if fs.status == "completed":
         raise HTTPException(status_code=409, detail="Follow-up is already completed")
-    if current_user.role not in TASK_MANAGER_ROLES and fs.assigned_to != current_user.id:
+    visible = visible_assignee_ids(db, current_user)
+    if visible is not None and fs.assigned_to not in visible:
         raise HTTPException(status_code=403, detail="This follow-up is assigned to someone else")
 
     if body.status == "completed":

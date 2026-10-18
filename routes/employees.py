@@ -61,6 +61,17 @@ def _ensure_role_assignable(db: Session, slug: str) -> None:
         raise HTTPException(status_code=422, detail=f"Role '{slug}' is inactive")
 
 
+def _ensure_valid_team_lead(db: Session, team_lead_id: int | None, employee_id: int | None = None) -> None:
+    """A team lead link must point to an active team_lead employee, never to the employee themselves."""
+    if team_lead_id is None:
+        return
+    if employee_id is not None and team_lead_id == employee_id:
+        raise HTTPException(status_code=400, detail="An employee cannot be their own team lead")
+    lead = db.query(Employee).filter(Employee.id == team_lead_id, Employee.deleted_at.is_(None)).first()
+    if lead is None or lead.role != RoleEnum.team_lead.value or not lead.is_active:
+        raise HTTPException(status_code=422, detail="Team lead must be an active team_lead employee")
+
+
 def _ensure_can_modify(actor: Employee, target: Employee, verb: str) -> None:
     """Only admins may modify/delete admins and managers (others' accounts, not their own)."""
     if (
@@ -177,6 +188,7 @@ def create_employee(
     """
     _ensure_can_assign_role(actor, body.role)
     _ensure_role_assignable(db, body.role)
+    _ensure_valid_team_lead(db, body.team_lead_id)
     if _email_taken(db, body.email):
         raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
     if body.phone and _phone_taken(db, body.phone):
@@ -228,6 +240,11 @@ def update_employee(
         raise HTTPException(
             status_code=400, detail="You cannot deactivate or change the role of your own account"
         )
+    if "team_lead_id" in data:
+        _ensure_valid_team_lead(db, data["team_lead_id"], employee_id=employee.id)
+    # A team lead who stops being a team lead loses their team; the members are unlinked.
+    if "role" in data and data["role"] != RoleEnum.team_lead.value and employee.role == RoleEnum.team_lead.value:
+        db.query(Employee).filter(Employee.team_lead_id == employee.id).update({Employee.team_lead_id: None})
 
     if "email" in data and _email_taken(db, data["email"], exclude_id=employee.id):
         raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
@@ -268,4 +285,5 @@ def delete_employee(
 
     employee.deleted_at = datetime.utcnow()
     employee.is_active = 0
+    db.query(Employee).filter(Employee.team_lead_id == employee.id).update({Employee.team_lead_id: None})
     db.commit()

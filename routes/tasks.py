@@ -5,12 +5,14 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
-from business_time import ist_now, today_ist
 from database import get_db
 from models import Contact, Employee
 from models.followup_schedule import FollowupSchedule
-from routes.followups import _followup_response, _task_state, checked_channel, LEGACY_CHANNELS, TASK_MANAGER_ROLES, MONITORING_ROLES
+from contact_access import ensure_can_assign, visible_assignee_ids
+from role_access import ensure_can_schedule_for
+from routes.followups import _followup_response, _task_state, checked_channel, LEGACY_CHANNELS, MONITORING_ROLES
 from schemas.followup_schedule import FollowupScheduleResponse, FollowupScheduleUpdate, Priority
+from business_time import ist_now, today_ist
 
 router = APIRouter(prefix="/tasks", tags=["tasks"], dependencies=[Depends(get_current_user)])
 
@@ -120,12 +122,12 @@ def list_tasks(
     if date_from and date_to and (date_to < date_from or (date_to - date_from).days > MAX_RANGE_DAYS):
         raise HTTPException(status_code=400, detail=f"date_to must be on or after date_from, within {MAX_RANGE_DAYS} days")
 
-    if current_user.role not in TASK_MANAGER_ROLES:
-        assigned_to = current_user.id
-
     today = today_ist()
 
     scope = []
+    visible = visible_assignee_ids(db, current_user)
+    if visible is not None:
+        scope.append(FollowupSchedule.assigned_to.in_(visible))
     if assigned_to is not None:
         scope.append(FollowupSchedule.assigned_to == assigned_to)
     if channel:
@@ -211,6 +213,8 @@ def create_task(
         raise HTTPException(status_code=400, detail="Assigned employee not found or inactive")
     if assignee.role in MONITORING_ROLES:
         raise HTTPException(status_code=400, detail="Tasks cannot be assigned to an admin or manager")
+    ensure_can_schedule_for(current_user, body.assigned_to)
+    ensure_can_assign(db, current_user, body.assigned_to)
 
     fs = FollowupSchedule(
         contact_id=None,
@@ -240,7 +244,8 @@ def update_task(
     fs = db.query(FollowupSchedule).filter(FollowupSchedule.id == task_id).first()
     if not fs:
         raise HTTPException(status_code=404, detail="Task not found")
-    if current_user.role not in TASK_MANAGER_ROLES and fs.assigned_to != current_user.id:
+    visible = visible_assignee_ids(db, current_user)
+    if visible is not None and fs.assigned_to not in visible:
         raise HTTPException(status_code=403, detail="This task is assigned to someone else")
     if fs.status == "completed":
         raise HTTPException(status_code=409, detail="Task is already completed")

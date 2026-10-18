@@ -7,7 +7,6 @@ CRM) or `error` (skipped, with a reason).
 
 import csv
 import datetime
-from business_time import ist_now
 import io
 import random
 import re
@@ -19,6 +18,7 @@ from models import ConsumerProfile, Contact, DealerProfile, FollowupSchedule, Le
 from schemas.enums import HouseStage, ProfessionType, profession_key
 from phone_utils import phone_key
 import settings_catalog as catalog
+from business_time import ist_now
 
 MAX_ROWS = 5000
 MAX_BYTES = 5 * 1024 * 1024

@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import String, SmallInteger, DateTime, ForeignKey, func
+from sqlalchemy import String, SmallInteger, BigInteger, DateTime, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
@@ -16,6 +16,10 @@ class Employee(Base):
         String(40), ForeignKey("roles.slug", onupdate="CASCADE"), default="sales_executive"
     )
     phone: Mapped[str | None] = mapped_column(String(20))
+    # The team lead this employee reports to. Set by admin/manager. NULL = no team.
+    team_lead_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("employees.id", ondelete="SET NULL"), index=True
+    )
     is_active: Mapped[int] = mapped_column(SmallInteger, default=1)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(
