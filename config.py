@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Browser origins allowed to call the API (comma separated). Add the deployed web app's address here.
-CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
+CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,https://ogera-45upilrar-sajadyoosufs-projects.vercel.app").split(",") if origin.strip()]
 
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -34,7 +34,7 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Ogera CRM")
 # "starttls" (port 587), "ssl" (port 465) or "none"
 SMTP_SECURITY = os.getenv("SMTP_SECURITY", "starttls").lower()
-APP_LOGIN_URL = os.getenv("APP_LOGIN_URL", "http://localhost:3000")
+APP_LOGIN_URL = os.getenv("APP_LOGIN_URL", "https://ogera-45upilrar-sajadyoosufs-projects.vercel.app")
 
 # Lead lifecycle: days before a retry follow-up is auto-scheduled on no_answer / not_now
 RETRY_FOLLOWUP_DAYS = int(os.getenv("RETRY_FOLLOWUP_DAYS", "3"))
