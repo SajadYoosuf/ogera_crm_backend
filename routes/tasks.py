@@ -213,7 +213,7 @@ def create_task(
         raise HTTPException(status_code=400, detail="Assigned employee not found or inactive")
     if assignee.role in MONITORING_ROLES:
         raise HTTPException(status_code=400, detail="Tasks cannot be assigned to an admin or manager")
-    ensure_can_schedule_for(current_user, body.assigned_to)
+    ensure_can_schedule_for(db, current_user, body.assigned_to)
     ensure_can_assign(db, current_user, body.assigned_to)
 
     fs = FollowupSchedule(

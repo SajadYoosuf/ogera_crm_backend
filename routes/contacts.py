@@ -30,7 +30,7 @@ from schemas import (
     StageTypeItem,
 )
 from schemas.dealer_profile import DealerProfileResponse, DealerProfileUpdate
-from schemas.enums import HouseStage, ProfessionType, TankType, profession_key
+from schemas.enums import HouseStage, TankType, profession_key
 import settings_catalog as catalog
 
 router = APIRouter(
@@ -320,9 +320,9 @@ def list_stage_types(
 
 
 @router.get("/partner-types", summary="List partner profession types")
-def list_profession_types():
-    """Partner profession options. Fixed in code: the `value` is what the API stores."""
-    return [{"value": p.value, "label": p.value.replace("_", " ").title()} for p in ProfessionType]
+def list_profession_types(db: Session = Depends(get_db)):
+    """Active partner types from Settings > Lists & Options. The `value` is what the API stores."""
+    return [{"value": i.value, "label": i.label} for i in catalog.list_items(db, catalog.PROFESSIONAL_TYPE) if i.is_active]
 
 
 @router.get("/house-stages", summary="List house stages")
@@ -347,7 +347,7 @@ def export_contacts(
     """Downloads the contacts matching the list filters as CSV, Excel or PDF (`format`).
     It uses the same filters and the same visibility as the list, so the export matches what is on screen.
     """
-    require_action(current_user, "export")
+    require_action(db, current_user, "export")
     total = contact_query(db, f, lambda cur: (func.count(Contact.id),), current_user).scalar() or 0
     limit = contact_export.MAX_ROWS[format]
     if total > limit:
@@ -567,8 +567,8 @@ def create_contact(
     Offline leads need latitude and longitude. Returns 400 for an unknown source, owner, referrer or a details block on the wrong type.
     Returns 409 when the phone number already belongs to another contact.
     """
-    require_action(current_user, "create_contact")
-    ensure_can_create_type(current_user, body.contact_type.value if body.contact_type else "consumer")
+    require_action(db, current_user, "create_contact")
+    ensure_can_create_type(db, current_user, body.contact_type.value if body.contact_type else "consumer")
     if platform == "mobile":
         missing = [name for name in ("address", "district") if not getattr(body, name)]
         if missing:
@@ -580,6 +580,8 @@ def create_contact(
     _check_location(source, body.latitude, body.longitude, creating=True)
     _ensure_referrer(db, body.referred_by_id)
     _check_type_profiles(body.contact_type, body.consumer_profile, body.partner_profile, body.dealer_profile)
+    if body.partner_profile is not None:
+        catalog.ensure_allowed(db, catalog.PROFESSIONAL_TYPE, body.partner_profile.profession_type)
     if body.contact_type == "partner" and body.partner_profile is None:
         raise HTTPException(status_code=400, detail="partner_profile (with profession_type) is required for a partner")
     if body.contact_type == "dealer" and body.dealer_profile is None:
@@ -690,6 +692,10 @@ def update_contact(
 
     if body.partner_profile is not None:
         profile_data = body.partner_profile.model_dump(exclude_unset=True, mode="json")
+        if profile_data.get("profession_type"):
+            # Keeping the record's current type stays allowed after that type is hidden.
+            current = profession_key(contact.partner_profile.profession_type) if contact.partner_profile else None
+            catalog.ensure_allowed(db, catalog.PROFESSIONAL_TYPE, profile_data["profession_type"], current)
         if contact.partner_profile is None:
             if not profile_data.get("profession_type"):
                 raise HTTPException(
@@ -795,7 +801,7 @@ def add_contact_stage(
     if not stage_type:
         raise HTTPException(status_code=400, detail="Stage not found")
 
-    ensure_can_move_to(current_user, stage_type.slug)
+    ensure_can_move_to(db, current_user, stage_type.slug)
 
     # The stage must belong to this contact's pipeline (lost is allowed from any pipeline)
     if stage_type.slug != "lost" and stage_type.contact_type != contact.contact_type:

@@ -17,6 +17,7 @@ LEAD_STAGE = "lead_stage"
 ACTIVITY_TYPE = "activity_type"
 LOSS_REASON = "loss_reason"
 DISTRICT = "district"
+PROFESSIONAL_TYPE = "professional_type"
 
 CATEGORY_LABELS = {
     LEAD_SOURCE: "Lead sources",
@@ -24,6 +25,7 @@ CATEGORY_LABELS = {
     ACTIVITY_TYPE: "Activity types",
     LOSS_REASON: "Loss reasons",
     DISTRICT: "Districts",
+    PROFESSIONAL_TYPE: "Partner types",
 }
 CATEGORIES = tuple(CATEGORY_LABELS)
 
@@ -32,6 +34,7 @@ LOCKED = {
     LEAD_SOURCE: {"offline"},  # offline leads must carry a location
     LEAD_STAGE: {"new_lead", "won", "lost"},  # pipeline entry/exit stages
     ACTIVITY_TYPE: {"field_visit", "internal_note"},  # GPS capture / cannot be scheduled
+    PROFESSIONAL_TYPE: {"other"},  # imports fall back to it when a profession is missing or unknown
 }
 # The pipeline is fixed in code (stage rules, follow-up clocks), so stages can be renamed and reordered but not added.
 NO_NEW_VALUES = {LEAD_STAGE}
@@ -46,6 +49,11 @@ DEFAULT_ENUMS: dict[str, list[tuple[str, str]]] = {
     LOSS_REASON: [
         ("price", "Price too high"), ("competitor", "Went to a competitor"), ("timing", "Timing"),
         ("not_interested", "Not interested"), ("other", "Other"),
+    ],
+    PROFESSIONAL_TYPE: [
+        ("plumber", "Plumber"), ("engineer", "Engineer"), ("contractor", "Contractor"),
+        ("interior_designer", "Interior designer"), ("architect", "Architect"),
+        ("electrician", "Electrician"), ("other", "Other"),
     ],
     DISTRICT: [
         ("thiruvananthapuram", "Thiruvananthapuram"), ("kollam", "Kollam"), ("pathanamthitta", "Pathanamthitta"),
@@ -103,6 +111,7 @@ class Item:
     is_active: bool
     locked: bool = False
     usage_count: int = 0
+    group: str | None = None  # lead stages: the contact type the stage belongs to (consumer, partner, dealer)
 
 
 def slugify(text: str, max_len: int = 40) -> str:
@@ -147,14 +156,26 @@ def _source_items(db: Session, category: str) -> list[Item]:
 
 
 def _stage_items(db: Session, category: str) -> list[Item]:
-    # Only the consumer pipeline is managed via Settings; partner and dealer stages are fixed in code.
-    rows = db.query(StageType).filter(StageType.contact_type == "consumer").order_by(StageType.order, StageType.id).all()
-    return [Item(r.id, r.slug, r.name, r.order, bool(r.is_active), r.slug in LOCKED[category]) for r in rows]
+    # Every contact type's pipeline. The same slug appears once per type, so each row carries its type as `group`.
+    rows = db.query(StageType).order_by(StageType.contact_type, StageType.order, StageType.id).all()
+    return [
+        Item(r.id, r.slug, r.name, r.order, bool(r.is_active), r.slug in LOCKED[category], group=r.contact_type)
+        for r in rows
+    ]
 
 
 def list_items(db: Session, category: str, with_usage: bool = False) -> list[Item]:
     items = {LEAD_SOURCE: _source_items, LEAD_STAGE: _stage_items}.get(category, _enum_items)(db, category)
-    if with_usage:
+    if with_usage and category == LEAD_STAGE:
+        # Usage per row, not per slug: a slug is shared by the consumer, partner and dealer pipelines.
+        by_id = dict(
+            db.query(StageType.id, func.count(func.distinct(LeadStage.contact_id)))
+            .join(LeadStage, LeadStage.stage_id == StageType.id)
+            .group_by(StageType.id).all()
+        )
+        for item in items:
+            item.usage_count = by_id.get(item.id, 0)
+    elif with_usage:
         counts = usage_counts(db, category)
         for item in items:
             item.usage_count = counts.get(item.value.lower(), 0)
@@ -182,6 +203,12 @@ def usage_counts(db: Session, category: str) -> dict[str, int]:
             db.query(LeadStage.loss_reason, func.count(LeadStage.id))
             .filter(LeadStage.loss_reason.isnot(None)).group_by(LeadStage.loss_reason).all()
         )
+    elif category == PROFESSIONAL_TYPE:
+        rows = (
+            db.query(PartnerProfile.profession_type, func.count(PartnerProfile.id))
+            .join(Contact, Contact.id == PartnerProfile.contact_id)
+            .filter(Contact.deleted_at.is_(None)).group_by(PartnerProfile.profession_type).all()
+        )
     else:  # district is free text on the contact
         rows = (
             db.query(Contact.district, func.count(Contact.id))
@@ -190,7 +217,7 @@ def usage_counts(db: Session, category: str) -> dict[str, int]:
     out: dict[str, int] = {}
     for key, count in rows:
         norm = str(key).strip().lower()
-        if category == DISTRICT:
+        if category in (DISTRICT, PROFESSIONAL_TYPE):
             norm = norm.replace(" ", "_")  # "Interior Designer" and interior_designer are the same option
         out[norm] = out.get(norm, 0) + count
     return out

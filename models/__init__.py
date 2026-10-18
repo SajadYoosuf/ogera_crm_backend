@@ -1,4 +1,5 @@
 from .role import Role, SYSTEM_ROLES, seed_system_roles
+from .role_permission import RolePermission
 from .employee import Employee
 from .lead_source import LeadSource
 from .stage_type import StageType
@@ -22,6 +23,7 @@ __all__ = [
     "Role",
     "SYSTEM_ROLES",
     "seed_system_roles",
+    "RolePermission",
     "Employee",
     "LeadSource",
     "StageType",

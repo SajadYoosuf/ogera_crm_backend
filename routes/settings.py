@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 import settings_catalog as catalog
 from auth import get_current_user, require_roles
 from config import UPLOAD_DIR
+from role_access import ACTION_ROLES
 from database import get_db
-from models import Employee, EnumValue, LeadSource, Role, StageType
+from models import Employee, EnumValue, LeadSource, Role, RolePermission, StageType
 from schemas.settings import (
     CompanyResponse,
     CompanyUpdate,
@@ -17,6 +18,7 @@ from schemas.settings import (
     EnumValueCreate,
     EnumValueResponse,
     EnumValueUpdate,
+    PermissionChange,
     PermissionCell,
     PermissionFeature,
     PermissionMatrix,
@@ -86,8 +88,8 @@ def _commit(db: Session) -> None:
 # ---- Enum values ----------------------------------------------------------------------------------
 
 @router.get("/enums", response_model=dict[str, list[EnumValueResponse]], summary="All dropdown options (admin)")
-def list_all_enums(db: Session = Depends(get_db), _: Employee = Depends(require_admin)):
-    """Every category with all its values, including inactive ones, and how many records use each value. Admin only."""
+def list_all_enums(db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+    """Every category with all its values, including inactive ones, and how many records use each value. Admin and manager."""
     return {
         category: [EnumValueResponse(**i.__dict__) for i in catalog.list_items(db, category, with_usage=True)]
         for category in catalog.CATEGORIES
@@ -98,15 +100,52 @@ def list_all_enums(db: Session = Depends(get_db), _: Employee = Depends(require_
 def list_enum(category: str, db: Session = Depends(get_db), _: Employee = Depends(get_current_user)):
     """Active options of one category, in order, for dropdowns. Open to every signed-in user."""
     _category_or_404(category)
-    return [EnumValueResponse(**i.__dict__) for i in catalog.list_items(db, category) if i.is_active]
+    # Dropdowns get the consumer pipeline only, as before; the other pipelines are managed in Settings.
+    return [
+        EnumValueResponse(**i.__dict__)
+        for i in catalog.list_items(db, category)
+        if i.is_active and (category != catalog.LEAD_STAGE or i.group == "consumer")
+    ]
+
+
+PIPELINES = ("consumer", "partner", "dealer")
+
+
+def _create_stage(db: Session, body: EnumValueCreate) -> EnumValueResponse:
+    """Adds a stage to one contact type's pipeline, at the end. A stage turned off earlier comes back instead."""
+    pipeline = body.group or "consumer"
+    if pipeline not in PIPELINES:
+        raise HTTPException(status_code=422, detail="Choose consumer, partner or dealer")
+    if len(body.label) > 60:
+        raise HTTPException(status_code=422, detail="Name can be at most 60 characters")
+    slug = catalog.slugify(body.value or body.label, 40)
+
+    existing = db.query(StageType).filter(StageType.slug == slug, StageType.contact_type == pipeline).first()
+    if existing is not None:
+        if existing.is_active:
+            raise HTTPException(status_code=409, detail="This stage already exists in this pipeline")
+        existing.is_active = 1
+        existing.name = body.label
+        _commit(db)
+        return _response(db, catalog.LEAD_STAGE, existing.id)
+
+    last = max(
+        (r.order for r in db.query(StageType).filter(StageType.contact_type == pipeline, StageType.is_active == 1).all()),
+        default=0,
+    )
+    row = StageType(name=body.label, slug=slug, contact_type=pipeline, description=None, order=last + 1, is_active=1)
+    db.add(row)
+    _commit(db)
+    return _response(db, catalog.LEAD_STAGE, row.id)
 
 
 @router.post("/enums/{category}", response_model=EnumValueResponse, status_code=201, summary="Add a dropdown option")
-def create_enum(category: str, body: EnumValueCreate, db: Session = Depends(get_db), _: Employee = Depends(require_admin)):
-    """Adds a value to a category (admin only). The stored value cannot be changed later, so pick it carefully."""
+def create_enum(category: str, body: EnumValueCreate, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+    """Adds a value to a category (admin and manager). The stored value cannot be changed later, so pick it carefully.
+    Lead stages also take `group` (consumer, partner or dealer): the pipeline the stage joins."""
     _category_or_404(category)
-    if category in catalog.NO_NEW_VALUES:
-        raise HTTPException(status_code=400, detail="Pipeline stages are fixed. You can rename, reorder or hide them")
+    if category == catalog.LEAD_STAGE:
+        return _create_stage(db, body)
     label_col, value_col, order_col = _cols(category)
     max_label = 60 if category == catalog.LEAD_SOURCE else 100
     if len(body.label) > max_label:
@@ -137,8 +176,8 @@ def create_enum(category: str, body: EnumValueCreate, db: Session = Depends(get_
 
 
 @router.patch("/enums/{category}/{item_id}", response_model=EnumValueResponse, summary="Update a dropdown option")
-def update_enum(category: str, item_id: int, body: EnumValueUpdate, db: Session = Depends(get_db), _: Employee = Depends(require_admin)):
-    """Renames, repositions or switches an option on or off (admin only). The stored value itself never changes."""
+def update_enum(category: str, item_id: int, body: EnumValueUpdate, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+    """Renames, repositions or switches an option on or off (admin and manager). The stored value itself never changes."""
     _category_or_404(category)
     row = _row_or_404(db, category, item_id)
     label_col, value_col, order_col = _cols(category)
@@ -161,8 +200,8 @@ def update_enum(category: str, item_id: int, body: EnumValueUpdate, db: Session 
 
 
 @router.delete("/enums/{category}/{item_id}", response_model=EnumValueResponse, summary="Delete a dropdown option")
-def delete_enum(category: str, item_id: int, db: Session = Depends(get_db), _: Employee = Depends(require_admin)):
-    """Removes an unused option (admin only). The option is turned off rather than erased, so old reports still read correctly. Options in use must be deactivated instead."""
+def delete_enum(category: str, item_id: int, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+    """Removes an unused option (admin and manager). The option is turned off rather than erased, so old reports still read correctly. Options in use must be deactivated instead."""
     _category_or_404(category)
     row = _row_or_404(db, category, item_id)
     value = getattr(row, _cols(category)[1])
@@ -177,8 +216,8 @@ def delete_enum(category: str, item_id: int, db: Session = Depends(get_db), _: E
 
 
 @router.post("/enums/{category}/reorder", response_model=list[EnumValueResponse], summary="Reorder dropdown options")
-def reorder_enum(category: str, body: EnumReorder, db: Session = Depends(get_db), _: Employee = Depends(require_admin)):
-    """Sets the order of a category to the position of each id in `ordered_ids` (admin only)."""
+def reorder_enum(category: str, body: EnumReorder, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+    """Sets the order of a category to the position of each id in `ordered_ids` (admin and manager)."""
     _category_or_404(category)
     if len(set(body.ordered_ids)) != len(body.ordered_ids):
         raise HTTPException(status_code=422, detail="ordered_ids has duplicates")
@@ -246,28 +285,38 @@ async def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db
     return _company(db)
 
 
-# ---- Roles & permissions (read-only) ---------------------------------------------------------------
+# ---- Roles & permissions ----------------------------------------------------------------------------
 
 def _cell(level: str, note: str | None = None) -> dict:
     return {"level": level, "note": note}
 
 
-# What each kind of role can do in the app today. Admin and manager are team-wide roles; every other role
-# (built-in or custom) works with its own records. Mirrors the checks in routes/ and the web sidebar.
+# What each kind of role can do by default. Admin and manager are team-wide roles; every other role
+# (built-in or custom) works with its own records. Rows with an action can be switched on or off per role;
+# the others (employees, settings) are fixed in code.
+# Each row: (key, label, description, action, admin cell, manager cell, staff cell).
 FEATURES = [
-    ("contacts", "Contacts", "Create and edit contacts, import and export",
+    ("contacts", "Contacts", "View and edit the contacts they can see", None,
      _cell("full"), _cell("full"), _cell("own", "Only contacts they created or are assigned to")),
-    ("followups", "Lead Followup board", "Move leads through the pipeline",
-     _cell("full"), _cell("none"), _cell("none")),
-    ("tasks", "Tasks", "Follow-up tasks and reminders",
+    ("add_contacts", "Add consumer contacts", "Create new consumer contacts", "create_contact",
+     _cell("full"), _cell("full"), _cell("full")),
+    ("partners", "Add partners & dealers", "Create partner and dealer contacts", "create_partner_or_dealer",
+     _cell("full"), _cell("full"), _cell("full")),
+    ("followups", "Lead Followup board", "Move leads through the pipeline", "move_stage",
+     _cell("full"), _cell("full"), _cell("none")),
+    ("tasks", "Tasks", "Schedule follow-ups and tasks", "schedule_followup",
      _cell("full"), _cell("full"), _cell("own", "Only tasks assigned to them")),
-    ("employees", "Employees", "Add staff and manage logins",
+    ("activity", "Activity log", "Log calls, visits and notes on a lead", "log_activity",
+     _cell("full"), _cell("full"), _cell("own", "Only contacts they can see")),
+    ("export", "Export contacts", "Download contacts as CSV, Excel or PDF", "export",
+     _cell("full"), _cell("full"), _cell("none")),
+    ("employees", "Employees", "Add staff and manage logins", None,
      _cell("full"), _cell("full", "Cannot change admin or manager accounts"), _cell("none")),
-    ("settings", "Settings", "Company, dropdown options and roles",
+    ("settings", "Settings", "Company, dropdown options and roles", None,
      _cell("full"), _cell("view", "Company and roles only"), _cell("none")),
 ]
 
-# Per-role levels that differ from the three defaults above. Keys are (feature key, role slug).
+# Per-role levels that differ from the defaults above. Keys are (feature key, role slug).
 FEATURE_OVERRIDES = {
     ("contacts", "team_lead"): _cell("team", "Their own contacts and their team's"),
     ("contacts", "support"): _cell("customers", "Their own contacts and customers (won, placed, first order)"),
@@ -277,27 +326,82 @@ FEATURE_OVERRIDES = {
     ("followups", "field_executive"): _cell("own", "Early stages only: New Lead, Aware, Connected"),
     ("tasks", "team_lead"): _cell("team", "Their team's tasks"),
     ("tasks", "support"): _cell("own", "Only tasks assigned to them; cannot schedule for others"),
+    ("activity", "team_lead"): _cell("team", "Their team's contacts"),
+    ("export", "team_lead"): _cell("team", "Their team's contacts"),
 }
 
-# Export is its own row so the matrix shows who can download contact lists.
-EXPORT_FEATURE = ("export", "Export contacts", "Download contacts as CSV, Excel or PDF",
-                  _cell("full"), _cell("full"), _cell("none"))
-EXPORT_OVERRIDES = {("export", "team_lead"): _cell("team", "Their team's contacts")}
+
+def _may_edit(viewer: Employee, slug: str) -> bool:
+    """Admin never loses access. Managers can change staff and custom roles; only an admin changes managers."""
+    if slug == "admin":
+        return False
+    if slug == "manager":
+        return viewer.role == "admin"
+    return True
 
 
-@router.get("/roles", response_model=PermissionMatrix, summary="Permission matrix")
-def permission_matrix(db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
-    """Shows the access level of every role for each feature. Read-only: the rules themselves live in the code. Admin and manager only."""
-    roles = db.query(Role).order_by(Role.is_system.desc(), Role.name).all()
+def _allowed(saved: dict[tuple[str, str], bool], slug: str, action: str) -> bool:
+    if slug == "admin":
+        return True
+    if (slug, action) in saved:
+        return saved[(slug, action)]
+    return slug in ACTION_ROLES[action]
+
+
+def _build_matrix(roles: list[Role], saved: dict[tuple[str, str], bool], viewer: Employee) -> PermissionMatrix:
     features = []
-    for key, label, description, admin, manager, staff in [*FEATURES, EXPORT_FEATURE]:
-        overrides = {**FEATURE_OVERRIDES, **EXPORT_OVERRIDES}
+    for key, label, description, action, admin, manager, staff in FEATURES:
         levels = {}
         for role in roles:
             default = admin if role.slug == "admin" else manager if role.slug == "manager" else staff
-            levels[role.slug] = PermissionCell(**overrides.get((key, role.slug), default))
-        features.append(PermissionFeature(key=key, label=label, description=description, levels=levels))
+            cell = FEATURE_OVERRIDES.get((key, role.slug), default)
+            editable = False
+            if action:
+                explicit = (role.slug, action) in saved
+                if not _allowed(saved, role.slug, action):
+                    cell = _cell("none", "Turned off in Settings" if explicit else None)
+                elif cell["level"] == "none":
+                    cell = _cell("full", "Turned on in Settings" if explicit else None)
+                editable = _may_edit(viewer, role.slug)
+            levels[role.slug] = PermissionCell(level=cell["level"], note=cell["note"], editable=editable)
+        features.append(PermissionFeature(key=key, label=label, description=description, action=action, levels=levels))
     return PermissionMatrix(
         roles=[PermissionRole(slug=r.slug, name=r.name, is_system=bool(r.is_system), is_active=bool(r.is_active)) for r in roles],
         features=features,
     )
+
+
+@router.get("/roles", response_model=PermissionMatrix, summary="Permission matrix")
+def permission_matrix(db: Session = Depends(get_db), viewer: Employee = Depends(require_manager_or_admin)):
+    """Access level of every role for each feature, with the cells this viewer may switch on or off. Admin and manager only."""
+    roles = db.query(Role).order_by(Role.is_system.desc(), Role.name).all()
+    saved = {(p.role_slug, p.action): bool(p.allowed) for p in db.query(RolePermission).all()}
+    return _build_matrix(roles, saved, viewer)
+
+
+@router.put("/roles/{slug}/permissions/{action}", response_model=PermissionMatrix, summary="Allow or block an action for a role")
+def set_role_permission(
+    slug: str,
+    action: str,
+    body: PermissionChange,
+    db: Session = Depends(get_db),
+    viewer: Employee = Depends(require_manager_or_admin),
+):
+    """Turns one action on or off for one role and returns the updated matrix. Admin keeps every permission;
+    only an admin can change what managers may do. Staff roles can be changed by admin and manager."""
+    if action not in ACTION_ROLES:
+        raise HTTPException(status_code=404, detail="Unknown action")
+    role = db.query(Role).filter(Role.slug == slug).first()
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if not _may_edit(viewer, slug):
+        detail = "Admin always keeps every permission" if slug == "admin" else "Only an admin can change what managers may do"
+        raise HTTPException(status_code=403, detail=detail)
+
+    row = db.query(RolePermission).filter(RolePermission.role_slug == slug, RolePermission.action == action).first()
+    if row is None:
+        row = RolePermission(role_slug=slug, action=action)
+        db.add(row)
+    row.allowed = int(body.allowed)
+    db.commit()
+    return permission_matrix(db=db, viewer=viewer)

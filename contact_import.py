@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from models import ConsumerProfile, Contact, DealerProfile, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, StageType
-from schemas.enums import HouseStage, ProfessionType, profession_key
+from schemas.enums import HouseStage, profession_key
 from phone_utils import phone_key
 import settings_catalog as catalog
 from business_time import ist_now
@@ -215,7 +215,7 @@ class Options:
 
 
 def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[int, str], options: Options) -> list[RowResult]:
-    professions = {p.value for p in ProfessionType}
+    professions = catalog.active_values(db, catalog.PROFESSIONAL_TYPE)
     sources = {}
     for s in db.query(LeadSource).filter(LeadSource.is_active == 1):
         sources[_key(s.name)] = s.id

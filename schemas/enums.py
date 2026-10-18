@@ -17,24 +17,8 @@ class ContactType(str, enum.Enum):
     dealer = "dealer"
 
 
-class ProfessionType(str, enum.Enum):
-    other = "other"
-    plumber = "plumber"
-    engineer = "engineer"
-    interior_designer = "interior_designer"
-    architect = "architect"
-    contractor = "contractor"
-    electrician = "electrician"
-
-    @classmethod
-    def normalise(cls, raw: str) -> "ProfessionType":
-        """Map legacy free text ("Interior Designer") to a member; unknown text becomes other."""
-        key = raw.strip().lower().replace(" ", "_")
-        return cls(key) if key in cls._value2member_map_ else cls.other
-
-
 def profession_key(raw: str) -> str:
-    """Stored profession text as an option value: "Interior Designer" -> "interior_designer"."""
+    """Stored profession text as an option value: "Interior Designer" -> "interior_designer". Partner types live in Settings."""
     return raw.strip().lower().replace(" ", "_")
 
 

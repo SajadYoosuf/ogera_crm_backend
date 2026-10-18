@@ -17,11 +17,13 @@ class EnumValueResponse(BaseModel):
     is_active: bool
     locked: bool = False  # the app relies on this option: it can be renamed but not turned off
     usage_count: int | None = None  # admin list only
+    group: str | None = None  # lead stages: consumer | partner | dealer
 
 
 class EnumValueCreate(BaseModel):
     label: Annotated[str, Field(min_length=1, max_length=100)]
     value: Annotated[str, Field(max_length=100)] | None = None  # defaults to a slug of the label
+    group: Annotated[str, Field(pattern="^(consumer|partner|dealer)$")] | None = None  # lead stages only: the pipeline
 
     @field_validator("label", mode="after")
     @classmethod
@@ -59,15 +61,21 @@ class CompanyUpdate(BaseModel):
         return None if v is None else _clean(v)
 
 
+class PermissionChange(BaseModel):
+    allowed: bool
+
+
 class PermissionCell(BaseModel):
-    level: str  # full | view | own | none
+    level: str  # full | view | own | team | customers | none
     note: str | None = None
+    editable: bool = False  # the viewer may switch this cell on or off
 
 
 class PermissionFeature(BaseModel):
     key: str
     label: str
     description: str
+    action: str | None = None  # the role_access action this row switches; None = read-only row
     levels: dict[str, PermissionCell]  # role slug -> access
 
 
