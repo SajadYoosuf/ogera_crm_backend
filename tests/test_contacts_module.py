@@ -44,14 +44,18 @@ def test_each_type_creates_with_its_own_details(client, login, lead_source_id):
     assert partner.json()["partner_profile"]["profession_type"] == "plumber"
 
 
-def test_dealer_needs_owner_name_and_partner_needs_profession(client, login, lead_source_id):
+def test_dealer_needs_owner_name_and_partner_does_not(client, login, lead_source_id):
+    """Dealer requires dealer_profile.owner_name at creation. Partner profile is optional at creation."""
     headers, _ = login("admin")
     dealer = _contact(client, headers, lead_source_id("meta"), phone="9100000004", contact_type="dealer",
                       consumer_profile=None)
     assert dealer.status_code == 400 and "owner_name" in dealer.json()["detail"]
+    # Partner can be created without a profile — it will be unverified until profession_type + work_area are added
     partner = _contact(client, headers, lead_source_id("meta"), phone="9100000005", contact_type="partner",
                        consumer_profile=None)
-    assert partner.status_code == 400 and "profession_type" in partner.json()["detail"]
+    assert partner.status_code == 201
+    assert partner.json()["is_verified"] is False
+    assert "profession_type" in partner.json()["missing_fields"]
 
 
 def test_details_block_must_match_the_contact_type(client, login, lead_source_id):
@@ -116,12 +120,16 @@ def test_web_can_create_without_address_and_district(client, login, lead_source_
     assert response.json()["is_verified"] is False  # the details are still pending, so the lead shows what is missing
 
 
-def test_mobile_requires_address_and_district_on_create(client, login, lead_source_id):
+def test_mobile_can_create_without_address_and_district(client, login, lead_source_id):
+    """Mobile app no longer hard-requires address and district on create; contact is unverified until filled."""
     headers, _ = login("admin")
     response = _contact(client, {**headers, **MOBILE}, lead_source_id("meta"), phone="9100000021",
                         address=None, district=None)
-    assert response.status_code == 400
-    assert "required from the mobile app" in response.json()["detail"]
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["is_verified"] is False
+    assert "district" in body["missing_fields"]
+    assert "address" in body["missing_fields"]
 
 
 def test_mobile_cannot_clear_address_on_edit(client, login, lead_source_id):

@@ -214,7 +214,8 @@ def test_nameless_contact_get_by_id_works(client, login, lead_source_id):
     assert fetched["phone"] == "9800000003"
 
 
-def test_nameless_contact_with_all_other_fields_is_verified(client, login, lead_source_id):
+def test_nameless_contact_with_all_other_fields_is_not_verified(client, login, lead_source_id):
+    """Name is now required for verification on all contact types."""
     headers, _ = login("admin")
     created = client.post("/contacts", json={
         "contact_type": "consumer",
@@ -224,18 +225,19 @@ def test_nameless_contact_with_all_other_fields_is_verified(client, login, lead_
         "lead_source_id": lead_source_id("meta"),
         "consumer_profile": {"house_stage": "ready"},
     }, headers=headers).json()
-    assert created["is_verified"] is True
-    assert created["missing_fields"] == []
+    assert created["is_verified"] is False
+    assert "name" in created["missing_fields"]
 
 
-def test_nameless_contact_missing_fields_does_not_include_name(client, login, lead_source_id):
+def test_nameless_contact_missing_fields_includes_name(client, login, lead_source_id):
+    """Name is always in missing_fields when absent."""
     headers, _ = login("admin")
     created = client.post("/contacts", json={
         "contact_type": "consumer",
         "phone": "9800000005",
         "lead_source_id": lead_source_id("meta"),
     }, headers=headers).json()
-    assert "name" not in created["missing_fields"]
+    assert "name" in created["missing_fields"]
 
 
 def test_phone_uniqueness_works_for_nameless_contact(client, login, lead_source_id):

@@ -25,6 +25,7 @@ LEAD_SOURCES = (
     ("Website", "website"),
     ("Showroom", "showroom"),
     ("Offline", "offline"),
+    ("Field Visit", "field_visit"),
 )
 
 
