@@ -23,9 +23,9 @@ router = APIRouter(prefix="/products", tags=["products"])
 # Admins and managers edit the catalogue; every signed-in employee can read it.
 can_edit = get_current_user
 
-_BOOL_COLUMNS = ("is_popular", "is_active", "special_price_active", "tax_included")
-_OPTION_COLUMNS = ("brand_id", "category_id", "material_id")
-_with_options = (joinedload(Product.brand), joinedload(Product.category), joinedload(Product.material))
+_BOOL_COLUMNS = ("is_popular", "is_active", "tax_included")
+_OPTION_COLUMNS = ("material_id",)
+_with_options = (joinedload(Product.material),)
 
 
 def _slugify(text: str) -> str:
@@ -54,16 +54,15 @@ def _get_product(db: Session, product_id: int) -> Product:
 
 
 def _check_options(db: Session, data: dict) -> None:
-    """Each *_id must point at an active option of the matching kind."""
-    for column, kind in (("brand_id", "brand"), ("category_id", "category"), ("material_id", "material")):
-        option_id = data.get(column)
-        if option_id is None:
-            continue
-        found = db.query(ProductOption.id).filter(
-            ProductOption.id == option_id, ProductOption.kind == kind, ProductOption.is_active == 1
-        ).first()
-        if found is None:
-            raise HTTPException(status_code=422, detail=f"Unknown {kind}")
+    """material_id must point at an active material option."""
+    option_id = data.get("material_id")
+    if option_id is None:
+        return
+    found = db.query(ProductOption.id).filter(
+        ProductOption.id == option_id, ProductOption.kind == "material", ProductOption.is_active == 1
+    ).first()
+    if found is None:
+        raise HTTPException(status_code=422, detail="Unknown material")
 
 
 def _commit(db: Session) -> None:
@@ -119,8 +118,6 @@ def create_option(
 @router.get("", response_model=ProductListResponse, summary="List products")
 def list_products(
     q: str | None = None,
-    brand_id: int | None = None,
-    category_id: int | None = None,
     material_id: int | None = None,
     is_active: bool | None = None,
     skip: int = Query(0, ge=0),
@@ -128,22 +125,18 @@ def list_products(
     db: Session = Depends(get_db),
     _: Employee = Depends(get_current_user),
 ):
-    """Paged product list with optional search and filters for brand, category and active state. Soft-deleted products are excluded."""
+    """Paged product list with optional search and filters for material and active state. Soft-deleted products are excluded."""
     query = db.query(Product).filter(Product.deleted_at.is_(None))
     if q and q.strip():
         like = f"%{q.strip()}%"
         query = query.filter(or_(Product.name.like(like), Product.model_number.like(like), Product.sku.like(like)))
-    if brand_id is not None:
-        query = query.filter(Product.brand_id == brand_id)
-    if category_id is not None:
-        query = query.filter(Product.category_id == category_id)
     if material_id is not None:
         query = query.filter(Product.material_id == material_id)
     if is_active is not None:
         query = query.filter(Product.is_active == int(is_active))
     total = query.count()
     items = (
-        query.options(joinedload(Product.brand), joinedload(Product.category))
+        query.options(joinedload(Product.material))
         .order_by(Product.name)
         .offset(skip)
         .limit(limit)

@@ -24,7 +24,6 @@ PRODUCT = {
     "orientation": "vertical",
     "mrp": "6000",
     "sale_price": "5400",
-    "main_image_url": "https://example.com/tank.jpg",
     "features": ["SS304 food grade"],
 }
 
@@ -73,14 +72,15 @@ def test_sale_price_above_mrp_rejected(client):
 
 
 def test_options_and_patch(client):
-    brand = client.post("/products/options", json={"kind": "brand", "name": "Ventino"}).json()
-    again = client.post("/products/options", json={"kind": "brand", "name": "Ventino"}).json()
-    assert brand["id"] == again["id"]
-    product_id = client.post("/products", json={**PRODUCT, "brand_id": brand["id"]}).json()["id"]
+    material = client.post("/products/options", json={"kind": "material", "name": "Stainless Steel"}).json()
+    again = client.post("/products/options", json={"kind": "material", "name": "Stainless Steel"}).json()
+    assert material["id"] == again["id"]
+    product_id = client.post("/products", json={**PRODUCT, "material_id": material["id"]}).json()["id"]
     patched = client.patch(f"/products/{product_id}", json={"tagline": "Hi"}).json()
-    assert patched["brand"]["name"] == "Ventino" and patched["tagline"] == "Hi"
-    # a brand id can't be used as a category
-    assert client.patch(f"/products/{product_id}", json={"category_id": brand["id"]}).status_code == 422
+    assert patched["material"]["name"] == "Stainless Steel" and patched["tagline"] == "Hi"
+    # a category-kind option can't be used as material
+    category_opt = client.post("/products/options", json={"kind": "category", "name": "Tank"}).json()
+    assert client.patch(f"/products/{product_id}", json={"material_id": category_opt["id"]}).status_code == 422
 
 
 def test_soft_delete_hides_product(client):
@@ -104,7 +104,7 @@ def test_null_features_in_old_rows_read_as_empty_list():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     with Session() as seed:
-        seed.add(models.Product(name="Old row", slug="old-row", features=None, is_active=1, currency="INR", special_price_active=0, tax_included=1))
+        seed.add(models.Product(name="Old row", slug="old-row", features=None, is_active=1, tax_included=1))
         seed.commit()
         product_id = seed.query(models.Product.id).scalar()
 

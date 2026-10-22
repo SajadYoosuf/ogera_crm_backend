@@ -50,9 +50,7 @@ class ProductOptionRef(BaseModel):
 
 
 class ProductFields(BaseModel):
-    """Fields an admin can edit. Everything except name, slug and the main image is optional."""
-    brand_id: int | None = None
-    category_id: int | None = None
+    """Fields an admin can edit. Everything except name and slug is optional."""
     material_id: int | None = None
     tagline: Annotated[str, Field(max_length=200)] | None = None
     short_description: str | None = None
@@ -69,8 +67,6 @@ class ProductFields(BaseModel):
 
     mrp: Money | None = None
     sale_price: Money | None = None
-    currency: Annotated[str, Field(min_length=3, max_length=3)] = "INR"
-    special_price_active: bool = False
     tax_included: bool = True
 
     height_cm: Measure | None = None
@@ -83,9 +79,7 @@ class ProductFields(BaseModel):
     thickness_mm: Measure | None = None
     weight_kg: Measure | None = None
 
-    main_image_url: Annotated[str, Field(max_length=500)] | None = None
-
-    _blank = field_validator("sku", "model_number", "main_image_url", mode="before")(_blank_to_none)
+    _blank = field_validator("sku", "model_number", mode="before")(_blank_to_none)
     _features = field_validator("features", mode="before")(_none_to_list)
 
     @model_validator(mode="after")
@@ -106,8 +100,6 @@ class ProductUpdate(BaseModel):
     """PATCH body: only the fields sent are changed."""
     name: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     slug: Annotated[str, Field(min_length=1, max_length=220)] | None = None
-    brand_id: int | None = None
-    category_id: int | None = None
     material_id: int | None = None
     tagline: Annotated[str, Field(max_length=200)] | None = None
     short_description: str | None = None
@@ -121,8 +113,6 @@ class ProductUpdate(BaseModel):
     features: list[Feature] | None = None
     mrp: Money | None = None
     sale_price: Money | None = None
-    currency: Annotated[str, Field(min_length=3, max_length=3)] | None = None
-    special_price_active: bool | None = None
     tax_included: bool | None = None
     height_cm: Measure | None = None
     length_cm: Measure | None = None
@@ -133,10 +123,9 @@ class ProductUpdate(BaseModel):
     drain_in: Measure | None = None
     thickness_mm: Measure | None = None
     weight_kg: Measure | None = None
-    main_image_url: Annotated[str, Field(max_length=500)] | None = None
 
     _slug = field_validator("slug")(_check_slug)
-    _blank = field_validator("sku", "model_number", "main_image_url", mode="before")(_blank_to_none)
+    _blank = field_validator("sku", "model_number", mode="before")(_blank_to_none)
     _features = field_validator("features", mode="before")(_none_to_list)
 
 
@@ -146,8 +135,6 @@ class ProductResponse(ProductFields):
     id: int
     name: str
     slug: str
-    brand: ProductOptionRef | None = None
-    category: ProductOptionRef | None = None
     material: ProductOptionRef | None = None
     # Computed from mrp and sale_price so web and mobile show the same numbers.
     discount_percent: Decimal = Decimal("0")
@@ -163,18 +150,15 @@ class ProductListItem(BaseModel):
     name: str
     slug: str
     tagline: str | None = None
-    brand: ProductOptionRef | None = None
-    category: ProductOptionRef | None = None
+    material: ProductOptionRef | None = None
     model_number: str | None = None
     sku: str | None = None
     capacity_display: str | None = None
     orientation: str | None = None
     mrp: Decimal | None = None
     sale_price: Decimal | None = None
-    special_price_active: bool = False
     is_popular: bool = False
     is_active: bool = True
-    main_image_url: str | None = None
 
 
 class ProductListResponse(BaseModel):

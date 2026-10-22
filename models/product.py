@@ -26,8 +26,6 @@ class Product(Base):
     # Basic information
     name: Mapped[str] = mapped_column(String(200), index=True)
     slug: Mapped[str] = mapped_column(String(220), unique=True)
-    brand_id: Mapped[int | None] = mapped_column(ForeignKey("product_options.id"), index=True)
-    category_id: Mapped[int | None] = mapped_column(ForeignKey("product_options.id"), index=True)
     material_id: Mapped[int | None] = mapped_column(ForeignKey("product_options.id"))
     tagline: Mapped[str | None] = mapped_column(String(200))
     short_description: Mapped[str | None] = mapped_column(Text)
@@ -46,8 +44,6 @@ class Product(Base):
     # Pricing
     mrp: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     sale_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
-    currency: Mapped[str] = mapped_column(String(3), default="INR")
-    special_price_active: Mapped[int] = mapped_column(SmallInteger, default=0)
     tax_included: Mapped[int] = mapped_column(SmallInteger, default=1)
 
     # Technical specifications
@@ -61,12 +57,8 @@ class Product(Base):
     thickness_mm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
     weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
 
-    main_image_url: Mapped[str | None] = mapped_column(String(500))
-
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime)
 
-    brand: Mapped[ProductOption | None] = relationship(foreign_keys=[brand_id])
-    category: Mapped[ProductOption | None] = relationship(foreign_keys=[category_id])
     material: Mapped[ProductOption | None] = relationship(foreign_keys=[material_id])
