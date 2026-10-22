@@ -17,13 +17,14 @@ WHY A PLAIN Table AND NOT A MAPPED CLASS?
     `secondary` on the relationship. A full mapped class is only needed if the
     join itself carries extra data (e.g. a "date of interest" column).
 """
-from sqlalchemy import BigInteger, Column, ForeignKey, Table
+from sqlalchemy import BigInteger, Column, ForeignKey, Integer, Table
 from database import Base
 
 contact_interested_products = Table(
     "contact_interested_products",
     Base.metadata,
-    # Cascade deletes so removing a contact or a product cleans up the join rows.
+    # contacts.id is BIGINT → contact_id must also be BIGINT.
+    # products.id is plain INT (no BigInteger) → product_id must be INT to match.
     Column("contact_id", BigInteger, ForeignKey("contacts.id", ondelete="CASCADE"), primary_key=True),
-    Column("product_id", BigInteger, ForeignKey("products.id", ondelete="CASCADE"), primary_key=True),
+    Column("product_id", Integer, ForeignKey("products.id", ondelete="CASCADE"), primary_key=True),
 )
