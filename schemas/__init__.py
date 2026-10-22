@@ -2,8 +2,6 @@ from .enums import (
     RoleEnum,
     ContactType,
     LossReasonEnum,
-    HouseStageEnum,
-    TankTypeEnum,
 )
 from .employee import EmployeeBase, EmployeeCreate, EmployeeUpdate, EmployeeSummary, EmployeeResponse
 from .employee import EmployeeListResponse, EmployeeCreateResponse, CredentialsEmailStatus
@@ -34,7 +32,7 @@ from .contact import StageTypeItem
 
 __all__ = [
     # Enums
-    "RoleEnum", "ContactType", "LossReasonEnum", "HouseStageEnum", "TankTypeEnum",
+    "RoleEnum", "ContactType", "LossReasonEnum",
     # Role
     "RoleCreate", "RoleUpdate", "RoleResponse", "RoleListResponse",
     # Employee

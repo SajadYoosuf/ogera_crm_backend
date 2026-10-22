@@ -1,6 +1,6 @@
 """Admin-editable dropdown options behind Settings -> Enums.
 
-Four categories live in `enum_values`. Lead sources and lead stages keep their existing tables
+Most categories live in `enum_values`. Lead sources and lead stages keep their existing tables
 (contacts point at them), so each category gets a small adapter and the API treats all six alike.
 """
 import re
@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from models import CompanySetting, Contact, EnumValue, LeadActivity, LeadSource, LeadStage, PartnerProfile, StageType
+from models import CompanySetting, ConsumerProfile, Contact, EnumValue, LeadActivity, LeadSource, LeadStage, PartnerProfile, StageType
 
 LEAD_SOURCE = "lead_source"
 LEAD_STAGE = "lead_stage"
@@ -18,6 +18,8 @@ ACTIVITY_TYPE = "activity_type"
 LOSS_REASON = "loss_reason"
 DISTRICT = "district"
 PROFESSIONAL_TYPE = "professional_type"
+HOUSE_STAGE = "house_stage"  # consumers
+TANK_TYPE = "tank_type"  # consumers: the tank they have now
 
 CATEGORY_LABELS = {
     LEAD_SOURCE: "Lead sources",
@@ -26,6 +28,8 @@ CATEGORY_LABELS = {
     LOSS_REASON: "Loss reasons",
     DISTRICT: "Districts",
     PROFESSIONAL_TYPE: "Partner types",
+    HOUSE_STAGE: "House stages",
+    TANK_TYPE: "Tank types",
 }
 CATEGORIES = tuple(CATEGORY_LABELS)
 
@@ -54,6 +58,12 @@ DEFAULT_ENUMS: dict[str, list[tuple[str, str]]] = {
         ("plumber", "Plumber"), ("engineer", "Engineer"), ("contractor", "Contractor"),
         ("interior_designer", "Interior designer"), ("architect", "Architect"),
         ("electrician", "Electrician"), ("other", "Other"),
+    ],
+    HOUSE_STAGE: [
+        ("ready", "Ready"), ("under_construction", "Under construction"), ("renovation", "Renovation"),
+    ],
+    TANK_TYPE: [
+        ("plastic", "Plastic"), ("concrete", "Concrete"), ("steel", "Steel"), ("other", "Other"),
     ],
     DISTRICT: [
         ("thiruvananthapuram", "Thiruvananthapuram"), ("kollam", "Kollam"), ("pathanamthitta", "Pathanamthitta"),
@@ -208,6 +218,13 @@ def usage_counts(db: Session, category: str) -> dict[str, int]:
             db.query(PartnerProfile.profession_type, func.count(PartnerProfile.id))
             .join(Contact, Contact.id == PartnerProfile.contact_id)
             .filter(Contact.deleted_at.is_(None)).group_by(PartnerProfile.profession_type).all()
+        )
+    elif category in (HOUSE_STAGE, TANK_TYPE):
+        column = ConsumerProfile.house_stage if category == HOUSE_STAGE else ConsumerProfile.current_tank_type
+        rows = (
+            db.query(column, func.count(ConsumerProfile.id))
+            .join(Contact, Contact.id == ConsumerProfile.contact_id)
+            .filter(Contact.deleted_at.is_(None), column.isnot(None)).group_by(column).all()
         )
     else:  # district is free text on the contact
         rows = (

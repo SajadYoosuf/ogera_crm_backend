@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from models import ConsumerProfile, Contact, DealerProfile, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, StageType
-from schemas.enums import HouseStage, profession_key
+from schemas.enums import profession_key
 from phone_utils import phone_key
 import settings_catalog as catalog
 from business_time import ist_now
@@ -137,20 +137,36 @@ def detect_header(rows: list[list[str]]) -> tuple[int, dict[int, str]]:
     return best_row, best_map
 
 
-def _house_stage_value(raw: str | None, r: "RowResult") -> str | None:
-    """Map a free-text house stage from a sheet onto the fixed list (ready, under_construction, renovation)."""
+def _option_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+
+# Sheets often say "Under Construction - Plastering" or "Renovating". These map to the default options when active.
+_HOUSE_STAGE_PREFIXES = (("under_construction", "under_construction"), ("construction", "under_construction"),
+                         ("renovat", "renovation"), ("ready", "ready"))
+
+
+def _house_stage_options(db: Session) -> dict[str, str]:
+    """Active house stages from Settings, findable by value or label: {key: stored value}."""
+    out = {}
+    for item in catalog.list_items(db, catalog.HOUSE_STAGE):
+        if item.is_active:
+            out[_option_key(item.value)] = item.value
+            out[_option_key(item.label)] = item.value
+    return out
+
+
+def _house_stage_value(raw: str | None, r: "RowResult", options: dict[str, str]) -> str | None:
+    """Map a free-text house stage from a sheet onto an active house stage option."""
     if not raw or not raw.strip():
         return None
-    key = re.sub(r"[^a-z]+", "_", raw.lower()).strip("_")
-    if key in {s.value for s in HouseStage}:
-        return key
-    if key.startswith("under_construction") or key.startswith("construction"):
-        return HouseStage.under_construction.value
-    if key.startswith("renovat"):
-        return HouseStage.renovation.value
-    if key.startswith("ready"):
-        return HouseStage.ready.value
-    r.warn(f"House stage '{raw}' is not ready, under construction or renovation; left blank")
+    key = _option_key(raw)
+    if key in options:
+        return options[key]
+    for prefix, value in _HOUSE_STAGE_PREFIXES:
+        if key.startswith(prefix) and value in options.values():
+            return value
+    r.warn(f"House stage '{raw}' is not in Settings > House stages; left blank")
     return None
 
 
@@ -216,6 +232,7 @@ class Options:
 
 def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[int, str], options: Options) -> list[RowResult]:
     professions = catalog.active_values(db, catalog.PROFESSIONAL_TYPE)
+    house_stages = _house_stage_options(db)
     sources = {}
     for s in db.query(LeadSource).filter(LeadSource.is_active == 1):
         sources[_key(s.name)] = s.id
@@ -279,7 +296,7 @@ def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[i
                 r.warn(f"Unknown lead source '{src}'")
 
         if out["contact_type"] == "consumer":
-            out["house_stage"] = _house_stage_value(d.get("house_stage"), r)
+            out["house_stage"] = _house_stage_value(d.get("house_stage"), r, house_stages)
         elif out["contact_type"] == "partner":
             out["work_area"] = (d.get("work_area") or None) and d["work_area"][:120]
             prof = d.get("profession_type", "")

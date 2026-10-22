@@ -10,7 +10,7 @@ class ConsumerProfile(Base):
     contact_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("contacts.id", ondelete="CASCADE"), unique=True
     )
-    # Fixed list in code (schemas/enums.py HouseStage); VARCHAR so legacy text can still be read until migrated
+    # Option values from Settings (house_stage, tank_type). VARCHAR, so legacy text can still be read until migrated
     house_stage: Mapped[str | None] = mapped_column(String(50))
     current_tank_type: Mapped[str | None] = mapped_column(String(50))
     current_tank_capacity: Mapped[int | None] = mapped_column(Integer)  # litres

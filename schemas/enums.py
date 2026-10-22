@@ -22,21 +22,6 @@ def profession_key(raw: str) -> str:
     return raw.strip().lower().replace(" ", "_")
 
 
-# Fixed lists in code (not in Settings). Changing them is a code change.
-class HouseStage(str, enum.Enum):
-    ready = "ready"
-    under_construction = "under_construction"
-    renovation = "renovation"
-
-
-class TankType(str, enum.Enum):
-    plastic = "plastic"
-    concrete = "concrete"
-    steel = "steel"
-    other = "other"
-
-
-
 class LossReasonEnum(str, enum.Enum):
     price = "price"
     competitor = "competitor"
@@ -44,15 +29,3 @@ class LossReasonEnum(str, enum.Enum):
     not_interested = "not_interested"
     other = "other"
 
-
-class HouseStageEnum(str, enum.Enum):
-    ready = "ready"
-    renovation = "renovation"
-    construction = "construction"
-
-
-class TankTypeEnum(str, enum.Enum):
-    concrete = "concrete"
-    plastic = "plastic"
-    none = "none"
-    other = "other"

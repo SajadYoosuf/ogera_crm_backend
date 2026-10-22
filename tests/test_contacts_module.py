@@ -1,5 +1,5 @@
 """Contacts module: consumer, partner and dealer rules, the duplicate phone rule, mobile-only fields,
-fixed lists, and who can see which contacts."""
+option lists, and who can see which contacts."""
 import pytest
 
 from seed_data import PASSWORD
@@ -131,9 +131,14 @@ def test_mobile_cannot_clear_address_on_edit(client, login, lead_source_id):
     assert response.status_code == 422  # an empty address fails the minimum length, so it cannot be cleared
 
 
-# --- fixed lists -----------------------------------------------------------------------------
+# --- option lists (house stage and tank type come from Settings) ----------------------------
 
-def test_house_stage_and_tank_type_are_fixed_values(client, login, lead_source_id):
+def _option(client, headers, category, value):
+    rows = client.get(f"/settings/enums/{category}", headers=headers).json()
+    return next(r for r in rows if r["value"] == value)
+
+
+def test_house_stage_and_tank_type_must_be_settings_options(client, login, lead_source_id):
     headers, _ = login("admin")
     bad_stage = _contact(client, headers, lead_source_id("meta"), phone="9100000030",
                          consumer_profile={"house_stage": "Under Construction - Structure"})
@@ -154,14 +159,61 @@ def test_partner_profession_is_a_fixed_value(client, login, lead_source_id):
     assert response.status_code == 422
 
 
-def test_fixed_lists_endpoints(client, login):
+def test_option_lists_are_seeded_in_settings(client, login):
     headers, _ = login("admin")
-    stages = [s["value"] for s in client.get("/contacts/house-stages", headers=headers).json()]
+    stages = [s["value"] for s in client.get("/settings/enums/house_stage", headers=headers).json()]
     assert stages == ["ready", "under_construction", "renovation"]
-    tanks = [t["value"] for t in client.get("/contacts/tank-types", headers=headers).json()]
+    tanks = [t["value"] for t in client.get("/settings/enums/tank_type", headers=headers).json()]
     assert tanks == ["plastic", "concrete", "steel", "other"]
     professions = [p["value"] for p in client.get("/contacts/partner-types", headers=headers).json()]
     assert "plumber" in professions and "other" in professions
+
+
+def test_old_fixed_list_endpoints_are_gone(client, login):
+    headers, _ = login("admin")
+    for path in ("/contacts/house-stages", "/contacts/tank-types"):
+        assert client.get(path, headers=headers).status_code in (404, 422)  # now only matches /contacts/{id}
+
+
+def test_admin_added_tank_type_is_accepted(client, login, lead_source_id):
+    headers, _ = login("admin")
+    added = client.post("/settings/enums/tank_type", json={"label": "PVC"}, headers=headers)
+    assert added.status_code == 201, added.text
+    assert added.json()["value"] == "pvc"
+    created = _contact(client, headers, lead_source_id("meta"), phone="9100000040",
+                       consumer_profile={"house_stage": "ready", "current_tank_type": "pvc"})
+    assert created.status_code == 201, created.text
+    assert created.json()["consumer_profile"]["current_tank_type"] == "pvc"
+    pvc = next(r for r in client.get("/settings/enums", headers=headers).json()["tank_type"] if r["value"] == "pvc")
+    assert pvc["usage_count"] == 1  # Settings shows how many contacts use it
+
+
+def test_hidden_house_stage_is_kept_on_old_records_but_not_offered(client, login, lead_source_id):
+    headers, _ = login("admin")
+    old = _contact(client, headers, lead_source_id("meta"), phone="9100000041",
+                   consumer_profile={"house_stage": "renovation"}).json()
+    renovation = _option(client, headers, "house_stage", "renovation")
+    hidden = client.patch(f"/settings/enums/house_stage/{renovation['id']}", json={"is_active": False}, headers=headers)
+    assert hidden.status_code == 200, hidden.text
+    assert "renovation" not in [r["value"] for r in client.get("/settings/enums/house_stage", headers=headers).json()]
+
+    blocked = _contact(client, headers, lead_source_id("meta"), phone="9100000042",
+                       consumer_profile={"house_stage": "renovation"})
+    assert blocked.status_code == 422
+    # Editing the old record, even re-sending its current stage, still works.
+    edited = client.put(f"/contacts/{old['id']}", headers=headers,
+                        json={"name": "Renamed", "consumer_profile": {"house_stage": "renovation"}})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["consumer_profile"]["house_stage"] == "renovation"
+
+
+def test_blank_house_stage_clears_it(client, login, lead_source_id):
+    headers, _ = login("admin")
+    contact = _contact(client, headers, lead_source_id("meta"), phone="9100000043").json()
+    cleared = client.put(f"/contacts/{contact['id']}", headers=headers, json={"consumer_profile": {"house_stage": ""}})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["consumer_profile"]["house_stage"] is None
+    assert "house_stage" in cleared.json()["missing_fields"]
 
 
 def test_awareness_mode_is_gone_from_contacts(client, login, lead_source_id):

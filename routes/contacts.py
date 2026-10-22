@@ -30,7 +30,7 @@ from schemas import (
     StageTypeItem,
 )
 from schemas.dealer_profile import DealerProfileResponse, DealerProfileUpdate
-from schemas.enums import HouseStage, TankType, profession_key
+from schemas.enums import profession_key
 import settings_catalog as catalog
 
 router = APIRouter(
@@ -132,6 +132,17 @@ def _check_type_profiles(contact_type: str, consumer_profile, partner_profile, d
         raise HTTPException(status_code=400, detail="partner_profile is only allowed for partner contacts")
     if dealer_profile is not None and contact_type != "dealer":
         raise HTTPException(status_code=400, detail="dealer_profile is only allowed for dealer contacts")
+
+
+def _check_consumer_options(db: Session, profile, current=None) -> None:
+    """House stage and tank type must be active options in Settings. A record's existing value stays allowed after
+    the option is hidden, so editing other fields never fails on it."""
+    if profile is None:
+        return
+    for field, category in (("house_stage", catalog.HOUSE_STAGE), ("current_tank_type", catalog.TANK_TYPE)):
+        value = getattr(profile, field)
+        if value is not None:
+            catalog.ensure_allowed(db, category, value, getattr(current, field, None))
 
 
 def contact_filters(
@@ -323,18 +334,6 @@ def list_stage_types(
 def list_profession_types(db: Session = Depends(get_db)):
     """Active partner types from Settings > Lists & Options. The `value` is what the API stores."""
     return [{"value": i.value, "label": i.label} for i in catalog.list_items(db, catalog.PROFESSIONAL_TYPE) if i.is_active]
-
-
-@router.get("/house-stages", summary="List house stages")
-def list_house_stages():
-    """Consumer house stages. Fixed in code, not in Settings."""
-    return [{"value": s.value, "label": s.value.replace("_", " ").title()} for s in HouseStage]
-
-
-@router.get("/tank-types", summary="List tank types")
-def list_tank_types():
-    """Consumer tank types. Fixed in code, not in Settings."""
-    return [{"value": t.value, "label": t.value.replace("_", " ").title()} for t in TankType]
 
 
 @router.get("/export", summary="Export contacts")
@@ -582,6 +581,7 @@ def create_contact(
     _check_type_profiles(body.contact_type, body.consumer_profile, body.partner_profile, body.dealer_profile)
     if body.partner_profile is not None:
         catalog.ensure_allowed(db, catalog.PROFESSIONAL_TYPE, body.partner_profile.profession_type)
+    _check_consumer_options(db, body.consumer_profile)
     if body.contact_type == "partner" and body.partner_profile is None:
         raise HTTPException(status_code=400, detail="partner_profile (with profession_type) is required for a partner")
     if body.contact_type == "dealer" and body.dealer_profile is None:
@@ -662,6 +662,7 @@ def update_contact(
 
     final_type = body.contact_type.value if body.contact_type is not None else contact.contact_type
     _check_type_profiles(final_type, body.consumer_profile, body.partner_profile, body.dealer_profile)
+    _check_consumer_options(db, body.consumer_profile, contact.consumer_profile)
 
     if "phone" in fields and body.phone is not None:
         _ensure_phone_free(db, body.phone, current_user, exclude_id=contact.id)
