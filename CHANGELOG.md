@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-10-22 — `fce4d1f` (branch `phase1-redesign`)
+
+**feat: house stage and tank type lists move to Settings**
+
+Author: sajad yoosuf
+Previous commit on this side: `c594251` docs: update changelog for 3ccaebf (2026-10-18)
+
+### Summary
+House stage and tank type are now Settings lists (`house_stage`, `tank_type`) instead of fixed lists in code, and their two unused endpoints are removed. Notes: [docs/changes/2026-10-22-house-stage-tank-type-settings.md](docs/changes/2026-10-22-house-stage-tank-type-settings.md).
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Modified | `settings_catalog.py` | New `HOUSE_STAGE` and `TANK_TYPE` categories with seed values; usage counts read `consumer_profiles` |
+| Modified | `routes/contacts.py` | `_check_consumer_options` on create and update (422 for a value not in Settings; a hidden value stays allowed on its own record); `GET /contacts/house-stages` and `GET /contacts/tank-types` removed |
+| Modified | `schemas/consumer_profile.py` | House stage and tank type are plain text (max 50); blank text clears the field |
+| Modified | `schemas/enums.py` | `HouseStage`, `TankType` and the unused `HouseStageEnum`, `TankTypeEnum` removed |
+| Modified | `schemas/__init__.py` | Dropped the removed enums from the exports |
+| Modified | `contact_import.py` | Sheet house stages matched to the Settings list by value or label, with the old "Under Construction - …" prefix rules |
+| Modified | `models/consumer_profile.py` | Comment points at Settings instead of the old enum |
+| Modified | `tests/test_contacts_module.py` | Tests for Settings-only values, an admin-added tank type and its usage count, a hidden stage kept on old records, and clearing |
+| Added | `docs/changes/2026-10-22-house-stage-tank-type-settings.md` | Change notes |
+
+### Notes
+- No migration. Seed values are inserted at startup by `seed_defaults`. Old free-text house stages already in the database (e.g. "Ready") still read and can be re-saved; cleaning them is a follow-up.
+- Tests: 226 passed on the working tree, 249 passed on the committed snapshot.
+- The same commit touched web and mobile, plus `rule.md` (rule 6) and `API.md`.
+
 ## 2026-10-18 — `3ccaebf` (branch `phase1-redesign`)
 
 **feat(backend): settings API for roles, partner types and my account**
