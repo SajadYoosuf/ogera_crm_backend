@@ -23,7 +23,7 @@ from business_time import ist_now
 MAX_ROWS = 5000
 MAX_BYTES = 5 * 1024 * 1024
 HEADER_SCAN_ROWS = 10
-MISSING_DISTRICT = None  # district is optional on the web; the mobile app requires it
+MISSING_DISTRICT = None  # district is optional at creation; required for verification
 
 FIELDS = {
     "name": "Name",
@@ -249,6 +249,8 @@ def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[i
         out = r.data
 
         out["name"] = (d.get("name") or "")[:150] or None
+        if not out["name"]:
+            r.warn("Name is missing; contact will be unverified")
 
         phone = normalize_phone(d.get("phone", ""))
         if phone is None:
@@ -376,7 +378,7 @@ def run_import(db: Session, results: list[RowResult], options: Options, assignee
         elif r.status == "duplicate" and options.duplicates == "update_blank":
             contact = db.get(Contact, r.existing_id)
             changed = False
-            for col in ("phone_alt", "address", "notes", "lead_source_id"):
+            for col in ("name", "phone_alt", "address", "notes", "lead_source_id"):
                 if getattr(contact, col) in (None, "") and r.data.get(col):
                     setattr(contact, col, r.data[col])
                     changed = True
