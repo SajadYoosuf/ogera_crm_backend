@@ -30,6 +30,35 @@ def _send(message: EmailMessage) -> None:
         server.send_message(message)
 
 
+# Role-specific access bullet points shown in the welcome email.
+# Each value is a list of plain-text bullet strings; the HTML version wraps them in <ul><li>.
+_ROLE_ACCESS_BULLETS: dict[str, list[str]] = {
+    "admin": [
+        "Full system configuration and settings control",
+        "User account creation, roles, and permission management",
+        "Data management, imports/exports, and system integrity oversight",
+        "Visibility across all teams, pipelines, and reports",
+    ],
+    "manager": [
+        "Track and manage leads and customer interactions in one place",
+        "Monitor deal progress and sales pipeline in real time",
+        "Generate reports and insights to guide planning and strategy",
+        "Collaborate more effectively with the sales and support teams",
+    ],
+    "sales_executive": [
+        "Your assigned leads and customer contacts",
+        "Tools to log calls, meetings, and follow-ups",
+        "Your personal sales pipeline and deal tracking",
+        "Reports on your own targets and performance",
+    ],
+}
+_DEFAULT_ACCESS_BULLETS = [
+    "Access to the features relevant to your role",
+    "Tools to manage customer interactions and track progress",
+    "Reports and insights to support your work",
+]
+
+
 def send_employee_credentials(name: str, email: str, password: str, role: str) -> dict:
     """Email a new employee their login details and report what happened.
 
@@ -48,25 +77,65 @@ def send_employee_credentials(name: str, email: str, password: str, role: str) -
         return {"sent": False, "message": f"Credentials email not sent: {exc}"}
 
     role_label = role.replace("_", " ").title()
+    bullets = _ROLE_ACCESS_BULLETS.get(role, _DEFAULT_ACCESS_BULLETS)
+    bullets_text = "\n".join(f"- {b}" for b in bullets)
+    bullets_html = "\n".join(f"    <li>{escape(b)}</li>" for b in bullets)
+
     text = (
-        f"Hi {name},\n\n"
-        f"A {SMTP_FROM_NAME} account has been created for you ({role_label}).\n\n"
-        f"Login URL: {APP_LOGIN_URL}\n"
-        f"Email:     {email}\n"
-        f"Password:  {password}\n\n"
-        "Please sign in and keep these details private.\n"
+        f"Dear {name},\n\n"
+        "Welcome to the team! We're glad to have you on board and looking forward to the impact you'll bring to this role.\n\n"
+        "As part of your onboarding, we'd like to introduce you to our CRM system, which will be central to how we manage customer relationships, track leads, and drive sales performance going forward.\n\n"
+        "Why we built this CRM:\n"
+        "Our goal is to give every team member a single, reliable view of our customers — from first inquiry to final sale — so nothing falls through the cracks and decisions are backed by real data rather than guesswork.\n\n"
+        f"Your role: {role_label}\n"
+        f"As a {role_label}, you'll have access to:\n"
+        f"{bullets_text}\n\n"
+        f"Your login credentials:\n"
+        f"URL:                {APP_LOGIN_URL}\n"
+        f"Username / Email:   {email}\n"
+        f"Temporary Password: {password}\n\n"
+        "For security, please log in and change your password at your earliest convenience. "
+        "A short walkthrough session will also be scheduled this week to help you get familiar with the system.\n\n"
+        "Feel free to reach out with any questions — we want to make sure you're fully equipped to hit the ground running.\n\n"
+        "Once again, welcome to the team. We're excited to have you with us.\n\n"
+        f"Best regards,\n{SMTP_FROM_NAME}\n"
     )
-    html = (
-        f"<p>Hi {escape(name)},</p>"
-        f"<p>A {escape(SMTP_FROM_NAME)} account has been created for you (<b>{escape(role_label)}</b>).</p>"
-        f"<p><b>Login URL:</b> <a href=\"{escape(APP_LOGIN_URL)}\">{escape(APP_LOGIN_URL)}</a><br>"
-        f"<b>Email:</b> {escape(email)}<br>"
-        f"<b>Password:</b> <code>{escape(password)}</code></p>"
-        "<p>Please sign in and keep these details private.</p>"
-    )
+    html = f"""
+<div style="font-family:Arial,sans-serif;font-size:15px;color:#222;max-width:600px;margin:0 auto">
+  <p>Dear <strong>{escape(name)}</strong>,</p>
+
+  <p>Welcome to the team! We're glad to have you on board and looking forward to the impact you'll bring to this role.</p>
+
+  <p>As part of your onboarding, we'd like to introduce you to our CRM system, which will be central to how we manage customer relationships, track leads, and drive sales performance going forward.</p>
+
+  <p><strong>Why we built this CRM:</strong><br>
+  Our goal is to give every team member a single, reliable view of our customers — from first inquiry to final sale — so nothing falls through the cracks and decisions are backed by real data rather than guesswork.</p>
+
+  <p><strong>Your role: {escape(role_label)}</strong><br>
+  As a {escape(role_label)}, you'll have access to:</p>
+  <ul>
+{bullets_html}
+  </ul>
+
+  <p><strong>Your login credentials:</strong></p>
+  <table style="border-collapse:collapse;margin-bottom:12px">
+    <tr><td style="padding:4px 12px 4px 0;color:#555">URL</td><td><a href="{escape(APP_LOGIN_URL)}">{escape(APP_LOGIN_URL)}</a></td></tr>
+    <tr><td style="padding:4px 12px 4px 0;color:#555">Username / Email</td><td>{escape(email)}</td></tr>
+    <tr><td style="padding:4px 12px 4px 0;color:#555">Temporary Password</td><td><code style="background:#f4f4f4;padding:2px 6px;border-radius:3px">{escape(password)}</code></td></tr>
+  </table>
+
+  <p>For security, please log in and change your password at your earliest convenience. A short walkthrough session will also be scheduled this week to help you get familiar with the system.</p>
+
+  <p>Feel free to reach out with any questions — we want to make sure you're fully equipped to hit the ground running.</p>
+
+  <p>Once again, welcome to the team. We're excited to have you with us.</p>
+
+  <p>Best regards,<br><strong>{escape(SMTP_FROM_NAME)}</strong></p>
+</div>
+"""
 
     message = EmailMessage()
-    message["Subject"] = f"Your {SMTP_FROM_NAME} login details"
+    message["Subject"] = f"Welcome Aboard — Your CRM Login Credentials Inside"
     message["From"] = formataddr((SMTP_FROM_NAME, SMTP_FROM))
     message["To"] = email
     message.set_content(text)
