@@ -8,11 +8,7 @@ from database import Base
 SYSTEM_ROLES = [
     ("admin", "Admin", "Full system access"),
     ("manager", "Manager", "Manages staff, all leads, reports"),
-    ("team_lead", "Team Lead", "Supervises a team of callers / sales"),
     ("sales_executive", "Sales Executive", "Sales executive (closes deals)"),
-    ("tele_caller", "Tele Caller", "Makes outbound/inbound calls, qualifies leads"),
-    ("field_executive", "Field Executive", "On-site visits, measurements, installs"),
-    ("support", "Support", "After-sales / customer support"),
 ]
 
 

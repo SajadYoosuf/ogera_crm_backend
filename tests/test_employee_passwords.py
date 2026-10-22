@@ -4,7 +4,7 @@ import pytest
 from routes import employees as employee_routes
 
 NEW_EMPLOYEE = {
-    "name": "Pat Password", "email": "pat@example.com", "role": "tele_caller", "phone": "9999900002",
+    "name": "Pat Password", "email": "pat@example.com", "role": "sales_executive", "phone": "9999900002",
 }
 
 
@@ -54,7 +54,7 @@ def test_admin_changing_a_password_emails_that_employee(client, login, notices):
     response = client.put(f"/employees/{raj['id']}", json={"password": "NewPass123"}, headers=admin_headers)
 
     assert response.status_code == 200, response.text
-    assert notices == [{"name": "Raj Field", "email": "raj@example.com"}]
+    assert notices == [{"name": "Raj Sales", "email": "raj@example.com"}]
 
 
 def test_editing_other_fields_does_not_send_a_password_email(client, login, notices):

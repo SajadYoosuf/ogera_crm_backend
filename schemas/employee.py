@@ -7,7 +7,7 @@ from .enums import RoleEnum
 
 _PHONE_RE = re.compile(r"^\+?[0-9]{7,15}$")
 
-# A role slug, e.g. "tele_caller". Whether it exists is checked against the `roles` table.
+# A role slug, e.g. "sales_executive". Whether it exists is checked against the `roles` table.
 RoleSlug = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,39}$")]
 
 
@@ -37,7 +37,6 @@ class EmployeeBase(BaseModel):
     email: EmailStr
     role: RoleSlug = RoleEnum.sales.value
     phone: Annotated[str, Field(max_length=20)] | None = None
-    team_lead_id: int | None = None
 
     @field_validator("name", mode="after")
     @classmethod
@@ -72,7 +71,6 @@ class EmployeeUpdate(BaseModel):
     email: EmailStr | None = None
     role: RoleSlug | None = None
     phone: Annotated[str, Field(max_length=20)] | None = None
-    team_lead_id: int | None = None
     is_active: bool | None = None
     password: str | None = None  # if provided, route handler re-hashes it
 

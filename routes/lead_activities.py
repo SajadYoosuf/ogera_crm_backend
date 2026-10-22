@@ -2,7 +2,7 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
-from contact_access import get_visible_contact
+from contact_lookup import get_live_contact
 from database import get_db
 from models import Employee
 from models.activity_log import ActivityLog
@@ -28,7 +28,7 @@ def list_activities(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    get_visible_contact(db, current_user, contact_id)
+    get_live_contact(db, contact_id)
     rows = (
         db.query(ActivityLog)
         .options(joinedload(ActivityLog.doer))
@@ -47,7 +47,7 @@ def create_activity(
     current_user: Employee = Depends(get_current_user),
 ):
     """Log an interaction that was not pre-scheduled (no followup_id). For completing a scheduled follow-up, use PATCH /tasks/{id}."""
-    get_visible_contact(db, current_user, contact_id)
+    get_live_contact(db, contact_id)
     catalog.ensure_allowed(db, catalog.ACTIVITY_TYPE, body.activity_type)
 
     done_by = current_user.id

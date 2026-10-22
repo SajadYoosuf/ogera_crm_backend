@@ -96,9 +96,3 @@ def test_product_names_are_distinct(admin):
     admin.post("/sales", json={"name": "B", "purchased_product": "Tank X"})
     admin.post("/sales", json={"name": "C"})
     assert admin.get("/sales/products").json() == ["Tank X"]
-
-
-def test_staff_can_read_but_not_change():
-    staff = _make_client("tele_caller")
-    assert staff.get("/sales").status_code == 200
-    assert staff.post("/sales", json={"name": "A"}).status_code == 403

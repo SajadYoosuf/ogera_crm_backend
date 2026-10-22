@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from auth import require_roles
+from auth import require_admin_or_manager
 from database import get_db
 from models import Employee, Role
 from schemas import (
@@ -11,14 +11,13 @@ from schemas import (
     RoleListResponse,
     RoleResponse,
     RoleUpdate,
-    RoleEnum,
 )
 
 router = APIRouter(prefix="/roles", tags=["roles"])
 
-# Reading roles is needed to build the employee form; changing them is admin-only.
-view_roles = require_roles(RoleEnum.admin, RoleEnum.manager)
-manage_roles = require_roles(RoleEnum.admin)
+# Roles are listed and changed by admin and manager (the guard the backend keeps).
+view_roles = require_admin_or_manager
+manage_roles = require_admin_or_manager
 
 DUPLICATE_ROLE = "A role with this name already exists"
 

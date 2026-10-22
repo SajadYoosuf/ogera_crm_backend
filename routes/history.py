@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
-from contact_access import get_visible_contact
+from contact_lookup import get_live_contact
 from database import get_db
 from models import ContactAssignment, Employee, FollowupReschedule, FollowupSchedule, LeadStage
 from models.activity_log import ActivityLog
@@ -19,7 +19,7 @@ def get_history(
     current_user: Employee = Depends(get_current_user),
 ):
     """Every stage move, scheduled follow-up, logged activity and owner change for one contact, newest first."""
-    contact = get_visible_contact(db, current_user, contact_id)
+    contact = get_live_contact(db, contact_id)
 
     items: list[HistoryItem] = []
 

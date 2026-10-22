@@ -1,15 +1,16 @@
 """Endpoints the mobile app depends on, exercised through the real app."""
+from seed_data import MOBILE_APP
 import datetime
 
 from database import SessionLocal
-from models import StageType
+from models import PipelineStage
 
 TODAY = datetime.date.today()
 
 
 def _stage_id(slug: str, contact_type: str = "consumer") -> int:
     with SessionLocal() as db:
-        row = db.query(StageType).filter(StageType.slug == slug, StageType.contact_type == contact_type).first()
+        row = db.query(PipelineStage).filter(PipelineStage.slug == slug, PipelineStage.contact_type == contact_type).first()
         assert row is not None, f"Stage '{slug}' for '{contact_type}' not seeded"
         return row.id
 
@@ -40,7 +41,7 @@ def test_login_returns_token_and_employee(login):
 
 
 def test_login_rejects_wrong_password(client):
-    response = client.post("/auth/login", json={"email": "anu@example.com", "password": "nope"})
+    response = client.post("/auth/login", json={"email": "anu@example.com", "password": "nope"}, headers=MOBILE_APP)
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid email or password"
 
@@ -65,7 +66,7 @@ def test_list_rows_carry_house_stage_and_location(client, login, lead_source_id)
 
 def test_stage_types_are_ordered_and_skip_legacy_referral(client, login):
     headers, _ = login("anu")
-    stages = client.get("/contacts/stage-types?contact_type=consumer", headers=headers).json()
+    stages = client.get("/pipeline/stages?contact_type=consumer", headers=headers).json()
     slugs = [s["slug"] for s in stages]
     assert slugs[0] == "new_lead" and "referral" not in slugs
     assert [s["order_index"] for s in stages] == list(range(len(stages)))
@@ -96,36 +97,12 @@ def test_directory_is_open_to_staff(client, login):
     assert set(directory.json()[0]) == {"id", "name", "role", "phone"}
 
 
-def test_employee_list_is_open_to_staff_but_hides_admins(client, login):
-    admin_headers, admin = login("admin")
-    headers, _ = login("anu")
-    listed = client.get("/employees", headers=headers)
-    assert listed.status_code == 200
-    roles = {e["role"] for e in listed.json()["items"]}
-    assert "admin" not in roles
-    assert client.get(f"/employees/{admin['id']}", headers=headers).status_code == 404
-    assert client.get(f"/employees/{admin['id']}", headers=admin_headers).status_code == 404
-    assert "admin" not in {e["role"] for e in client.get("/employees", headers=admin_headers).json()["items"]}
-
-
-def test_manager_list_also_hides_managers(client, login):
-    admin_headers, _ = login("admin")
-    created = client.post("/employees", json={
-        "name": "Mona Manager", "email": "mona@example.com", "password": "Passw0rd!",
-        "role": "manager", "phone": "9999900001",
-    }, headers=admin_headers).json()
-    manager_headers, _ = login("mona")
-    roles = {e["role"] for e in client.get("/employees", headers=manager_headers).json()["items"]}
-    assert "admin" not in roles and "manager" not in roles
-    assert client.get(f"/employees/{created['id']}", headers=manager_headers).status_code == 404
-
-
 def test_directory_hides_deactivated_staff(client, login):
     admin_headers, _ = login("admin")
     _, raj = login("raj")
     client.put(f"/employees/{raj['id']}", json={"is_active": False}, headers=admin_headers)
     names = [e["name"] for e in client.get("/employees/directory", headers=admin_headers).json()]
-    assert "Raj Field" not in names
+    assert "Raj Sales" not in names
 
 
 # --- follow-up tasks ------------------------------------------------------------------------
@@ -153,19 +130,6 @@ def test_schedule_then_complete_a_followup(client, login, lead_source_id):
     assert done.status_code == 200 and done.json()["status"] == "completed"
     log = client.get(f"/contacts/{contact['id']}/activities", headers=headers).json()
     assert any(a["notes"] == "Will order Friday" for a in log)
-
-
-def test_staff_cannot_complete_someone_elses_task(client, login, lead_source_id):
-    anu_headers, anu = login("anu")
-    raj_headers, _ = login("raj")
-    contact = _contact(client, anu_headers, lead_source_id, assigned_to=anu["id"])
-    due_at = (datetime.datetime.now() + datetime.timedelta(hours=2)).isoformat()
-    task = client.post(f"/contacts/{contact['id']}/followups", headers=anu_headers, json={
-        "channel": "call", "due_at": due_at, "assigned_to": anu["id"]}).json()
-    response = client.patch(f"/contacts/{contact['id']}/followups/{task['id']}",
-                            json={"status": "completed", "outcome": "done"}, headers=raj_headers)
-    # Not visible to this user, so it is reported as not found (the contact's existence is not revealed)
-    assert response.status_code == 404
 
 
 # --- awareness filter, source slug, partners ------------------------------------------------

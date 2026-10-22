@@ -18,8 +18,8 @@ from database import SessionLocal, engine
 import models  # noqa: F401
 from models import Contact, PartnerProfile, Employee, LeadSource
 
-# Owner must not be admin / manager / support
-EXCLUDED_ROLES = ("admin", "manager", "support")
+# Owner must not be admin / manager
+EXCLUDED_ROLES = ("admin", "manager")
 OWNER_EMAIL = None  # None -> the single active employee outside EXCLUDED_ROLES
 MISSING_DISTRICT = "Unknown"  # contacts.district is NOT NULL
 LEAD_SOURCE_SLUG = "offline"

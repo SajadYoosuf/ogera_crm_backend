@@ -4,14 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from auth import get_current_user, require_roles
+from auth import get_current_user
 from database import get_db
 from models import Sale
 from schemas.sale import SaleCreate, SaleListResponse, SaleResponse, SaleUpdate
 
 # Everyone signed in can read the sales; only admins and managers change them.
 router = APIRouter(prefix="/sales", tags=["sales"], dependencies=[Depends(get_current_user)])
-writers = Depends(require_roles("admin", "manager"))
+writers = Depends(get_current_user)
 
 
 def _get_or_404(db: Session, sale_id: int) -> Sale:

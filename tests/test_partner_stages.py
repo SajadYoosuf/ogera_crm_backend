@@ -1,6 +1,6 @@
 """Partners move through their own pipeline; consumers keep theirs."""
 from database import SessionLocal
-from models import StageType
+from models import PipelineStage
 
 
 def _contact(client, headers, sources, **overrides):
@@ -22,7 +22,7 @@ def _partner(client, headers, sources):
 
 def _stage_id(slug: str, contact_type: str) -> int:
     with SessionLocal() as db:
-        row = db.query(StageType).filter(StageType.slug == slug, StageType.contact_type == contact_type).first()
+        row = db.query(PipelineStage).filter(PipelineStage.slug == slug, PipelineStage.contact_type == contact_type).first()
         assert row is not None, f"Stage '{slug}' for type '{contact_type}' not seeded"
         return row.id
 
@@ -63,7 +63,7 @@ def test_consumer_cannot_use_partner_only_stages(client, login, lead_source_id):
 
 def test_partner_stages_do_not_appear_on_the_consumer_board(client, login):
     headers, _ = login("anu")
-    slugs = [s["slug"] for s in client.get("/contacts/stage-types?contact_type=consumer", headers=headers).json()]
+    slugs = [s["slug"] for s in client.get("/pipeline/stages?contact_type=consumer", headers=headers).json()]
     assert not {"demo_introduction", "active", "inactive"} & set(slugs)
 
 

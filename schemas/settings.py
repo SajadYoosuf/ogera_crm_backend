@@ -59,33 +59,3 @@ class CompanyUpdate(BaseModel):
     @classmethod
     def clean_name(cls, v: str | None) -> str | None:
         return None if v is None else _clean(v)
-
-
-class PermissionChange(BaseModel):
-    allowed: bool
-
-
-class PermissionCell(BaseModel):
-    level: str  # full | view | own | team | customers | none
-    note: str | None = None
-    editable: bool = False  # the viewer may switch this cell on or off
-
-
-class PermissionFeature(BaseModel):
-    key: str
-    label: str
-    description: str
-    action: str | None = None  # the role_access action this row switches; None = read-only row
-    levels: dict[str, PermissionCell]  # role slug -> access
-
-
-class PermissionRole(BaseModel):
-    slug: str
-    name: str
-    is_system: bool
-    is_active: bool
-
-
-class PermissionMatrix(BaseModel):
-    roles: list[PermissionRole]
-    features: list[PermissionFeature]

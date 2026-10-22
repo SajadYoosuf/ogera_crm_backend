@@ -3,7 +3,7 @@ import datetime
 
 from business_time import IST_OFFSET, ist_day_start_utc, today_ist
 from database import SessionLocal
-from models import Contact, FollowupSchedule, LeadStage, StageType
+from models import Contact, FollowupSchedule, LeadStage, PipelineStage
 from routes.dashboard import window_for
 
 
@@ -33,7 +33,7 @@ def _backdate_contact(contact_id, ist_naive):
 
 def _stage_id(slug, contact_type="consumer"):
     with SessionLocal() as db:
-        return db.query(StageType).filter(StageType.slug == slug, StageType.contact_type == contact_type).one().id
+        return db.query(PipelineStage).filter(PipelineStage.slug == slug, PipelineStage.contact_type == contact_type).one().id
 
 
 def _insert_followup(assigned_to, due_at, status="todo", contact_id=None, title="Call back"):
@@ -130,36 +130,6 @@ def test_all_time_has_no_change_figure(client, login, lead_source_id):
 
 
 # --- role scope -----------------------------------------------------------------------
-
-def test_staff_see_only_their_own_contacts_and_leads(client, login, lead_source_id):
-    headers_anu, anu = login("anu")
-    headers_admin, admin = login("admin")
-    _, raj = login("raj")
-    _contact(client, headers_anu, lead_source_id, anu["id"], name="Anu's", phone="9811111111")
-    _contact(client, headers_admin, lead_source_id, raj["id"], name="Raj's", phone="9811111112")
-
-    staff = _summary(client, headers_anu, "all")
-    assert staff["kpis"]["total_contacts"] == 1
-    assert [lead["name"] for lead in staff["recent_leads"]] == ["Anu's"]
-
-    everyone = _summary(client, headers_admin, "all")
-    assert everyone["kpis"]["total_contacts"] == 2
-    assert len(everyone["recent_leads"]) == 2
-
-
-def test_staff_see_only_follow_ups_assigned_to_them(client, login):
-    headers_anu, anu = login("anu")
-    headers_admin, _ = login("admin")
-    _, raj = login("raj")
-    _insert_followup(anu["id"], _today_at(9, days=-1), title="Anu overdue")
-    _insert_followup(raj["id"], _today_at(9, days=-1), title="Raj overdue")
-
-    staff = _summary(client, headers_anu)
-    assert staff["followups_total"] == 1
-    assert staff["followups"][0]["title"] == "Anu overdue"
-
-    assert _summary(client, headers_admin)["followups_total"] == 2
-
 
 # --- won -------------------------------------------------------------------------------
 

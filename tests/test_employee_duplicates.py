@@ -5,7 +5,7 @@ PASSWORD = "Passw0rd!"
 
 def _body(**overrides):
     body = {"name": "New Person", "email": "new.person@example.com", "password": PASSWORD,
-            "role": "tele_caller", "phone": "9911100001"}
+            "role": "sales_executive", "phone": "9911100001"}
     body.update(overrides)
     return body
 

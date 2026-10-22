@@ -10,14 +10,13 @@ import json
 import contact_export
 import contact_import
 from business_time import ist_day_start_utc
-from auth import get_current_user, require_roles
-from contact_access import get_visible_contact, has_full_access, visible_to
-from role_access import ensure_can_create_type, ensure_can_move_to, require_action
+from auth import get_current_user
+from contact_lookup import get_live_contact
 from database import get_db
 from phone_utils import phone_key
 from request_context import client_platform
 from verification import missing_fields, verified_clause
-from models import Contact, ConsumerProfile, ContactAssignment, DealerProfile, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, StageType
+from models import Contact, ConsumerProfile, ContactAssignment, DealerProfile, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage
 from schemas import (
     ContactCreate,
     ContactListItem,
@@ -27,7 +26,7 @@ from schemas import (
     ContactUpdate,
     LeadStageCreate,
     LeadStageResponse,
-    StageTypeItem,
+    PipelineStageItem,
 )
 from schemas.dealer_profile import DealerProfileResponse, DealerProfileUpdate
 from schemas.enums import profession_key
@@ -38,13 +37,11 @@ router = APIRouter(
 )
 
 # Roles that never receive auto-assigned leads
-NON_ASSIGNABLE_ROLES = ("admin", "manager", "support")
-# Roles that may import contacts
-MANAGER_ROLES = ("admin", "manager")
+NON_ASSIGNABLE_ROLES = ("admin", "manager")
 
 
 def _stage_response(stage: LeadStage) -> LeadStageResponse:
-    """Build a LeadStageResponse including slug/name/type from the joined StageType (lazy-loaded ok)."""
+    """Build a LeadStageResponse including slug/name/type from the joined PipelineStage (lazy-loaded ok)."""
     st = stage.stage_type
     r = LeadStageResponse.model_validate(stage, from_attributes=True)
     if st is not None:
@@ -56,12 +53,12 @@ def _stage_response(stage: LeadStage) -> LeadStageResponse:
     return r
 
 
-def _get_new_lead_stage(db: Session, contact_type: str) -> StageType:
-    """Return the 'new_lead' StageType row for the given contact_type."""
-    st = db.query(StageType).filter(
-        StageType.slug == "new_lead",
-        StageType.contact_type == contact_type,
-        StageType.is_active == 1,
+def _get_new_lead_stage(db: Session, contact_type: str) -> PipelineStage:
+    """Return the 'new_lead' PipelineStage row for the given contact_type."""
+    st = db.query(PipelineStage).filter(
+        PipelineStage.slug == "new_lead",
+        PipelineStage.contact_type == contact_type,
+        PipelineStage.is_active == 1,
     ).first()
     if not st:
         raise HTTPException(status_code=500, detail="Pipeline not seeded: new_lead stage missing")
@@ -69,7 +66,7 @@ def _get_new_lead_stage(db: Session, contact_type: str) -> StageType:
 
 
 def _pick_random_assignee(db: Session) -> int:
-    """Random active employee who is not an admin, manager or support."""
+    """Random active employee who is not an admin or manager."""
     employee = (
         db.query(Employee)
         .filter(
@@ -89,16 +86,13 @@ def _pick_random_assignee(db: Session) -> int:
 
 def _ensure_phone_free(db: Session, phone: str, user: Employee, exclude_id: int | None = None) -> None:
     """One phone number belongs to one live contact, whatever its type. Compared on the last 10 digits.
-    The message names the other contact only for admins and managers, so a restricted user cannot probe contacts."""
+    The message names the other contact so the user can open it."""
     q = db.query(Contact.id).filter(Contact.phone_key == phone_key(phone), Contact.deleted_at.is_(None))
     if exclude_id is not None:
         q = q.filter(Contact.id != exclude_id)
     hit = q.first()
     if hit is not None:
-        detail = "A contact with this phone number already exists"
-        if has_full_access(user):
-            detail += f" (contact {hit.id})"
-        raise HTTPException(status_code=409, detail=detail)
+        raise HTTPException(status_code=409, detail=f"A contact with this phone number already exists (contact {hit.id})")
 
 
 def _ensure_referrer(db: Session, referred_by_id: int | None, contact_id: int | None = None):
@@ -183,9 +177,6 @@ def contact_query(db: Session, f: dict, entities, user: Employee):
         .outerjoin(current, current.id == latest.c.latest_row_id)
         .filter(Contact.deleted_at.is_(None))  # Exclude soft-deleted
     )
-    scope = visible_to(user)
-    if scope is not None:  # staff see only their own creations and assignments
-        q = q.filter(scope)
     if "contact_type" in f:
         q = q.filter(Contact.contact_type == f["contact_type"].value)
     if "profession_type" in f:
@@ -264,7 +255,7 @@ def list_contacts(
     stage_ids = {s.stage_id for _, s in rows if s is not None}
     stage_meta: dict[int, tuple[str, str]] = {}
     if stage_ids:
-        for st in db.query(StageType).filter(StageType.id.in_(stage_ids)).all():
+        for st in db.query(PipelineStage).filter(PipelineStage.id.in_(stage_ids)).all():
             stage_meta[st.id] = (st.slug, st.name)
 
     items = []
@@ -308,27 +299,6 @@ def list_contacts(
     return ContactListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
-@router.get("/stage-types", response_model=list[StageTypeItem], summary="List pipeline stages")
-def list_stage_types(
-    contact_type: ContactType | None = Query(None, description="Filter stages to one pipeline (consumer, partner or dealer)"),
-    db: Session = Depends(get_db),
-):
-    """Pipeline stages in board order. Pass contact_type to get only the stages for that pipeline."""
-    q = db.query(StageType).filter(StageType.is_active == 1)
-    if contact_type is not None:
-        q = q.filter(StageType.contact_type == contact_type.value)
-    rows = q.order_by(StageType.order, StageType.id).all()
-    return [
-        StageTypeItem(
-            id=r.id,
-            slug=r.slug,
-            label=r.name,
-            order_index=i,
-            contact_type=r.contact_type,
-        )
-        for i, r in enumerate(rows)
-    ]
-
 
 @router.get("/partner-types", summary="List partner profession types")
 def list_profession_types(db: Session = Depends(get_db)):
@@ -344,9 +314,8 @@ def export_contacts(
     current_user: Employee = Depends(get_current_user),
 ):
     """Downloads the contacts matching the list filters as CSV, Excel or PDF (`format`).
-    It uses the same filters and the same visibility as the list, so the export matches what is on screen.
+    It uses the same filters as the list, so the export matches what is on screen.
     """
-    require_action(db, current_user, "export")
     total = contact_query(db, f, lambda cur: (func.count(Contact.id),), current_user).scalar() or 0
     limit = contact_export.MAX_ROWS[format]
     if total > limit:
@@ -370,7 +339,7 @@ def export_contacts(
     export_stage_ids = {s.stage_id for _, s in rows if s is not None}
     export_stage_slugs: dict[int, str] = {}
     if export_stage_ids:
-        for st in db.query(StageType).filter(StageType.id.in_(export_stage_ids)).all():
+        for st in db.query(PipelineStage).filter(PipelineStage.id.in_(export_stage_ids)).all():
             export_stage_slugs[st.id] = st.slug
     table = contact_export.build_rows(
         [(c, export_stage_slugs.get(s.stage_id) if s else None, not missing_fields(c)) for c, s in rows]
@@ -433,10 +402,10 @@ def analyze_import(
     default_source_id: int | None = Form(None),
     duplicates: str = Form("skip"),
     db: Session = Depends(get_db),
-    _: Employee = Depends(require_roles("admin", "manager")),
+    _: Employee = Depends(get_current_user),
 ):
     """Reads an uploaded sheet and reports the detected columns and every row that needs attention.
-    Nothing is written. Admin and manager only.
+    Nothing is written.
     """
     rows, header_row, chosen = _read_upload(file, mapping)
     options = _import_options(default_type, default_source_id, duplicates)
@@ -473,11 +442,10 @@ def commit_import(
     duplicates: str = Form("skip"),
     assigned_to: int | None = Form(None, description="Owner for every imported contact; random eligible employee when omitted"),
     db: Session = Depends(get_db),
-    current_user: Employee = Depends(require_roles("admin", "manager")),
+    current_user: Employee = Depends(get_current_user),
 ):
     """Writes the ready and warning rows of an uploaded sheet. Error rows are skipped.
     `duplicates` decides what happens to a row that matches an existing contact (skip it, or fill only its blank fields).
-    Admin and manager only.
     """
     rows, header_row, chosen = _read_upload(file, mapping)
     if "name" not in chosen.values() or "phone" not in chosen.values():
@@ -508,11 +476,8 @@ def contact_type_counts(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """A live count of the contacts this user can see, per type (consumer, partner, dealer), for the tab badges."""
+    """A live count of the contacts per type (consumer, partner, dealer), for the tab badges."""
     q = db.query(Contact.contact_type, func.count(Contact.id)).filter(Contact.deleted_at.is_(None))
-    scope = visible_to(current_user)
-    if scope is not None:
-        q = q.filter(scope)
     rows = q.group_by(Contact.contact_type).all()
     counts = {"consumer": 0, "partner": 0, "dealer": 0}
     for kind, total in rows:
@@ -527,9 +492,9 @@ def get_contact(
     current_user: Employee = Depends(get_current_user),
 ):
     """One contact with its current stage, referral count and verification status (`is_verified`, `missing_fields`).
-    Returns 404 if the id is unknown, the contact is deleted, or the user is not allowed to see it.
+    Returns 404 if the id is unknown or the contact is deleted.
     """
-    contact = get_visible_contact(db, current_user, contact_id)
+    contact = get_live_contact(db, contact_id)
 
     response = ContactResponse.model_validate(contact, from_attributes=True)
 
@@ -566,8 +531,6 @@ def create_contact(
     Offline leads need latitude and longitude. Returns 400 for an unknown source, owner, referrer or a details block on the wrong type.
     Returns 409 when the phone number already belongs to another contact.
     """
-    require_action(db, current_user, "create_contact")
-    ensure_can_create_type(db, current_user, body.contact_type.value if body.contact_type else "consumer")
     if platform == "mobile":
         missing = [name for name in ("address", "district") if not getattr(body, name)]
         if missing:
@@ -631,7 +594,7 @@ def update_contact(
     The same rules as create apply: details must match the contact type, offline leads need a location, the referrer must exist and cannot be the contact itself.
     Address and district cannot be cleared, and a changed phone number must not belong to another contact.
     """
-    contact = get_visible_contact(db, current_user, contact_id)
+    contact = get_live_contact(db, contact_id)
 
     if body.assigned_to is not None:
         if not db.query(Employee).filter(Employee.id == body.assigned_to).first():
@@ -747,8 +710,8 @@ def delete_contact(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Soft delete. The contact disappears from lists, but its row and history are kept. Returns 404 if it is gone or not visible to you."""
-    contact = get_visible_contact(db, current_user, contact_id)
+    """Soft delete. The contact disappears from lists, but its row and history are kept. Returns 404 if it is gone."""
+    contact = get_live_contact(db, contact_id)
 
     contact.deleted_at = datetime.utcnow()
     db.add(contact)
@@ -764,7 +727,7 @@ def get_contact_stages(
     current_user: Employee = Depends(get_current_user),
 ):
     """Every stage a contact has been in, ordered by the time it was set. The newest entry is the current stage."""
-    get_visible_contact(db, current_user, contact_id)
+    get_live_contact(db, contact_id)
 
     stages = (
         db.query(LeadStage)
@@ -788,21 +751,19 @@ def add_contact_stage(
     The stage must belong to the contact's pipeline (stage_types.contact_type must match).
     A loss reason must be configured in Settings. The signed-in user and the time are recorded.
     """
-    contact = get_visible_contact(db, current_user, contact_id)
+    contact = get_live_contact(db, contact_id)
 
     employee = db.query(Employee).filter(Employee.id == body.changed_by).first()
     if not employee:
         raise HTTPException(status_code=400, detail="Employee not found")
 
     # Look up the stage being requested
-    stage_type = db.query(StageType).filter(
-        StageType.id == body.stage_id,
-        StageType.is_active == 1,
+    stage_type = db.query(PipelineStage).filter(
+        PipelineStage.id == body.stage_id,
+        PipelineStage.is_active == 1,
     ).first()
     if not stage_type:
         raise HTTPException(status_code=400, detail="Stage not found")
-
-    ensure_can_move_to(db, current_user, stage_type.slug)
 
     # The stage must belong to this contact's pipeline (lost is allowed from any pipeline)
     if stage_type.slug != "lost" and stage_type.contact_type != contact.contact_type:

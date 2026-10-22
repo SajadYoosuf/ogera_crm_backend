@@ -1,8 +1,7 @@
 from .role import Role, SYSTEM_ROLES, seed_system_roles
-from .role_permission import RolePermission
 from .employee import Employee
 from .lead_source import LeadSource
-from .stage_type import StageType
+from .pipeline_stage import PipelineStage
 from .enum_value import EnumValue
 from .company_setting import CompanySetting
 from .contact import Contact
@@ -23,10 +22,9 @@ __all__ = [
     "Role",
     "SYSTEM_ROLES",
     "seed_system_roles",
-    "RolePermission",
     "Employee",
     "LeadSource",
-    "StageType",
+    "PipelineStage",
     "EnumValue",
     "CompanySetting",
     "Contact",

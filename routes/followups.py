@@ -2,8 +2,7 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
-from contact_access import ensure_can_assign, get_visible_contact, visible_assignee_ids
-from role_access import ensure_can_schedule_for
+from contact_lookup import get_live_contact
 from database import get_db
 import config
 from models import Contact, Employee, FollowupSchedule
@@ -22,7 +21,6 @@ router = APIRouter(
     prefix="/contacts", tags=["followups"], dependencies=[Depends(get_current_user)]
 )
 
-MONITORING_ROLES = {"admin", "manager"}
 RETRY_OUTCOMES = {"no_answer", "not_now"}
 # Older clients send these short names. They stay as stored names so existing rows and apps keep matching.
 LEGACY_CHANNELS = {"call": "phone_call", "visit": "field_visit"}
@@ -81,7 +79,7 @@ def list_followups(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    get_visible_contact(db, current_user, contact_id)
+    get_live_contact(db, contact_id)
     rows = (
         db.query(FollowupSchedule)
         .options(joinedload(FollowupSchedule.contact), joinedload(FollowupSchedule.assignee))
@@ -99,14 +97,10 @@ def create_followup(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    get_visible_contact(db, current_user, contact_id)
+    get_live_contact(db, contact_id)
     assignee = db.query(Employee).filter(Employee.id == body.assigned_to).first()
     if not assignee or assignee.deleted_at or not assignee.is_active:
         raise HTTPException(status_code=400, detail="Assigned employee not found or inactive")
-    if assignee.role in MONITORING_ROLES:
-        raise HTTPException(status_code=400, detail="Follow-ups cannot be assigned to an admin or manager")
-    ensure_can_schedule_for(db, current_user, body.assigned_to)
-    ensure_can_assign(db, current_user, body.assigned_to)
     fs = FollowupSchedule(
         contact_id=contact_id,
         assigned_to=body.assigned_to,
@@ -137,14 +131,11 @@ def update_followup(
     outcome in (no_answer, not_now) → auto-schedules a retry follow-up.
     Reschedule (due_at) or skip (status=skipped) are the other operations.
     """
-    get_visible_contact(db, current_user, contact_id)
+    get_live_contact(db, contact_id)
     fs = _get_followup_or_404(db, contact_id, followup_id)
 
     if fs.status == "completed":
         raise HTTPException(status_code=409, detail="Follow-up is already completed")
-    visible = visible_assignee_ids(db, current_user)
-    if visible is not None and fs.assigned_to not in visible:
-        raise HTTPException(status_code=403, detail="This follow-up is assigned to someone else")
 
     if body.status == "completed":
         fs.status = "completed"

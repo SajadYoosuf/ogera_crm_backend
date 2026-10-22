@@ -6,19 +6,18 @@ from models import Employee, LeadSource
 
 PASSWORD = "Passw0rd!"
 
-# One employee per role in the permission matrix (rule.md / routes/*.py), so any test or live
-# e2e run can log in as any of the 7 roles without building its own fixtures first.
-# team_lead_id is left NULL here on purpose: team_lead-scoped access needs a specific team shape
-# (lead + member + outsider), which tests build themselves (see test_team_access.py::_team).
+# Header the mobile app sends. Sales executives may only sign in from the mobile app, so tests sign in with it.
+MOBILE_APP = {"x-client-type": "mobile"}
+
+# One admin, one manager and three sales executives, so any test or live e2e run can log in as each
+# role, and as a second and third staff member, without building its own fixtures first.
 STAFF = [
     # key, name, role, phone
     ("admin", "Ada Admin", "admin", "9000000001"),
     ("manager", "Mani Manager", "manager", "9000000002"),
     ("anu", "Anu Sales", "sales_executive", "9000000003"),
-    ("raj", "Raj Field", "field_executive", "9000000004"),
-    ("tara", "Tara Lead", "team_lead", "9000000005"),
-    ("shiny", "Shiny Caller", "tele_caller", "9000000006"),
-    ("sam", "Sam Support", "support", "9000000007"),
+    ("raj", "Raj Sales", "sales_executive", "9000000004"),
+    ("sam", "Sam Sales", "sales_executive", "9000000007"),
 ]
 
 LEAD_SOURCES = (

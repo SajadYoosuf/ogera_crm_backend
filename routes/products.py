@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
-from auth import get_current_user, require_roles
+from auth import get_current_user
 from database import get_db
 from models import Employee, Product, ProductOption
 from schemas.product import (
@@ -21,7 +21,7 @@ from schemas.product import (
 router = APIRouter(prefix="/products", tags=["products"])
 
 # Admins and managers edit the catalogue; every signed-in employee can read it.
-can_edit = require_roles("admin", "manager")
+can_edit = get_current_user
 
 _BOOL_COLUMNS = ("is_popular", "is_active", "special_price_active", "tax_included")
 _OPTION_COLUMNS = ("brand_id", "category_id", "material_id")

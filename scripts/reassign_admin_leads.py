@@ -1,6 +1,6 @@
 """
 Move contacts that are assigned to an admin over to other employees.
-Each one goes to a random active employee who is not an admin, manager or support
+Each one goes to a random active employee who is not an admin or manager
 (the same pool as auto-assignment on POST /contacts).
     python scripts/reassign_admin_leads.py           # dry run
     python scripts/reassign_admin_leads.py --commit
@@ -17,7 +17,7 @@ from database import SessionLocal, engine
 import models  # noqa: F401
 from models import Contact, Employee
 
-NON_ASSIGNABLE_ROLES = ("admin", "manager", "support")
+NON_ASSIGNABLE_ROLES = ("admin", "manager")
 
 
 def main():

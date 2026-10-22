@@ -256,14 +256,6 @@ def test_analyze_rejects_empty_file(client, login, lead_source_id):
     assert r.status_code == 400
 
 
-def test_analyze_rejects_non_admin(client, login, lead_source_id):
-    headers, _ = login("anu")
-    content = _csv([["Name", "Phone"], ["Test", "9100001060"]])
-    r = _upload(client, headers, "/contacts/import/analyze", content,
-                default_source_id=lead_source_id("meta"))
-    assert r.status_code == 403
-
-
 # --- commit: creates rows and skips errors --------------------------------------------------
 
 def test_commit_creates_ready_and_warning_rows_skips_errors(client, login, lead_source_id):
@@ -391,12 +383,3 @@ def test_commit_requires_name_and_phone_columns_mapped(client, login, lead_sourc
                 default_source_id=str(lead_source_id("meta")))
     assert r.status_code == 400
     assert "Phone" in r.json()["detail"]
-
-
-def test_commit_rejects_non_admin(client, login, lead_source_id):
-    headers, _ = login("anu")
-    content = _csv([["Name", "Phone"], ["Test", "9100002060"]])
-    r = _upload(client, headers, "/contacts/import/commit", content,
-                mapping='{"0":"name","1":"phone"}',
-                default_source_id=str(lead_source_id("meta")))
-    assert r.status_code == 403

@@ -24,8 +24,8 @@ def _bigint_as_integer(type_, compiler, **kw):
 
 
 from database import Base, SessionLocal, engine  # noqa: E402
-from models import LeadSource, StageType  # noqa: E402
-from seed_data import PASSWORD, email_of, seed  # noqa: E402
+from models import LeadSource, PipelineStage  # noqa: E402
+from seed_data import MOBILE_APP, PASSWORD, email_of, seed  # noqa: E402
 
 
 @pytest.fixture()
@@ -49,7 +49,7 @@ def login(client):
     """login("anu") -> (Authorization headers, employee json)."""
 
     def _login(key: str):
-        response = client.post("/auth/login", json={"email": email_of(key), "password": PASSWORD})
+        response = client.post("/auth/login", json={"email": email_of(key), "password": PASSWORD}, headers=MOBILE_APP)
         assert response.status_code == 200, response.text
         body = response.json()
         return {"Authorization": f"Bearer {body['access_token']}"}, body["employee"]
@@ -71,10 +71,10 @@ def stage_id_for():
     """stage_id_for("new_lead", "consumer") -> stage_types.id."""
     def _lookup(slug: str, contact_type: str = "consumer") -> int:
         with SessionLocal() as db:
-            row = db.query(StageType).filter(
-                StageType.slug == slug,
-                StageType.contact_type == contact_type,
-                StageType.is_active == 1,
+            row = db.query(PipelineStage).filter(
+                PipelineStage.slug == slug,
+                PipelineStage.contact_type == contact_type,
+                PipelineStage.is_active == 1,
             ).first()
             assert row is not None, f"Stage '{slug}' for type '{contact_type}' not found — pipeline not seeded?"
             return row.id

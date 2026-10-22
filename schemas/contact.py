@@ -76,7 +76,7 @@ Longitude = Annotated[float, Field(ge=-180, le=180)]
 class ContactCreate(ContactBase):
     # Phone and lead source are always required
     lead_source_id: int
-    # Omit to auto-assign a random eligible employee (not admin / manager / support)
+    # Omit to auto-assign a random eligible employee (not admin / manager)
     assigned_to: int | None = None
     # Required for Offline (field visit) leads, not allowed for other sources
     latitude: Latitude | None = None
@@ -181,9 +181,9 @@ class ContactListItem(BaseModel):
     missing_fields: list[str] = []
 
 
-class StageTypeItem(BaseModel):
+class PipelineStageItem(BaseModel):
     """One pipeline stage, in board order."""
-    id: int        # stage_types.id — use this as stage_id when moving a contact
+    id: int        # pipeline_stages.id — use this as stage_id when moving a contact
     slug: str
     label: str
     order_index: int

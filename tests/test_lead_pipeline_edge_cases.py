@@ -34,14 +34,6 @@ def test_follow_up_cannot_be_scheduled_in_the_past(client, login, lead_source_id
     assert "cannot be in the past" in response.text
 
 
-def test_follow_up_cannot_be_assigned_to_a_manager(client, login, lead_source_id):
-    headers, anu = login("anu")
-    _, manager = login("manager")
-    contact = _consumer(client, headers, lead_source_id, anu["id"])
-    response = _followup(client, headers, contact["id"], manager["id"])
-    assert response.status_code == 400
-
-
 def test_follow_up_channel_must_be_an_active_activity_type(client, login, lead_source_id):
     headers, anu = login("anu")
     contact = _consumer(client, headers, lead_source_id, anu["id"])
@@ -128,23 +120,6 @@ def test_a_refused_reschedule_leaves_no_history_row(client, login, lead_source_i
 
 
 # --- who may act -------------------------------------------------------------------
-
-def test_a_field_executive_cannot_act_on_someone_elses_lead(client, login, lead_source_id):
-    anu_headers, anu = login("anu")
-    contact = _consumer(client, anu_headers, lead_source_id, anu["id"])
-    task = _followup(client, anu_headers, contact["id"], anu["id"]).json()
-    field_headers, _ = login("raj")  # field executive: not assigned to this lead
-    url = f"/contacts/{contact['id']}/followups/{task['id']}"
-    assert client.patch(url, headers=field_headers, json={"due_at": _due(4)}).status_code == 404  # the lead is hidden from them
-    assert client.patch(url, headers=field_headers, json={"status": "completed", "outcome": "done", "notes": "x"}).status_code == 404
-
-
-def test_history_of_a_hidden_lead_is_not_visible(client, login, lead_source_id):
-    anu_headers, anu = login("anu")
-    contact = _consumer(client, anu_headers, lead_source_id, anu["id"])
-    field_headers, _ = login("raj")
-    assert client.get(f"/contacts/{contact['id']}/history", headers=field_headers).status_code == 404
-
 
 def test_manager_can_reschedule_any_follow_up(client, login, lead_source_id):
     anu_headers, anu = login("anu")

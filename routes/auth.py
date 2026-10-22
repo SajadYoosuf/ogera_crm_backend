@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from database import get_db
 from models import Employee
-from auth import verify_password, create_access_token, get_current_user, get_password_hash
+from auth import HEAD_OFFICE_ROLES, verify_password, create_access_token, get_current_user, get_password_hash
+from request_context import client_platform
 from mailer import send_password_changed_notice
 from schemas import EmployeeResponse
 from schemas.employee import _validate_password
@@ -32,9 +33,11 @@ class LoginResponse(BaseModel):
 def login(
     body: LoginRequest,
     db: Session = Depends(get_db),
+    platform: str = Depends(client_platform),
 ):
     """Sign in with email and password. Returns a bearer token (valid 5 days by default) and the employee's profile.
-    Returns 401 for an unknown email or a wrong password, and 403 if the account is inactive or deleted.
+    Returns 401 for an unknown email or a wrong password, and 403 if the account is inactive or deleted,
+    or if a role other than admin or manager signs in on the website.
     Send the token as `Authorization: Bearer <token>` on every later request.
     """
     employee = db.query(Employee).filter(Employee.email == body.email).first()
@@ -55,6 +58,13 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Employee account is inactive",
+        )
+
+    # The website is for admin and manager. Sales executives work from the mobile app.
+    if platform == "web" and employee.role not in HEAD_OFFICE_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please sign in on the Ogera mobile app",
         )
 
     access_token = create_access_token(employee.id)

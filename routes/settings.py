@@ -6,11 +6,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import settings_catalog as catalog
-from auth import get_current_user, require_roles
+from auth import get_current_user, require_admin_or_manager
 from config import UPLOAD_DIR
-from role_access import ACTION_ROLES
 from database import get_db
-from models import Employee, EnumValue, LeadSource, Role, RolePermission, StageType
+from models import Employee, EnumValue, LeadSource, PipelineStage
 from schemas.settings import (
     CompanyResponse,
     CompanyUpdate,
@@ -18,17 +17,11 @@ from schemas.settings import (
     EnumValueCreate,
     EnumValueResponse,
     EnumValueUpdate,
-    PermissionChange,
-    PermissionCell,
-    PermissionFeature,
-    PermissionMatrix,
-    PermissionRole,
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-require_admin = require_roles("admin")
-require_manager_or_admin = require_roles("admin", "manager")
+require_manager_or_admin = require_admin_or_manager
 
 MAX_LOGO_BYTES = 2 * 1024 * 1024
 LOGO_TYPES = (  # (magic bytes, extension); SVG is left out because it can carry scripts
@@ -37,7 +30,7 @@ LOGO_TYPES = (  # (magic bytes, extension); SVG is left out because it can carry
 )
 
 # Table + column names behind each category (lead sources and stages live in their own tables).
-MODELS = {catalog.LEAD_SOURCE: LeadSource, catalog.LEAD_STAGE: StageType}
+MODELS = {catalog.LEAD_SOURCE: LeadSource, catalog.LEAD_STAGE: PipelineStage}
 COLUMNS = {
     catalog.LEAD_SOURCE: ("name", "slug", None),  # sources are listed by name, no manual order
     catalog.LEAD_STAGE: ("name", "slug", "order"),
@@ -120,7 +113,7 @@ def _create_stage(db: Session, body: EnumValueCreate) -> EnumValueResponse:
         raise HTTPException(status_code=422, detail="Name can be at most 60 characters")
     slug = catalog.slugify(body.value or body.label, 40)
 
-    existing = db.query(StageType).filter(StageType.slug == slug, StageType.contact_type == pipeline).first()
+    existing = db.query(PipelineStage).filter(PipelineStage.slug == slug, PipelineStage.contact_type == pipeline).first()
     if existing is not None:
         if existing.is_active:
             raise HTTPException(status_code=409, detail="This stage already exists in this pipeline")
@@ -130,10 +123,10 @@ def _create_stage(db: Session, body: EnumValueCreate) -> EnumValueResponse:
         return _response(db, catalog.LEAD_STAGE, existing.id)
 
     last = max(
-        (r.order for r in db.query(StageType).filter(StageType.contact_type == pipeline, StageType.is_active == 1).all()),
+        (r.order for r in db.query(PipelineStage).filter(PipelineStage.contact_type == pipeline, PipelineStage.is_active == 1).all()),
         default=0,
     )
-    row = StageType(name=body.label, slug=slug, contact_type=pipeline, description=None, order=last + 1, is_active=1)
+    row = PipelineStage(name=body.label, slug=slug, contact_type=pipeline, description=None, order=last + 1, is_active=1)
     db.add(row)
     _commit(db)
     return _response(db, catalog.LEAD_STAGE, row.id)
@@ -248,7 +241,7 @@ def get_company(db: Session = Depends(get_db), _: Employee = Depends(require_man
 
 
 @router.patch("/company", response_model=CompanyResponse, summary="Update company profile")
-def update_company(body: CompanyUpdate, db: Session = Depends(get_db), _: Employee = Depends(require_admin)):
+def update_company(body: CompanyUpdate, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
     """Changes the company name (admin only)."""
     data = body.model_dump(exclude_unset=True)
     if data.get("company_name") is None:
@@ -264,8 +257,8 @@ def update_company(body: CompanyUpdate, db: Session = Depends(get_db), _: Employ
 
 
 @router.post("/company/logo", response_model=CompanyResponse, summary="Upload company logo")
-async def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db), _: Employee = Depends(require_admin)):
-    """Stores a PNG or JPEG logo of up to 2 MB and makes it the company logo (admin only)."""
+async def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+    """Stores a PNG or JPEG logo of up to 2 MB and makes it the company logo."""
     content = await file.read(MAX_LOGO_BYTES + 1)
     if len(content) > MAX_LOGO_BYTES:
         raise HTTPException(status_code=413, detail="Logo must be 2 MB or smaller")
@@ -283,125 +276,3 @@ async def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db
     if previous and previous.startswith("/uploads/logo-"):
         (folder / Path(previous).name).unlink(missing_ok=True)
     return _company(db)
-
-
-# ---- Roles & permissions ----------------------------------------------------------------------------
-
-def _cell(level: str, note: str | None = None) -> dict:
-    return {"level": level, "note": note}
-
-
-# What each kind of role can do by default. Admin and manager are team-wide roles; every other role
-# (built-in or custom) works with its own records. Rows with an action can be switched on or off per role;
-# the others (employees, settings) are fixed in code.
-# Each row: (key, label, description, action, admin cell, manager cell, staff cell).
-FEATURES = [
-    ("contacts", "Contacts", "View and edit the contacts they can see", None,
-     _cell("full"), _cell("full"), _cell("own", "Only contacts they created or are assigned to")),
-    ("add_contacts", "Add consumer contacts", "Create new consumer contacts", "create_contact",
-     _cell("full"), _cell("full"), _cell("full")),
-    ("partners", "Add partners & dealers", "Create partner and dealer contacts", "create_partner_or_dealer",
-     _cell("full"), _cell("full"), _cell("full")),
-    ("followups", "Lead Followup board", "Move leads through the pipeline", "move_stage",
-     _cell("full"), _cell("full"), _cell("none")),
-    ("tasks", "Tasks", "Schedule follow-ups and tasks", "schedule_followup",
-     _cell("full"), _cell("full"), _cell("own", "Only tasks assigned to them")),
-    ("activity", "Activity log", "Log calls, visits and notes on a lead", "log_activity",
-     _cell("full"), _cell("full"), _cell("own", "Only contacts they can see")),
-    ("export", "Export contacts", "Download contacts as CSV, Excel or PDF", "export",
-     _cell("full"), _cell("full"), _cell("none")),
-    ("employees", "Employees", "Add staff and manage logins", None,
-     _cell("full"), _cell("full", "Cannot change admin or manager accounts"), _cell("none")),
-    ("settings", "Settings", "Company, dropdown options and roles", None,
-     _cell("full"), _cell("view", "Company and roles only"), _cell("none")),
-]
-
-# Per-role levels that differ from the defaults above. Keys are (feature key, role slug).
-FEATURE_OVERRIDES = {
-    ("contacts", "team_lead"): _cell("team", "Their own contacts and their team's"),
-    ("contacts", "support"): _cell("customers", "Their own contacts and customers (won, placed, first order)"),
-    ("followups", "team_lead"): _cell("team", "Their team's follow-ups; schedules within the team"),
-    ("followups", "sales_executive"): _cell("own", "Follow-ups on their own leads"),
-    ("followups", "tele_caller"): _cell("own", "Follow-ups on their own leads"),
-    ("followups", "field_executive"): _cell("own", "Early stages only: New Lead, Aware, Connected"),
-    ("tasks", "team_lead"): _cell("team", "Their team's tasks"),
-    ("tasks", "support"): _cell("own", "Only tasks assigned to them; cannot schedule for others"),
-    ("activity", "team_lead"): _cell("team", "Their team's contacts"),
-    ("export", "team_lead"): _cell("team", "Their team's contacts"),
-}
-
-
-def _may_edit(viewer: Employee, slug: str) -> bool:
-    """Admin never loses access. Managers can change staff and custom roles; only an admin changes managers."""
-    if slug == "admin":
-        return False
-    if slug == "manager":
-        return viewer.role == "admin"
-    return True
-
-
-def _allowed(saved: dict[tuple[str, str], bool], slug: str, action: str) -> bool:
-    if slug == "admin":
-        return True
-    if (slug, action) in saved:
-        return saved[(slug, action)]
-    return slug in ACTION_ROLES[action]
-
-
-def _build_matrix(roles: list[Role], saved: dict[tuple[str, str], bool], viewer: Employee) -> PermissionMatrix:
-    features = []
-    for key, label, description, action, admin, manager, staff in FEATURES:
-        levels = {}
-        for role in roles:
-            default = admin if role.slug == "admin" else manager if role.slug == "manager" else staff
-            cell = FEATURE_OVERRIDES.get((key, role.slug), default)
-            editable = False
-            if action:
-                explicit = (role.slug, action) in saved
-                if not _allowed(saved, role.slug, action):
-                    cell = _cell("none", "Turned off in Settings" if explicit else None)
-                elif cell["level"] == "none":
-                    cell = _cell("full", "Turned on in Settings" if explicit else None)
-                editable = _may_edit(viewer, role.slug)
-            levels[role.slug] = PermissionCell(level=cell["level"], note=cell["note"], editable=editable)
-        features.append(PermissionFeature(key=key, label=label, description=description, action=action, levels=levels))
-    return PermissionMatrix(
-        roles=[PermissionRole(slug=r.slug, name=r.name, is_system=bool(r.is_system), is_active=bool(r.is_active)) for r in roles],
-        features=features,
-    )
-
-
-@router.get("/roles", response_model=PermissionMatrix, summary="Permission matrix")
-def permission_matrix(db: Session = Depends(get_db), viewer: Employee = Depends(require_manager_or_admin)):
-    """Access level of every role for each feature, with the cells this viewer may switch on or off. Admin and manager only."""
-    roles = db.query(Role).order_by(Role.is_system.desc(), Role.name).all()
-    saved = {(p.role_slug, p.action): bool(p.allowed) for p in db.query(RolePermission).all()}
-    return _build_matrix(roles, saved, viewer)
-
-
-@router.put("/roles/{slug}/permissions/{action}", response_model=PermissionMatrix, summary="Allow or block an action for a role")
-def set_role_permission(
-    slug: str,
-    action: str,
-    body: PermissionChange,
-    db: Session = Depends(get_db),
-    viewer: Employee = Depends(require_manager_or_admin),
-):
-    """Turns one action on or off for one role and returns the updated matrix. Admin keeps every permission;
-    only an admin can change what managers may do. Staff roles can be changed by admin and manager."""
-    if action not in ACTION_ROLES:
-        raise HTTPException(status_code=404, detail="Unknown action")
-    role = db.query(Role).filter(Role.slug == slug).first()
-    if role is None:
-        raise HTTPException(status_code=404, detail="Role not found")
-    if not _may_edit(viewer, slug):
-        detail = "Admin always keeps every permission" if slug == "admin" else "Only an admin can change what managers may do"
-        raise HTTPException(status_code=403, detail=detail)
-
-    row = db.query(RolePermission).filter(RolePermission.role_slug == slug, RolePermission.action == action).first()
-    if row is None:
-        row = RolePermission(role_slug=slug, action=action)
-        db.add(row)
-    row.allowed = int(body.allowed)
-    db.commit()
-    return permission_matrix(db=db, viewer=viewer)

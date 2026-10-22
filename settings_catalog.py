@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from models import CompanySetting, ConsumerProfile, Contact, EnumValue, LeadActivity, LeadSource, LeadStage, PartnerProfile, StageType
+from models import CompanySetting, ConsumerProfile, Contact, EnumValue, LeadActivity, LeadSource, LeadStage, PartnerProfile, PipelineStage
 
 LEAD_SOURCE = "lead_source"
 LEAD_STAGE = "lead_stage"
@@ -138,10 +138,10 @@ def seed_defaults(db: Session) -> None:
         for order, (value, label) in enumerate(rows, start=1):
             if (category, value) not in have:
                 db.add(EnumValue(category=category, value=value, label=label, sort_order=order))
-    existing = {(s, ct) for s, ct in db.query(StageType.slug, StageType.contact_type).all()}
+    existing = {(s, ct) for s, ct in db.query(PipelineStage.slug, PipelineStage.contact_type).all()}
     for slug, name, description, contact_type, order in DEFAULT_STAGES:
         if (slug, contact_type) not in existing:
-            db.add(StageType(
+            db.add(PipelineStage(
                 slug=slug, name=name, description=description,
                 contact_type=contact_type, order=order,
             ))
@@ -167,7 +167,7 @@ def _source_items(db: Session, category: str) -> list[Item]:
 
 def _stage_items(db: Session, category: str) -> list[Item]:
     # Every contact type's pipeline. The same slug appears once per type, so each row carries its type as `group`.
-    rows = db.query(StageType).order_by(StageType.contact_type, StageType.order, StageType.id).all()
+    rows = db.query(PipelineStage).order_by(PipelineStage.contact_type, PipelineStage.order, PipelineStage.id).all()
     return [
         Item(r.id, r.slug, r.name, r.order, bool(r.is_active), r.slug in LOCKED[category], group=r.contact_type)
         for r in rows
@@ -179,9 +179,9 @@ def list_items(db: Session, category: str, with_usage: bool = False) -> list[Ite
     if with_usage and category == LEAD_STAGE:
         # Usage per row, not per slug: a slug is shared by the consumer, partner and dealer pipelines.
         by_id = dict(
-            db.query(StageType.id, func.count(func.distinct(LeadStage.contact_id)))
-            .join(LeadStage, LeadStage.stage_id == StageType.id)
-            .group_by(StageType.id).all()
+            db.query(PipelineStage.id, func.count(func.distinct(LeadStage.contact_id)))
+            .join(LeadStage, LeadStage.stage_id == PipelineStage.id)
+            .group_by(PipelineStage.id).all()
         )
         for item in items:
             item.usage_count = by_id.get(item.id, 0)
@@ -202,9 +202,9 @@ def usage_counts(db: Session, category: str) -> dict[str, int]:
         )
     elif category == LEAD_STAGE:
         rows = (
-            db.query(StageType.slug, func.count(func.distinct(LeadStage.contact_id)))
-            .join(LeadStage, LeadStage.stage_id == StageType.id)
-            .group_by(StageType.slug).all()
+            db.query(PipelineStage.slug, func.count(func.distinct(LeadStage.contact_id)))
+            .join(LeadStage, LeadStage.stage_id == PipelineStage.id)
+            .group_by(PipelineStage.slug).all()
         )
     elif category == ACTIVITY_TYPE:
         rows = db.query(LeadActivity.type, func.count(LeadActivity.id)).group_by(LeadActivity.type).all()

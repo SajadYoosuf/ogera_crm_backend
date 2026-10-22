@@ -15,11 +15,9 @@ from sqlalchemy.orm import Session, joinedload
 
 from auth import get_current_user
 from business_time import ist_day_start_utc, today_ist
-from contact_access import visible_to
 from database import get_db
-from models import Contact, Employee, FollowupSchedule, LeadStage, StageType
+from models import Contact, Employee, FollowupSchedule, LeadStage, PipelineStage
 from routes.contacts import contact_query
-from contact_access import visible_assignee_ids
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"], dependencies=[Depends(get_current_user)])
 
@@ -137,13 +135,10 @@ def _count_won(db: Session, user: Employee, start: datetime.date | None, end: da
     q = (
         db.query(func.count(func.distinct(LeadStage.contact_id)))
         .select_from(LeadStage)
-        .join(StageType, StageType.id == LeadStage.stage_id)
+        .join(PipelineStage, PipelineStage.id == LeadStage.stage_id)
         .join(Contact, Contact.id == LeadStage.contact_id)
-        .filter(StageType.slug == "won", Contact.deleted_at.is_(None))
+        .filter(PipelineStage.slug == "won", Contact.deleted_at.is_(None))
     )
-    scope = visible_to(user)
-    if scope is not None:
-        q = q.filter(scope)
     if start is not None:
         q = q.filter(LeadStage.changed_at >= ist_day_start_utc(start))
     if end is not None:
@@ -155,7 +150,7 @@ def _stage_names(db: Session, stage_ids) -> dict[int, tuple[str, str]]:
     ids = {i for i in stage_ids if i is not None}
     if not ids:
         return {}
-    return {st.id: (st.slug, st.name) for st in db.query(StageType).filter(StageType.id.in_(ids)).all()}
+    return {st.id: (st.slug, st.name) for st in db.query(PipelineStage).filter(PipelineStage.id.in_(ids)).all()}
 
 
 def _stage_breakdown(db: Session, user: Employee, f: dict) -> list[StageCount]:
@@ -188,9 +183,6 @@ def _open_followups(db: Session, user: Employee, today: datetime.date):
             func.date(FollowupSchedule.due_at) <= today,
         )
     )
-    visible = visible_assignee_ids(db, user)
-    if visible is not None:
-        q = q.filter(FollowupSchedule.assigned_to.in_(visible))
     return q
 
 

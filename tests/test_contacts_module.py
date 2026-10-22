@@ -2,7 +2,7 @@
 option lists, and who can see which contacts."""
 import pytest
 
-from seed_data import PASSWORD
+from seed_data import PASSWORD, MOBILE_APP
 
 MOBILE = {"X-Client": "mobile"}
 
@@ -23,7 +23,7 @@ def _staff(client, admin_headers, email, role, phone):
         "name": role.replace("_", " ").title(), "email": email, "password": PASSWORD, "role": role, "phone": phone,
     })
     assert created.status_code == 201, created.text
-    login = client.post("/auth/login", json={"email": email, "password": PASSWORD})
+    login = client.post("/auth/login", json={"email": email, "password": PASSWORD}, headers=MOBILE_APP)
     assert login.status_code == 200, login.text
     return {"Authorization": f"Bearer {login.json()['access_token']}"}, created.json()["id"]
 
@@ -237,14 +237,12 @@ def test_dealer_appears_in_list_with_owner_name(client, login, lead_source_id):
 @pytest.fixture()
 def staff(client, login):
     admin, _ = login("admin")
-    tele, tele_id = _staff(client, admin, "tele@example.com", "tele_caller", "9000000010")
-    support, support_id = _staff(client, admin, "support@example.com", "support", "9000000011")
-    lead, lead_id = _staff(client, admin, "lead@example.com", "team_lead", "9000000012")
+    other, other_id = _staff(client, admin, "other@example.com", "sales_executive", "9000000010")
     anu, anu_user = login("anu")
     raj, raj_user = login("raj")
     return {
-        "admin": admin, "tele": (tele, tele_id), "support": (support, support_id),
-        "lead": (lead, lead_id), "anu": (anu, anu_user["id"]), "raj": (raj, raj_user["id"]),
+        "admin": admin, "other": (other, other_id),
+        "anu": (anu, anu_user["id"]), "raj": (raj, raj_user["id"]),
     }
 
 
@@ -253,47 +251,3 @@ def test_admin_and_manager_see_every_contact(client, login, lead_source_id, staf
     manager, _ = login("manager")
     assert client.get("/contacts", headers=staff["admin"]).json()["total"] == 1
     assert client.get("/contacts", headers=manager).json()["total"] == 1
-
-
-def test_staff_see_only_contacts_they_created_or_are_assigned(client, login, lead_source_id, staff):
-    anu_headers, anu_id = staff["anu"]
-    raj_headers, raj_id = staff["raj"]
-    mine = _contact(client, anu_headers, lead_source_id("meta"), phone="9100000041").json()
-    assigned_to_me = _contact(client, staff["admin"], lead_source_id("meta"), phone="9100000042",
-                              assigned_to=anu_id).json()
-    not_mine = _contact(client, staff["admin"], lead_source_id("meta"), phone="9100000043", assigned_to=raj_id).json()
-
-    names = {c["id"] for c in client.get("/contacts", headers=anu_headers).json()["items"]}
-    assert names == {mine["id"], assigned_to_me["id"]}
-    assert client.get(f"/contacts/{not_mine['id']}", headers=anu_headers).status_code == 404
-    assert client.get(f"/contacts/{mine['id']}", headers=anu_headers).status_code == 200
-
-
-def test_creator_keeps_access_after_the_contact_is_reassigned(client, login, lead_source_id, staff):
-    anu_headers, _ = staff["anu"]
-    _, raj_id = staff["raj"]
-    contact = _contact(client, anu_headers, lead_source_id("meta"), phone="9100000044").json()
-    client.put(f"/contacts/{contact['id']}", json={"assigned_to": raj_id}, headers=staff["admin"])
-    assert client.get(f"/contacts/{contact['id']}", headers=anu_headers).status_code == 200
-
-
-def test_tele_caller_support_and_team_lead_follow_the_same_rule(client, login, lead_source_id, staff):
-    for role in ("tele", "support", "lead"):
-        headers, _ = staff[role]
-        assert client.get("/contacts", headers=headers).json()["total"] == 0, role
-
-
-def test_type_counts_respect_visibility(client, login, lead_source_id, staff):
-    anu_headers, _ = staff["anu"]
-    _, raj_id = staff["raj"]
-    _contact(client, staff["admin"], lead_source_id("meta"), phone="9100000045", assigned_to=raj_id)  # not Anu's
-    _contact(client, anu_headers, lead_source_id("meta"), phone="9100000046")  # Anu's
-    assert client.get("/contacts/type-counts", headers=anu_headers).json()["consumer"] == 1
-    assert client.get("/contacts/type-counts", headers=staff["admin"]).json()["consumer"] == 2
-
-
-def test_activities_on_a_hidden_contact_are_not_found(client, login, lead_source_id, staff):
-    _, raj_id = staff["raj"]
-    contact = _contact(client, staff["admin"], lead_source_id("meta"), phone="9100000047", assigned_to=raj_id).json()
-    assert client.get(f"/contacts/{contact['id']}/activities", headers=staff["anu"][0]).status_code == 404
-    assert client.get(f"/contacts/{contact['id']}/stages", headers=staff["anu"][0]).status_code == 404

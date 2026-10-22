@@ -28,7 +28,7 @@ from .partner_profile import (
 from .lead_stage import LeadStageCreate, LeadStageResponse
 from .contact import ContactSummary, ContactBase, ContactCreate, ContactUpdate, ContactResponse
 from .contact import ContactListItem, ContactListResponse, LeadStageSummary, NameRef
-from .contact import StageTypeItem
+from .contact import PipelineStageItem
 
 __all__ = [
     # Enums
@@ -48,5 +48,5 @@ __all__ = [
     # Contact
     "ContactSummary", "ContactBase", "ContactCreate", "ContactUpdate", "ContactResponse",
     "ContactListItem", "ContactListResponse", "LeadStageSummary", "NameRef",
-    "StageTypeItem",
+    "PipelineStageItem",
 ]

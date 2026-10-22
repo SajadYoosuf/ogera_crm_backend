@@ -8,9 +8,7 @@ from auth import get_current_user
 from database import get_db
 from models import Contact, Employee
 from models.followup_schedule import FollowupSchedule
-from contact_access import ensure_can_assign, visible_assignee_ids
-from role_access import ensure_can_schedule_for
-from routes.followups import _followup_response, _task_state, checked_channel, LEGACY_CHANNELS, MONITORING_ROLES
+from routes.followups import _followup_response, _task_state, checked_channel, LEGACY_CHANNELS
 from schemas.followup_schedule import FollowupScheduleResponse, FollowupScheduleUpdate, Priority
 from business_time import ist_now, today_ist
 
@@ -125,9 +123,6 @@ def list_tasks(
     today = today_ist()
 
     scope = []
-    visible = visible_assignee_ids(db, current_user)
-    if visible is not None:
-        scope.append(FollowupSchedule.assigned_to.in_(visible))
     if assigned_to is not None:
         scope.append(FollowupSchedule.assigned_to == assigned_to)
     if channel:
@@ -211,10 +206,6 @@ def create_task(
     assignee = db.query(Employee).filter(Employee.id == body.assigned_to, Employee.deleted_at.is_(None), Employee.is_active == 1).first()
     if not assignee:
         raise HTTPException(status_code=400, detail="Assigned employee not found or inactive")
-    if assignee.role in MONITORING_ROLES:
-        raise HTTPException(status_code=400, detail="Tasks cannot be assigned to an admin or manager")
-    ensure_can_schedule_for(db, current_user, body.assigned_to)
-    ensure_can_assign(db, current_user, body.assigned_to)
 
     fs = FollowupSchedule(
         contact_id=None,
@@ -244,9 +235,6 @@ def update_task(
     fs = db.query(FollowupSchedule).filter(FollowupSchedule.id == task_id).first()
     if not fs:
         raise HTTPException(status_code=404, detail="Task not found")
-    visible = visible_assignee_ids(db, current_user)
-    if visible is not None and fs.assigned_to not in visible:
-        raise HTTPException(status_code=403, detail="This task is assigned to someone else")
     if fs.status == "completed":
         raise HTTPException(status_code=409, detail="Task is already completed")
 

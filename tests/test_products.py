@@ -90,14 +90,6 @@ def test_soft_delete_hides_product(client):
     assert client.get("/products").json()["total"] == 0
 
 
-def test_non_editor_can_read_but_not_write(client):
-    client.post("/products", json=PRODUCT)
-    client.user.role = "sales_executive"
-    assert client.get("/products").status_code == 200
-    assert client.post("/products", json={**PRODUCT, "slug": "x"}).status_code == 403
-
-
-
 def test_archive_and_restore_through_is_active(client):
     product_id = client.post("/products", json=PRODUCT).json()["id"]
     assert client.patch(f"/products/{product_id}", json={"is_active": False}).json()["is_active"] is False

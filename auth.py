@@ -67,6 +67,10 @@ def get_current_user(credentials = Depends(security)) -> Employee:
         db.close()
 
 
+# The head-office roles. They use the website; everyone else uses the mobile app.
+HEAD_OFFICE_ROLES = ("admin", "manager")
+
+
 def require_roles(*roles):
     """Dependency factory: allow only employees whose role is in `roles`."""
     allowed = {r.value if hasattr(r, "value") else r for r in roles}
@@ -80,3 +84,7 @@ def require_roles(*roles):
         return current_user
 
     return checker
+
+
+# The one role check the backend keeps: only admin and manager may manage employees, roles and settings.
+require_admin_or_manager = require_roles(*HEAD_OFFICE_ROLES)

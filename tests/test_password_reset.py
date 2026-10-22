@@ -6,7 +6,7 @@ import pytest
 from database import SessionLocal
 from models import Employee, PasswordResetCode
 from routes import password_reset
-from seed_data import PASSWORD, email_of
+from seed_data import PASSWORD, email_of, MOBILE_APP
 
 
 @pytest.fixture()
@@ -49,7 +49,7 @@ def reset(client, monkeypatch):
             return client.post("/auth/password-reset/reset", json={"reset_token": token, "new_password": new_password})
 
         def login(self, password, key="anu"):
-            return client.post("/auth/login", json={"email": email_of(key), "password": password})
+            return client.post("/auth/login", json={"email": email_of(key), "password": password}, headers=MOBILE_APP)
 
         def last_code(self):
             return self.sent[-1]["code"]

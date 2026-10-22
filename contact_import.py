@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
-from models import ConsumerProfile, Contact, DealerProfile, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, StageType
+from models import ConsumerProfile, Contact, DealerProfile, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage
 from schemas.enums import profession_key
 from phone_utils import phone_key
 import settings_catalog as catalog
@@ -327,10 +327,10 @@ def summarize(results: list[RowResult]) -> dict:
 
 def _new_lead_stage_id(db: Session, contact_type: str) -> int:
     """Return the stage_types.id for the 'new_lead' stage of the given contact_type."""
-    st = db.query(StageType).filter(
-        StageType.slug == "new_lead",
-        StageType.contact_type == contact_type,
-        StageType.is_active == 1,
+    st = db.query(PipelineStage).filter(
+        PipelineStage.slug == "new_lead",
+        PipelineStage.contact_type == contact_type,
+        PipelineStage.is_active == 1,
     ).first()
     if not st:
         raise RuntimeError(f"Pipeline not seeded: new_lead stage missing for {contact_type}")

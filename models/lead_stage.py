@@ -9,7 +9,7 @@ class LeadStage(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     contact_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("contacts.id"))
-    stage_id: Mapped[int] = mapped_column(Integer, ForeignKey("stage_types.id"))
+    stage_id: Mapped[int] = mapped_column(Integer, ForeignKey("pipeline_stages.id"))
     changed_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("employees.id"))
     changed_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -21,7 +21,7 @@ class LeadStage(Base):
     awareness_note: Mapped[str | None] = mapped_column(Text)
 
     contact: Mapped["Contact"] = relationship("Contact", back_populates="lead_stages")
-    stage_type: Mapped["StageType"] = relationship("StageType")
+    stage_type: Mapped["PipelineStage"] = relationship("PipelineStage")
     changed_by_employee: Mapped["Employee"] = relationship(
         "Employee", back_populates="lead_stage_changes"
     )

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from passlib.context import CryptContext
 from database import SessionLocal, engine
 import models  # noqa: F401
-from models import LeadSource, Employee, StageType
+from models import LeadSource, Employee, PipelineStage
 
 # Use argon2 for password hashing (more reliable than bcrypt)
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
@@ -111,9 +111,9 @@ def seed_stage_types():
     db = SessionLocal()
     try:
         for stage_data in DEFAULT_STAGE_TYPES:
-            existing = db.query(StageType).filter_by(slug=stage_data["slug"]).first()
+            existing = db.query(PipelineStage).filter_by(slug=stage_data["slug"]).first()
             if not existing:
-                stage_type = StageType(**stage_data, is_active=True)
+                stage_type = PipelineStage(**stage_data, is_active=True)
                 db.add(stage_type)
                 print(f"✓ Added stage type: {stage_data['name']}")
             else:
