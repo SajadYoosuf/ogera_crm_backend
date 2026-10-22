@@ -22,7 +22,8 @@ class Contact(Base):
     # Captured only for offline (field visit) leads
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
-    assigned_to: Mapped[int] = mapped_column(BigInteger, ForeignKey("employees.id"))
+    # NULL = not yet assigned; manager assigns after reviewing the new lead
+    assigned_to: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("employees.id"), nullable=True)
     created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("employees.id"))
     referred_by_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("contacts.id"))
     lead_source_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("lead_sources.id"))
@@ -33,7 +34,7 @@ class Contact(Base):
     )
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime)
 
-    assigned_employee: Mapped["Employee"] = relationship(
+    assigned_employee: Mapped["Employee | None"] = relationship(
         "Employee", back_populates="contacts", foreign_keys=[assigned_to]
     )
     # Employee who entered the lead (required for offline leads)

@@ -36,7 +36,7 @@ router = APIRouter(
     prefix="/contacts", tags=["contacts"], dependencies=[Depends(get_current_user)]
 )
 
-# Roles that never receive auto-assigned leads
+# Roles that are never auto-assigned (used in the bulk import path)
 NON_ASSIGNABLE_ROLES = ("admin", "manager")
 
 
@@ -527,7 +527,7 @@ def create_contact(
     Always required: name, phone and lead source. Mobile requests (`X-Client: mobile`) also need address and district.
     A consumer, partner or dealer needs its own details block: a partner needs `partner_profile` (with profession_type),
     a dealer needs `dealer_profile` (with owner_name). Consumer details are optional.
-    If `assigned_to` is omitted, an owner is picked automatically from the staff who take leads.
+    Omit `assigned_to` to create an unassigned contact; the manager assigns it later.
     Offline leads need latitude and longitude. Returns 400 for an unknown source, owner, referrer or a details block on the wrong type.
     Returns 409 when the phone number already belongs to another contact.
     """
@@ -551,9 +551,8 @@ def create_contact(
         raise HTTPException(status_code=400, detail="dealer_profile (with owner_name) is required for a dealer")
     _ensure_phone_free(db, body.phone, current_user)
 
-    if body.assigned_to is None:
-        assigned_to = _pick_random_assignee(db)
-    else:
+    assigned_to: int | None = None
+    if body.assigned_to is not None:
         if not db.query(Employee).filter(Employee.id == body.assigned_to).first():
             raise HTTPException(status_code=400, detail="Assigned employee not found")
         assigned_to = body.assigned_to
@@ -570,7 +569,9 @@ def create_contact(
     contact.lead_stages.append(LeadStage(stage_id=new_lead_type.id, changed_by=current_user.id))
     db.add(contact)
     db.flush()
-    db.add(ContactAssignment(contact_id=contact.id, assigned_to=assigned_to, changed_by=current_user.id))
+    # Only record an assignment history row when an assignee was actually chosen
+    if assigned_to is not None:
+        db.add(ContactAssignment(contact_id=contact.id, assigned_to=assigned_to, changed_by=current_user.id))
     db.commit()
     db.refresh(contact)
 

@@ -135,7 +135,7 @@ class ContactResponse(ContactBase):
 
     id: int
     address: str | None = None  # legacy rows may have no address
-    assigned_to: int
+    assigned_to: int | None = None
     created_by: int | None = None
     latitude: float | None = None
     longitude: float | None = None
@@ -173,7 +173,7 @@ class ContactListItem(BaseModel):
     longitude: float | None = None
     lead_stage: LeadStageSummary | None = None
     lead_source: LeadSourceSummary | None = None
-    assigned_to: NameRef
+    assigned_to: NameRef | None = None
     created_by: NameRef | None = None
     created_at: datetime.datetime
     # Computed on read: verified once no required detail is pending
