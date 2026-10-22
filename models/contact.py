@@ -71,17 +71,17 @@ class Contact(Base):
     phone_alt: Mapped[str | None] = mapped_column(String(20))
 
     # --- Location fields ---
-    # Required from the mobile app only (see client_platform); the web form may leave it blank
+    # Optional at creation; required for the contact to become verified
     district: Mapped[str | None] = mapped_column(String(80))
     address: Mapped[str | None] = mapped_column(String(255))
-    # Captured only for offline (field visit) leads; GPS coordinates from the salesperson's phone
+    # Captured only for field_visit leads; GPS coordinates from the salesperson's mobile app
     latitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
     longitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
 
     # --- Ownership & attribution ---
     # NULL = not yet assigned; manager assigns after reviewing the new lead
     assigned_to: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("employees.id"), nullable=True)
-    # The employee who created this contact row (required for offline leads)
+    # The employee who created this contact row
     created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("employees.id"))
 
     # --- Referral ---
@@ -113,7 +113,7 @@ class Contact(Base):
     assigned_employee: Mapped["Employee | None"] = relationship(
         "Employee", back_populates="contacts", foreign_keys=[assigned_to]
     )
-    # Employee who entered the lead (required for offline leads)
+    # Employee who entered the lead
     creator: Mapped["Employee | None"] = relationship("Employee", foreign_keys=[created_by])
 
     # Self-referential referral relationships:

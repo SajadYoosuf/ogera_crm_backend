@@ -35,7 +35,7 @@ CATEGORIES = tuple(CATEGORY_LABELS)
 
 # Values the code branches on. Their label and position can change, but they can't be turned off or removed.
 LOCKED = {
-    LEAD_SOURCE: {"offline"},  # offline leads must carry a location
+    LEAD_SOURCE: {"field_visit"},  # field visit leads must carry a GPS location from mobile
     LEAD_STAGE: {"new_lead", "won", "lost"},  # pipeline entry/exit stages
     ACTIVITY_TYPE: {"field_visit", "internal_note"},  # GPS capture / cannot be scheduled
     PROFESSIONAL_TYPE: {"other"},  # imports fall back to it when a profession is missing or unknown

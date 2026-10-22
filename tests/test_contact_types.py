@@ -4,6 +4,7 @@
 def _make(client, headers, source_id, **overrides):
     body = {
         "contact_type": "consumer",
+        "name": "Test Contact",
         "phone": "9700000000",
         "lead_source_id": source_id,
         "district": "Calicut",
@@ -19,7 +20,7 @@ def _make(client, headers, source_id, **overrides):
 def test_partner_without_name_succeeds(client, login, lead_source_id):
     headers, _ = login("admin")
     r = _make(client, headers, lead_source_id("meta"),
-              phone="9700000001", contact_type="partner",
+              phone="9700000001", name=None, contact_type="partner",
               consumer_profile=None,
               partner_profile={"profession_type": "plumber"})
     assert r.status_code == 201, r.text
@@ -29,7 +30,7 @@ def test_partner_without_name_succeeds(client, login, lead_source_id):
 def test_dealer_without_name_succeeds(client, login, lead_source_id):
     headers, _ = login("admin")
     r = _make(client, headers, lead_source_id("meta"),
-              phone="9700000002", contact_type="dealer",
+              phone="9700000002", name=None, contact_type="dealer",
               consumer_profile=None,
               dealer_profile={"owner_name": "Ravi"})
     assert r.status_code == 201, r.text
@@ -45,11 +46,10 @@ def test_consumer_is_verified_when_all_fields_are_present(client, login, lead_so
     assert r["missing_fields"] == []
 
 
-def test_consumer_missing_fields_lists_only_non_name_gaps(client, login, lead_source_id):
+def test_consumer_missing_fields_when_optional_fields_omitted(client, login, lead_source_id):
     headers, _ = login("admin")
     r = _make(client, headers, lead_source_id("meta"), phone="9700000011",
               district=None, address=None, consumer_profile=None).json()
-    assert "name" not in r["missing_fields"]
     assert set(r["missing_fields"]) == {"district", "address", "house_stage"}
 
 
@@ -63,22 +63,43 @@ def test_consumer_unverified_when_house_stage_missing(client, login, lead_source
 
 # --- partner verification -------------------------------------------------------------------
 
-def test_partner_is_verified_without_house_stage(client, login, lead_source_id):
-    """Partners have no house_stage requirement — house_stage is consumer-only."""
+def test_partner_is_verified_when_all_fields_present(client, login, lead_source_id):
+    """Partners need name + profession_type + work_area + address + district to be verified."""
     headers, _ = login("admin")
     r = _make(client, headers, lead_source_id("meta"), phone="9700000020",
-              contact_type="partner", consumer_profile=None,
-              partner_profile={"profession_type": "plumber"}).json()
+              contact_type="partner", name="Arun Kumar", consumer_profile=None,
+              partner_profile={"profession_type": "plumber", "work_area": "Calicut"}).json()
     assert r["is_verified"] is True
     assert r["missing_fields"] == []
 
 
-def test_partner_unverified_when_district_missing(client, login, lead_source_id):
+def test_partner_unverified_when_name_missing(client, login, lead_source_id):
+    """Any contact without a name is unverified."""
     headers, _ = login("admin")
     r = _make(client, headers, lead_source_id("meta"), phone="9700000021",
-              contact_type="partner", district=None, address=None,
-              consumer_profile=None,
+              name=None, contact_type="partner", consumer_profile=None,
+              partner_profile={"profession_type": "plumber", "work_area": "Calicut"}).json()
+    assert r["is_verified"] is False
+    assert "name" in r["missing_fields"]
+
+
+def test_partner_unverified_when_work_area_missing(client, login, lead_source_id):
+    """Partner with only profession_type is unverified until work_area is also filled."""
+    headers, _ = login("admin")
+    r = _make(client, headers, lead_source_id("meta"), phone="9700000022",
+              contact_type="partner", name="Arun Kumar", consumer_profile=None,
               partner_profile={"profession_type": "plumber"}).json()
+    assert r["is_verified"] is False
+    assert "work_area" in r["missing_fields"]
+    assert "house_stage" not in r["missing_fields"]
+
+
+def test_partner_unverified_when_district_missing(client, login, lead_source_id):
+    headers, _ = login("admin")
+    r = _make(client, headers, lead_source_id("meta"), phone="9700000023",
+              contact_type="partner", name="Arun Kumar", district=None, address=None,
+              consumer_profile=None,
+              partner_profile={"profession_type": "plumber", "work_area": "Calicut"}).json()
     assert r["is_verified"] is False
     assert "district" in r["missing_fields"]
     assert "house_stage" not in r["missing_fields"]
@@ -130,12 +151,9 @@ def test_partner_profile_optional_fields_are_saved(client, login, lead_source_id
               partner_profile={
                   "profession_type": "architect",
                   "work_area": "Kozhikode",
-                  "sample_given": True,
-                  "projects_per_year": 12,
               }).json()
     assert r["partner_profile"]["work_area"] == "Kozhikode"
-    assert r["partner_profile"]["sample_given"] is True
-    assert r["partner_profile"]["projects_per_year"] == 12
+    assert r["partner_profile"]["profession_type"] == "architect"
 
 
 def test_partner_profile_update_changes_only_sent_fields(client, login, lead_source_id):
@@ -144,11 +162,10 @@ def test_partner_profile_update_changes_only_sent_fields(client, login, lead_sou
                     contact_type="partner", consumer_profile=None,
                     partner_profile={"profession_type": "plumber", "work_area": "Feroke"}).json()
     updated = client.put(f"/contacts/{contact['id']}",
-                         json={"partner_profile": {"sample_given": True}},
+                         json={"partner_profile": {"work_area": "Calicut"}},
                          headers=headers).json()
     assert updated["partner_profile"]["profession_type"] == "plumber"  # unchanged
-    assert updated["partner_profile"]["work_area"] == "Feroke"          # unchanged
-    assert updated["partner_profile"]["sample_given"] is True           # updated
+    assert updated["partner_profile"]["work_area"] == "Calicut"         # updated
 
 
 # --- dealer profile optional email ---------------------------------------------------------

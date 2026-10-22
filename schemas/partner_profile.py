@@ -14,8 +14,6 @@ class PartnerProfileBase(BaseModel):
     def _key(cls, value):
         return profession_key(value) if isinstance(value, str) else value
     work_area: Annotated[str, Field(max_length=120)] | None = None
-    sample_given: bool | None = None
-    projects_per_year: Annotated[int, Field(ge=0)] | None = None
     # referrals_sent is intentionally absent — derived at query time
 
 
@@ -31,8 +29,6 @@ class PartnerProfileUpdate(BaseModel):
     def _key(cls, value):
         return profession_key(value) if isinstance(value, str) else value
     work_area: Annotated[str, Field(max_length=120)] | None = None
-    sample_given: bool | None = None
-    projects_per_year: Annotated[int, Field(ge=0)] | None = None
 
 
 class PartnerProfileResponse(BaseModel):
@@ -42,8 +38,6 @@ class PartnerProfileResponse(BaseModel):
     contact_id: int
     profession_type: str
     work_area: str | None = None
-    sample_given: bool | None = None
-    projects_per_year: int | None = None
 
     @field_validator("profession_type", mode="before")
     @classmethod

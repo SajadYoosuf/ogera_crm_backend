@@ -130,7 +130,6 @@ class ContactBase(BaseModel):
     name: Annotated[str, Field(min_length=1, max_length=150)] | None = None
     phone: Annotated[str, Field(min_length=1, max_length=20)]
     phone_alt: Annotated[str, Field(max_length=20)] | None = None
-    # Required from the mobile app only (checked in the route, see request_context.client_platform)
     district: Annotated[str, Field(min_length=1, max_length=80)] | None = None
     address: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     # Optional: contact that referred this one
@@ -168,7 +167,7 @@ class ContactCreate(ContactBase):
     Inherits all ContactBase fields, then adds create-only fields:
         - lead_source_id  → required (overrides the optional base version)
         - assigned_to     → omit to leave unassigned; manager picks it up later
-        - latitude/longitude → required for offline leads, forbidden for all others
+        - latitude/longitude → required from mobile for field_visit leads, forbidden for all others
         - *_profile       → type-specific details created in the same transaction
         - interested_product_ids → list of product ids this contact is interested in
     """

@@ -21,7 +21,7 @@ HELPER FUNCTIONS IN THIS FILE:
     _pick_random_assignee() — choose a random eligible employee for auto-assignment
     _ensure_phone_free()    — raise 409 if the phone already belongs to another contact
     _ensure_referrer()      — validate that the referring contact exists and is not self
-    _check_location()       — enforce GPS rules for offline vs. non-offline leads
+    _check_location()       — enforce GPS rules for field_visit vs. other leads
     _check_type_profiles()  — ensure the profile block matches the contact type
     _check_consumer_options()— validate house_stage / tank_type against Settings
 
@@ -211,30 +211,35 @@ def _ensure_referrer(db: Session, referred_by_id: int | None, contact_id: int | 
         raise HTTPException(status_code=400, detail="Referring contact not found")
 
 
-def _check_location(source: LeadSource | None, latitude, longitude, creating: bool = False) -> None:
+def _check_location(source: LeadSource | None, latitude, longitude, creating: bool = False, platform: str = "web") -> None:
     """
     Enforce GPS coordinate rules based on the lead source.
 
     RULES:
-        - Offline leads MUST have latitude + longitude when first created.
+        - Field visit leads created from the mobile app MUST have latitude + longitude.
         - All other lead sources MUST NOT have any coordinates.
 
     WHY SEPARATE FOR CREATE VS UPDATE?
         On update, the caller might only be changing the name — we shouldn't
         suddenly demand GPS. The `creating=True` flag makes the "must have GPS"
-        check only run on new offline contacts.
+        check only run on new field visit contacts from mobile.
 
-    INPUT:  the LeadSource ORM object (or None), latitude, longitude, creating flag
+    WHY MOBILE ONLY?
+        Field visit leads are always created by a sales rep in the field using the
+        mobile app. Web/admin users creating a field visit contact on behalf of
+        a rep are not expected to supply GPS coordinates.
+
+    INPUT:  the LeadSource ORM object (or None), latitude, longitude, creating flag, platform
     RAISES: 400 if the rules are violated
     """
-    if source is not None and source.slug == "offline":
-        if creating and (latitude is None or longitude is None):
+    if source is not None and source.slug == "field_visit":
+        if creating and platform == "mobile" and (latitude is None or longitude is None):
             raise HTTPException(
-                status_code=400, detail="latitude and longitude are required for offline leads"
+                status_code=400, detail="latitude and longitude are required for field visit leads"
             )
     elif latitude is not None or longitude is not None:
         raise HTTPException(
-            status_code=400, detail="latitude and longitude are only allowed for offline leads"
+            status_code=400, detail="latitude and longitude are only allowed for field visit leads"
         )
 
 
@@ -779,24 +784,21 @@ def create_contact(
         - body.assigned_to omitted  → contact is created UNASSIGNED (assigned_to = NULL).
           A manager reviews new leads and assigns them manually.
     """
-    # Step 1: mobile app requires address and district
-    if platform == "mobile":
-        missing = [name for name in ("address", "district") if not getattr(body, name)]
-        if missing:
-            raise HTTPException(status_code=400, detail=f"{' and '.join(missing).capitalize()} required from the mobile app")
+    # Step 1 (removed): address and district are no longer required at create time.
+    # They are required for verification — the contact will show as unverified until filled.
 
     # Step 2: validate all business rules before touching the DB
     source = db.query(LeadSource).filter(LeadSource.id == body.lead_source_id).first()
     if not source:
         raise HTTPException(status_code=400, detail="Lead source not found")
-    _check_location(source, body.latitude, body.longitude, creating=True)
+    _check_location(source, body.latitude, body.longitude, creating=True, platform=platform)
     _ensure_referrer(db, body.referred_by_id)
     _check_type_profiles(body.contact_type, body.consumer_profile, body.partner_profile, body.dealer_profile)
     if body.partner_profile is not None:
         catalog.ensure_allowed(db, catalog.PROFESSIONAL_TYPE, body.partner_profile.profession_type)
     _check_consumer_options(db, body.consumer_profile)
-    if body.contact_type == "partner" and body.partner_profile is None:
-        raise HTTPException(status_code=400, detail="partner_profile (with profession_type) is required for a partner")
+    # partner_profile is now optional at create time — profession_type + work_area are required for verification.
+    # dealer_profile is still required at create time because owner_name uniquely identifies the account.
     if body.contact_type == "dealer" and body.dealer_profile is None:
         raise HTTPException(status_code=400, detail="dealer_profile (with owner_name) is required for a dealer")
     _ensure_phone_free(db, body.phone, current_user)
@@ -896,10 +898,6 @@ def update_contact(
 
     # `fields` is the set of keys the caller actually included in the request
     fields = body.model_fields_set
-    if platform == "mobile":
-        for name in ("address", "district"):
-            if name in fields and not getattr(body, name):
-                raise HTTPException(status_code=400, detail=f"{name.capitalize()} required from the mobile app")
 
     # Re-validate GPS rules only if any location-related field was sent
     if fields & {"lead_source_id", "latitude", "longitude"}:
@@ -915,6 +913,7 @@ def update_contact(
             source,
             body.latitude if "latitude" in fields else contact.latitude,
             body.longitude if "longitude" in fields else contact.longitude,
+            platform=platform,
         )
 
     # Use the new type if being changed, otherwise the existing type from the DB
