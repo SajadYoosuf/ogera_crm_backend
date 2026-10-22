@@ -24,20 +24,38 @@ DUPLICATE_EMAIL = "An employee with this email already exists"
 DUPLICATE_PHONE = "An employee with this phone number already exists"
 
 
-def _get_employee_or_404(db: Session, employee_id: int) -> Employee:
+def _hidden_roles(viewer: Employee) -> frozenset[str]:
+    """Role slugs invisible to this viewer in list and by-id responses.
+
+    Admin accounts are excluded from the employee list for every viewer — they are
+    managed separately and should not appear in day-to-day staff management.
+    A manager viewer additionally cannot see other manager-role employees.
+    """
+    if viewer.role == "manager":
+        return frozenset({"admin", "manager"})
+    return frozenset({"admin"})
+
+
+def _get_employee_or_404(db: Session, employee_id: int, viewer: Employee | None = None) -> Employee:
     employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee or employee.deleted_at:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if viewer and employee.role in _hidden_roles(viewer):
         raise HTTPException(status_code=404, detail="Employee not found")
     return employee
 
 
-def _ensure_role_assignable(db: Session, slug: str) -> None:
-    """The role must exist (created via /roles) and be active."""
+def _ensure_role_assignable(db: Session, slug: str, actor: Employee | None = None) -> None:
+    """The role must exist (created via /roles) and be active.
+    A manager cannot assign the admin or manager role — only an admin may do that.
+    """
     role = db.query(Role).filter(Role.slug == slug).first()
     if role is None:
         raise HTTPException(status_code=422, detail=f"Role '{slug}' does not exist")
     if not role.is_active:
         raise HTTPException(status_code=422, detail=f"Role '{slug}' is inactive")
+    if actor and actor.role == "manager" and slug in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Managers cannot assign the admin or manager role")
 
 
 def _email_taken(db: Session, email: str, exclude_id: int | None = None) -> bool:
@@ -92,8 +110,10 @@ def list_employees(
     Soft-deleted employees are excluded.
     Open to every signed-in employee.
     """
+    hidden = _hidden_roles(viewer)
     q = db.query(Employee).filter(
         Employee.deleted_at.is_(None),
+        Employee.role.not_in(list(hidden)),
     )
     if role:
         q = q.filter(Employee.role == role)
@@ -128,7 +148,7 @@ def get_employee(
 ):
     """One employee by id. Returns 404 for an unknown id, a deleted employee, or a role hidden from the list."""
     return EmployeeResponse.model_validate(
-        _get_employee_or_404(db, employee_id), from_attributes=True
+        _get_employee_or_404(db, employee_id, viewer=viewer), from_attributes=True
     )
 
 
@@ -143,7 +163,7 @@ def create_employee(
     The password is stored hashed and the login details are emailed. The outcome is in `credentials_email`.
     Returns 409 for a duplicate email or phone, and 422 for an unknown role.
     """
-    _ensure_role_assignable(db, body.role)
+    _ensure_role_assignable(db, body.role, actor=actor)
     if _email_taken(db, body.email):
         raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
     if body.phone and _phone_taken(db, body.phone):
@@ -176,7 +196,7 @@ def update_employee(
     Nobody can deactivate or change the role of their own account.
     Required fields cannot be null. Returns 409 for a duplicate email or phone.
     """
-    employee = _get_employee_or_404(db, employee_id)
+    employee = _get_employee_or_404(db, employee_id, viewer=actor)
     data = body.model_dump(exclude_unset=True)
 
     # Null is not a valid value for these required columns.
@@ -185,7 +205,7 @@ def update_employee(
             raise HTTPException(status_code=422, detail=f"{field} cannot be null")
 
     if "role" in data and data["role"] != employee.role:
-        _ensure_role_assignable(db, data["role"])
+        _ensure_role_assignable(db, data["role"], actor=actor)
     if actor.id == employee.id and (
         data.get("is_active") is False or ("role" in data and data["role"] != employee.role)
     ):
@@ -225,7 +245,7 @@ def delete_employee(
     """Soft delete. The row is kept for history and the employee is deactivated.
     You cannot delete your own account.
     """
-    employee = _get_employee_or_404(db, employee_id)
+    employee = _get_employee_or_404(db, employee_id, viewer=actor)
     if employee.id == actor.id:
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
 
