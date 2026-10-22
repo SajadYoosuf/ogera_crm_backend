@@ -135,6 +135,8 @@ class ContactBase(BaseModel):
     # Optional: contact that referred this one
     referred_by_id: int | None = None
     lead_source_id: int | None = None
+    # Free-text note about the contact. Optional for every contact type.
+    notes: str | None = None
 
     @field_validator("phone", "phone_alt", mode="before")
     @classmethod
@@ -218,6 +220,8 @@ class ContactUpdate(BaseModel):
     # Replaces the full list of interested products when provided.
     # Omit → keep existing. Send [] → clear all. Send [1, 2] → replace with those ids.
     interested_product_ids: list[int] | None = None
+    # Free-text note. Omit → keep existing. Send null → clear. Send string → replace.
+    notes: str | None = None
 
     @field_validator("phone", "phone_alt", mode="before")
     @classmethod
@@ -273,6 +277,9 @@ class ContactResponse(ContactBase):
     is_verified: bool = False
     missing_fields: list[str] = []
     current_stage: LeadStageResponse | None = None
+
+    # Populated from the DB column (from_attributes=True handles this automatically)
+    notes: str | None = None
 
     # Only one of these will have data depending on contact_type
     consumer_profile: ConsumerProfileResponse | None = None
