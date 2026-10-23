@@ -5,6 +5,7 @@ from contact_lookup import get_live_contact
 from database import get_db
 from models import ContactAssignment, Employee, FollowupReschedule, FollowupSchedule, LeadStage
 from models.activity_log import ActivityLog
+from models.followup_edit_log import FollowupEditLog
 from schemas.activity_log import HistoryItem
 
 router = APIRouter(
@@ -132,6 +133,26 @@ def get_history(
             event_type="assignment",
             timestamp=contact.created_at,
             assigned_to_name=contact.assigned_employee.name,
+        ))
+
+    # Follow-up field edits: channel swaps, priority changes, due-date changes, status changes.
+    # These let managers see exactly what an employee changed and when.
+    edits = (
+        db.query(FollowupEditLog)
+        .options(joinedload(FollowupEditLog.changer))
+        .filter(FollowupEditLog.contact_id == contact_id)
+        .all()
+    )
+    for e in edits:
+        items.append(HistoryItem(
+            event_type="followup_edit",
+            timestamp=e.changed_at,
+            actor_id=e.changed_by,
+            actor_name=e.changer.name if e.changer else None,
+            followup_id=e.followup_id,
+            field_name=e.field_name,
+            old_value=e.old_value,
+            new_value=e.new_value,
         ))
 
     items.sort(key=lambda x: x.timestamp, reverse=True)

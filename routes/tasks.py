@@ -8,7 +8,9 @@ from auth import get_current_user
 from database import get_db
 from models import Contact, Employee
 from models.followup_schedule import FollowupSchedule
-from routes.followups import _followup_response, _task_state, checked_channel, LEGACY_CHANNELS
+from models.activity_log import ActivityLog
+from models.followup_edit_log import FollowupEditLog
+from routes.followups import _followup_response, _log_edit, _task_state, checked_channel, LEGACY_CHANNELS, MONITORING_ROLES
 from schemas.followup_schedule import FollowupScheduleResponse, FollowupScheduleUpdate, Priority
 from business_time import ist_now, today_ist
 
@@ -216,6 +218,7 @@ def create_task(
         priority=body.priority,
         channel=checked_channel(db, body.channel),
         notes=(body.notes or "").strip() or None,
+        created_by=current_user.id,
     )
     db.add(fs)
     db.commit()
@@ -231,18 +234,55 @@ def update_task(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Works for both standalone tasks and contact-linked follow-ups by task id."""
-    fs = db.query(FollowupSchedule).filter(FollowupSchedule.id == task_id).first()
+    """Works for both standalone tasks and contact-linked follow-ups by task id.
+
+    Completing a contact-linked task writes an activity_log row so the contact's timeline
+    stays consistent whether the task was completed from the Tasks screen or the Lead Panel.
+    """
+    fs = db.query(FollowupSchedule).options(
+        joinedload(FollowupSchedule.contact), joinedload(FollowupSchedule.assignee)
+    ).filter(FollowupSchedule.id == task_id).first()
     if not fs:
         raise HTTPException(status_code=404, detail="Task not found")
     if fs.status == "completed":
         raise HTTPException(status_code=409, detail="Task is already completed")
 
     if body.status == "completed":
+        actual_ch = body.actual_channel or fs.channel
+        logged_type = LEGACY_CHANNELS.get(actual_ch or "", actual_ch or "other")
+        if body.actual_channel and body.actual_channel != fs.channel:
+            _log_edit(db, fs, current_user.id, "channel", fs.channel, body.actual_channel)
+
         fs.status = "completed"
-    elif body.status in ("todo", "inprogress"):
+        _log_edit(db, fs, current_user.id, "status", "open", "completed")
+
+        # Bug 1 fix: write activity_log when completing a contact-linked task via the global
+        # /tasks endpoint. Previously this was only done in /contacts/{id}/followups/{id}.
+        if fs.contact_id:
+            db.add(ActivityLog(
+                contact_id=fs.contact_id,
+                done_by=current_user.id,
+                activity_type=logged_type,
+                outcome=body.outcome,
+                notes=(body.notes or "").strip() or None,
+                followup_id=fs.id,
+            ))
+
+    elif body.status in ("todo", "inprogress", "pending"):
+        _log_edit(db, fs, current_user.id, "status", fs.status, body.status)
         fs.status = body.status
+
     else:  # reschedule
+        # Only the creator of this task can reschedule it.
+        # Admin and manager can always reschedule regardless of ownership.
+        if (
+            fs.created_by is not None
+            and fs.created_by != current_user.id
+            and current_user.role not in MONITORING_ROLES
+        ):
+            raise HTTPException(status_code=403, detail="Only the employee who scheduled this task can reschedule it")
+
+        _log_edit(db, fs, current_user.id, "due_at", fs.due_at.isoformat(), body.due_at.isoformat())
         fs.due_at = body.due_at
 
     db.commit()

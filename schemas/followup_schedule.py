@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from business_time import ist_now
 
-FollowupStatus = Literal["todo", "inprogress", "completed"]
+FollowupStatus = Literal["todo", "inprogress", "pending", "completed"]
 Priority = Literal["high", "medium", "low"]
 Outcome = Literal["done", "not_now", "no_answer"]
 
@@ -25,12 +25,19 @@ class FollowupScheduleCreate(BaseModel):
 
 
 class FollowupScheduleUpdate(BaseModel):
-    """Mark completed (status=completed + outcome) OR set inprogress OR reschedule (due_at)."""
+    """Mark completed (status=completed + outcome) OR change status OR reschedule (due_at).
+
+    actual_channel: when completing, the employee can record the channel they actually used
+    (e.g. scheduled as phone_call but connected via whatsapp). If omitted, the scheduled
+    channel is used in the activity log.
+    """
 
     status: FollowupStatus | None = None
     outcome: Outcome | None = None
     notes: str | None = None
     due_at: datetime.datetime | None = None
+    # Optional: override the channel recorded in the activity log at completion time.
+    actual_channel: str | None = Field(default=None, min_length=1, max_length=15)
 
     @model_validator(mode="after")
     def validate_update(self) -> "FollowupScheduleUpdate":
@@ -42,6 +49,8 @@ class FollowupScheduleUpdate(BaseModel):
             raise ValueError("outcome is required when marking a follow-up completed")
         if self.outcome and self.status != "completed":
             raise ValueError("outcome is only valid with status=completed")
+        if self.actual_channel and self.status != "completed":
+            raise ValueError("actual_channel is only valid with status=completed")
         if self.due_at is not None and self.due_at.replace(tzinfo=None) < ist_now() - datetime.timedelta(minutes=5):
             raise ValueError("due_at cannot be in the past")
         return self
@@ -54,6 +63,8 @@ class FollowupScheduleResponse(BaseModel):
     contact_id: int | None = None
     assigned_to: int
     assigned_to_name: str | None = None
+    # The employee who created this follow-up (None for rows predating this column).
+    created_by_id: int | None = None
     title: str | None = None
     due_at: datetime.datetime
     status: str

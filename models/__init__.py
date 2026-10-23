@@ -6,9 +6,9 @@ from .enum_value import EnumValue
 from .company_setting import CompanySetting
 from .contact import Contact
 from .lead_stage import LeadStage
-from .lead_activity import LeadActivity
 from .followup_schedule import FollowupSchedule
 from .followup_reschedule import FollowupReschedule
+from .followup_edit_log import FollowupEditLog
 from .activity_log import ActivityLog
 from .contact_assignment import ContactAssignment
 from .consumer_profile import ConsumerProfile
@@ -30,9 +30,9 @@ __all__ = [
     "CompanySetting",
     "Contact",
     "LeadStage",
-    "LeadActivity",
     "FollowupSchedule",
     "FollowupReschedule",
+    "FollowupEditLog",
     "ActivityLog",
     "ContactAssignment",
     "ConsumerProfile",

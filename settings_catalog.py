@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from models import CompanySetting, ConsumerProfile, Contact, EnumValue, LeadActivity, LeadSource, LeadStage, PartnerProfile, PipelineStage
+from models import ActivityLog, CompanySetting, ConsumerProfile, Contact, EnumValue, LeadSource, LeadStage, PartnerProfile, PipelineStage
 
 LEAD_SOURCE = "lead_source"
 LEAD_STAGE = "lead_stage"
@@ -47,6 +47,7 @@ NO_NEW_VALUES = {LEAD_STAGE}
 DEFAULT_ENUMS: dict[str, list[tuple[str, str]]] = {
     ACTIVITY_TYPE: [
         ("phone_call", "Phone call"), ("field_visit", "Field visit"), ("whatsapp", "WhatsApp"),
+        ("meeting", "Meeting"), ("email", "Email"),
         ("demo", "Demo"), ("internal_note", "Internal note"),
         ("other", "Other"),
     ],
@@ -207,7 +208,11 @@ def usage_counts(db: Session, category: str) -> dict[str, int]:
             .group_by(PipelineStage.slug).all()
         )
     elif category == ACTIVITY_TYPE:
-        rows = db.query(LeadActivity.type, func.count(LeadActivity.id)).group_by(LeadActivity.type).all()
+        rows = (
+            db.query(ActivityLog.activity_type, func.count(ActivityLog.id))
+            .join(Contact, Contact.id == ActivityLog.contact_id)
+            .filter(Contact.deleted_at.is_(None)).group_by(ActivityLog.activity_type).all()
+        )
     elif category == LOSS_REASON:
         rows = (
             db.query(LeadStage.loss_reason, func.count(LeadStage.id))

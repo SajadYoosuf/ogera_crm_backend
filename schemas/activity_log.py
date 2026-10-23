@@ -40,7 +40,7 @@ class ActivityLogResponse(BaseModel):
 class HistoryItem(BaseModel):
     """A single item in the combined contact timeline."""
 
-    event_type: Literal["stage", "activity", "followup", "followup_rescheduled", "assignment"]
+    event_type: Literal["stage", "activity", "followup", "followup_rescheduled", "assignment", "followup_edit"]
     timestamp: datetime.datetime
     # Who did it. Empty for a follow-up, since the schedule does not record its creator.
     actor_id: int | None = None
@@ -65,3 +65,7 @@ class HistoryItem(BaseModel):
     assigned_to_name: str | None = None
     # assignment fields
     assigned_from_name: str | None = None
+    # followup_edit fields
+    field_name: str | None = None    # which field changed, e.g. 'channel', 'priority', 'due_at'
+    old_value: str | None = None
+    new_value: str | None = None

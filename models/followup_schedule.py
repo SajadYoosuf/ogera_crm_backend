@@ -18,8 +18,13 @@ class FollowupSchedule(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
+    # Who created this follow-up — used to enforce creator-only reschedule.
+    # NULL for rows created before this column was added.
+    created_by: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("employees.id"), nullable=True)
+
     contact: Mapped["Contact | None"] = relationship("Contact", back_populates="followup_schedules")
     assignee: Mapped["Employee"] = relationship("Employee", foreign_keys=[assigned_to])
+    creator: Mapped["Employee | None"] = relationship("Employee", foreign_keys=[created_by])
 
     __table_args__ = (
         Index("idx_followup_schedule_contact_id", "contact_id"),
