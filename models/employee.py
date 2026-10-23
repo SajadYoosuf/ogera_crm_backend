@@ -16,6 +16,8 @@ class Employee(Base):
         String(40), ForeignKey("roles.slug", onupdate="CASCADE"), default="sales_executive"
     )
     phone: Mapped[str | None] = mapped_column(String(20))
+    # One of: malappuram, perinthalmanna, kottakkal. Nullable for legacy rows.
+    branch: Mapped[str | None] = mapped_column(String(60))
     is_active: Mapped[int] = mapped_column(SmallInteger, default=1)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(

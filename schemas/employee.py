@@ -10,6 +10,8 @@ _PHONE_RE = re.compile(r"^\+?[0-9]{7,15}$")
 # A role slug, e.g. "sales_executive". Whether it exists is checked against the `roles` table.
 RoleSlug = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,39}$")]
 
+VALID_BRANCHES = {"malappuram", "perinthalmanna", "kottakkal"}
+
 
 def _validate_phone(v: str | None) -> str | None:
     if v is None:
@@ -37,6 +39,7 @@ class EmployeeBase(BaseModel):
     email: EmailStr
     role: RoleSlug = RoleEnum.sales.value
     phone: Annotated[str, Field(max_length=20)] | None = None
+    branch: Annotated[str, Field(max_length=60)] | None = None
 
     @field_validator("name", mode="after")
     @classmethod
@@ -56,6 +59,13 @@ class EmployeeBase(BaseModel):
     def clean_phone(cls, v: str | None) -> str | None:
         return _validate_phone(v)
 
+    @field_validator("branch", mode="after")
+    @classmethod
+    def validate_branch(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_BRANCHES:
+            raise ValueError(f"Branch must be one of: {', '.join(sorted(VALID_BRANCHES))}")
+        return v
+
 
 class EmployeeCreate(EmployeeBase):
     password: str
@@ -71,6 +81,7 @@ class EmployeeUpdate(BaseModel):
     email: EmailStr | None = None
     role: RoleSlug | None = None
     phone: Annotated[str, Field(max_length=20)] | None = None
+    branch: Annotated[str, Field(max_length=60)] | None = None
     is_active: bool | None = None
     password: str | None = None  # if provided, route handler re-hashes it
 
@@ -94,6 +105,13 @@ class EmployeeUpdate(BaseModel):
     def clean_phone(cls, v: str | None) -> str | None:
         return _validate_phone(v)
 
+    @field_validator("branch", mode="after")
+    @classmethod
+    def validate_branch(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_BRANCHES:
+            raise ValueError(f"Branch must be one of: {', '.join(sorted(VALID_BRANCHES))}")
+        return v
+
     @field_validator("password", mode="after")
     @classmethod
     def password_strength(cls, v: str | None) -> str | None:
@@ -109,6 +127,7 @@ class EmployeeSummary(BaseModel):
     email: str
     role: str
     phone: str | None = None
+    branch: str | None = None
 
 
 class EmployeeResponse(EmployeeBase):
