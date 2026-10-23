@@ -19,6 +19,9 @@ from .sale import Sale
 from .product import Product, ProductOption
 from .contact_interested_product import contact_interested_products  # registers the join table with Base.metadata
 from .notification import Notification
+from .attendance import StaffAttendance
+from .staff_location import StaffLocation
+from .expense import Expense, EXPENSE_CATEGORIES, EXPENSE_STATUSES
 
 __all__ = [
     "Role",
@@ -45,4 +48,9 @@ __all__ = [
     "ProductOption",
     "contact_interested_products",
     "Notification",
+    "StaffAttendance",
+    "StaffLocation",
+    "Expense",
+    "EXPENSE_CATEGORIES",
+    "EXPENSE_STATUSES",
 ]
