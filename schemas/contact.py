@@ -289,6 +289,9 @@ class ContactResponse(ContactBase):
     # Products this contact is interested in (populated from the M2M relationship)
     interested_products: list[ProductRef] = []
 
+    # True when the creator is admin/manager — signals the web to show the "Schedule first follow-up?" prompt
+    auto_followup_needed: bool = False
+
 
 class ContactListItem(BaseModel):
     """

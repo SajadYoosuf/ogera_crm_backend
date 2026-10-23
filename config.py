@@ -38,3 +38,6 @@ APP_LOGIN_URL = os.getenv("APP_LOGIN_URL", "https://ogera-45upilrar-sajadyoosufs
 
 # Lead lifecycle: days before a retry follow-up is auto-scheduled on no_answer / not_now
 RETRY_FOLLOWUP_DAYS = int(os.getenv("RETRY_FOLLOWUP_DAYS", "3"))
+
+# Hours after contact creation when the auto-scheduled first follow-up is due (staff roles only)
+AUTO_FOLLOWUP_HOURS = int(os.getenv("AUTO_FOLLOWUP_HOURS", "48"))

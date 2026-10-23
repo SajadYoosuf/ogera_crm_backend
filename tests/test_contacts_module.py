@@ -259,3 +259,49 @@ def test_admin_and_manager_see_every_contact(client, login, lead_source_id, staf
     manager, _ = login("manager")
     assert client.get("/contacts", headers=staff["admin"]).json()["total"] == 1
     assert client.get("/contacts", headers=manager).json()["total"] == 1
+
+
+# --- Sprint 2: auto follow-up on contact creation (48h rule) --------------------------------
+
+def test_staff_contact_creation_auto_schedules_first_followup(client, login, lead_source_id):
+    """When a sales_executive creates a contact, a follow-up is auto-created at +48h.
+
+    WHY THIS MATTERS:
+        Staff who create a contact must not forget to follow up. The backend silently schedules
+        the first call so nothing slips through the cracks even if the employee forgets.
+    """
+    headers, _ = login("anu")  # anu is a sales_executive
+    source_id = lead_source_id("meta")
+    res = _contact(client, headers, source_id, phone="9900000050")
+    assert res.status_code == 201, res.text
+    data = res.json()
+    # auto_followup_needed should be False for staff (backend handled it silently)
+    assert data["auto_followup_needed"] is False
+    # The follow-up must exist for the newly created contact
+    contact_id = data["id"]
+    admin_headers, _ = login("admin")
+    followups = client.get(f"/contacts/{contact_id}/followups", headers=admin_headers).json()
+    assert len(followups) == 1
+    fu = followups[0]
+    assert fu["title"] == "First Contact"
+    assert fu["priority"] == "high"
+    assert fu["channel"] == "phone_call"
+    assert fu["status"] == "todo"
+
+
+def test_admin_contact_creation_sets_auto_followup_needed(client, login, lead_source_id):
+    """When admin/manager creates a contact, no follow-up is auto-created and the flag is True.
+
+    WHY THIS MATTERS:
+        Admin and manager don't carry leads (rule 1 in rule.md). When they create a contact
+        they need to assign the first follow-up to a staff member manually. The flag tells the
+        web app to show a prompt modal for this.
+    """
+    headers, _ = login("admin")
+    res = _contact(client, headers, lead_source_id("meta"), phone="9900000051")
+    assert res.status_code == 201, res.text
+    data = res.json()
+    assert data["auto_followup_needed"] is True
+    # No follow-up should have been auto-created
+    followups = client.get(f"/contacts/{data['id']}/followups", headers=headers).json()
+    assert followups == []

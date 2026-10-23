@@ -47,12 +47,13 @@ from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import func, or_
+import config
 from sqlalchemy.orm import Session, aliased, joinedload
 import json
 
 import contact_export
 import contact_import
-from business_time import ist_day_start_utc
+from business_time import ist_day_start_utc, ist_now
 from auth import get_current_user
 from contact_lookup import get_live_contact
 from database import get_db
@@ -842,6 +843,24 @@ def create_contact(
     db.flush()  # Get contact.id without committing yet
     if assigned_to is not None:
         db.add(ContactAssignment(contact_id=contact.id, assigned_to=assigned_to, changed_by=current_user.id))
+
+    # Auto-schedule the first follow-up.
+    # Staff roles (everyone except admin/manager) get a silent auto-scheduled follow-up at +48h.
+    # Admin/manager create contacts too but they don't carry leads themselves (rule 1), so they
+    # get no auto-schedule here — the web will show a prompt instead (auto_followup_needed=True).
+    auto_followup_needed = current_user.role in NON_ASSIGNABLE_ROLES
+    if not auto_followup_needed:
+        db.add(FollowupSchedule(
+            contact_id=contact.id,
+            assigned_to=current_user.id,
+            title="First Contact",
+            due_at=ist_now() + timedelta(hours=config.AUTO_FOLLOWUP_HOURS),
+            status="todo",
+            priority="high",
+            channel="phone_call",
+            created_by=current_user.id,
+        ))
+
     db.commit()
     db.refresh(contact)  # Reload so relationships (lead_source, assigned_employee, etc.) are populated
 
@@ -851,6 +870,7 @@ def create_contact(
     response.missing_fields = missing_fields(contact)
     response.is_verified = not response.missing_fields
     response.current_stage = _stage_response(contact.lead_stages[0])
+    response.auto_followup_needed = auto_followup_needed
     return response
 
 
