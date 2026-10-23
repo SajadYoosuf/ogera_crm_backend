@@ -71,7 +71,7 @@ def send_employee_credentials(name: str, email: str, password: str, role: str) -
         return {"sent": False, "message": "Email sending is not configured on the server"}
 
     try:
-        validate_email(email, check_deliverability=True)
+        validate_email(email, check_deliverability=False)
     except EmailNotValidError as exc:
         print(f"[mail] NOT sending to {email}: {exc}")
         return {"sent": False, "message": f"Credentials email not sent: {exc}"}
@@ -168,7 +168,7 @@ def send_password_reset_code(name: str, email: str, code: str, expires_minutes: 
         return {"sent": False, "message": "Email sending is not configured on the server"}
 
     try:
-        validate_email(email, check_deliverability=True)
+        validate_email(email, check_deliverability=False)
     except EmailNotValidError as exc:
         print(f"[mail] NOT sending reset code to {email}: {exc}")
         return {"sent": False, "message": f"Reset code not sent: {exc}"}
@@ -218,7 +218,7 @@ def send_password_changed_notice(name: str, email: str) -> dict:
         return {"sent": False, "message": "Email sending is not configured on the server"}
 
     try:
-        validate_email(email, check_deliverability=True)
+        validate_email(email, check_deliverability=False)
     except EmailNotValidError as exc:
         print(f"[mail] NOT sending password change notice to {email}: {exc}")
         return {"sent": False, "message": f"Notice not sent: {exc}"}

@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import func
@@ -196,7 +196,7 @@ def verify_code(body: VerifyRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/reset", summary="Set a new password")
-def reset_password(body: ResetRequest, db: Session = Depends(get_db)):
+def reset_password(body: ResetRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Sets a new password using the reset token from /verify. The token works only once.
     The new password must be 6 to 15 characters and different from the current one.
     The employee is emailed to confirm the change.
@@ -233,6 +233,6 @@ def reset_password(body: ResetRequest, db: Session = Depends(get_db)):
     # Hash the full password: login verifies the whole string, so nothing may be truncated here.
     employee.password_hash = pwd_context.hash(password)
     db.commit()
-    # Best effort: the password is already changed, so a failed email is only logged.
-    send_password_changed_notice(employee.name, employee.email)
+    # Best effort: password is already saved, so send the notice in the background and respond immediately.
+    background_tasks.add_task(send_password_changed_notice, employee.name, employee.email)
     return {"message": "Password updated. You can now log in with your new password."}
