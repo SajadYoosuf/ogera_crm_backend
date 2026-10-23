@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-10-23 — `5c7648c` (branch `version1`)
+
+**feat(pipeline): Sprint 2 — contact creation auto follow-up (48h rule)**
+
+Author: sajad yoosuf
+Previous commit on this side: `4c918e0` feat(pipeline): Sprint 1 — task system redesign + bug fixes (2026-10-23)
+
+### Summary
+Staff roles get a silent first follow-up auto-scheduled at +48h on contact creation. Admin/manager get `auto_followup_needed: true` in the response so the web can show a prompt. See `docs/changes/2026-10-23-sprint2-auto-followup.md`.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Added | `docs/changes/2026-10-23-sprint2-auto-followup.md` | Change notes |
+| Added | `scripts/migrate_sprint2_auto_followup.sql` | Migration notes (schema unchanged from Sprint 1) |
+| Modified | `config.py` | Add `AUTO_FOLLOWUP_HOURS` constant (default 48) |
+| Modified | `routes/contacts.py` | Auto-schedule logic after contact insert; `ist_now` import |
+| Modified | `schemas/contact.py` | `ContactResponse.auto_followup_needed: bool = False` |
+| Modified | `tests/test_contacts_module.py` | 2 new tests (24/24 passing) |
+
+### Notes
+Web changes (AutoFollowupPromptModal, useContactEditor, ContactsView) are in the same commit `5c7648c`.
+
+---
+
 ## 2026-10-23 — `4c918e0` (branch `version1`)
 
 **feat(pipeline): Sprint 1 — task system redesign + bug fixes**
