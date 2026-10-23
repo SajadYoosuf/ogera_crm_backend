@@ -74,4 +74,18 @@ def create_activity(
     db.commit()
     db.refresh(log)
     db.refresh(log, attribute_names=["doer"])
+
+    # Notify admin and manager when an activity is logged
+    try:
+        from services.notification_service import notify_roles
+        from contact_lookup import get_live_contact
+        contact = get_live_contact(db, contact_id)
+        doer_name = log.doer.name if log.doer else "Someone"
+        title = f"Activity logged: {contact.name}"
+        msg = f"{doer_name} logged a {body.activity_type.replace('_', ' ')} with {contact.name}."
+        notify_roles(db, ["admin", "manager"], "activity_logged", title, msg, "contact", contact_id)
+        db.commit()
+    except Exception:
+        pass
+
     return _activity_response(log)

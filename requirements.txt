@@ -9,3 +9,5 @@ python-jose[cryptography]
 python-multipart
 openpyxl
 reportlab
+apscheduler>=3.10
+firebase-admin>=6.5

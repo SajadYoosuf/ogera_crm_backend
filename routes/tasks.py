@@ -224,6 +224,21 @@ def create_task(
     db.commit()
     db.refresh(fs)
     db.refresh(fs, attribute_names=["assignee"])
+
+    # Notify the assigned employee and admin/manager about the new task
+    try:
+        from services.notification_service import create_notification, notify_roles
+        task_title = fs.title or "Task"
+        due_str = fs.due_at.strftime("%d %b %Y")
+        title = f"New task: {task_title}"
+        msg = f'A task "{task_title}" has been assigned to you, due {due_str}.'
+        if body.assigned_to != current_user.id:
+            create_notification(db, body.assigned_to, "task_created", title, msg, "task", fs.id)
+        notify_roles(db, ["admin", "manager"], "task_created", title, msg, "task", fs.id)
+        db.commit()
+    except Exception:
+        pass
+
     return _followup_response(fs)
 
 

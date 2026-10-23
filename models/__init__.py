@@ -18,6 +18,7 @@ from .dealer_profile import DealerProfile
 from .sale import Sale
 from .product import Product, ProductOption
 from .contact_interested_product import contact_interested_products  # registers the join table with Base.metadata
+from .notification import Notification
 
 __all__ = [
     "Role",
@@ -43,4 +44,5 @@ __all__ = [
     "Product",
     "ProductOption",
     "contact_interested_products",
+    "Notification",
 ]

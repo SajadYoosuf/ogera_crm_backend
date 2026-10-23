@@ -5,9 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS, UPLOAD_DIR
 from database import engine, Base, SessionLocal
 import models  # noqa: F401 — registers all models with Base before create_all
-from routes import auth_router, password_reset_router, contacts_router, dashboard_router, employees_router, lead_activities_router, followups_router, history_router, lead_sources_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router
+from routes import auth_router, password_reset_router, contacts_router, dashboard_router, employees_router, lead_activities_router, followups_router, history_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router
 import settings_catalog
 from middleware import RequestLoggingMiddleware
+from firebase_init import init_firebase
+from scheduler import start_scheduler, stop_scheduler
 
 Base.metadata.create_all(bind=engine)
 
@@ -16,6 +18,17 @@ with SessionLocal() as _db:
     settings_catalog.seed_defaults(_db)  # default dropdown options and company name
 
 app = FastAPI(title="Ogera CRM API", version="1.0.0")
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    init_firebase()
+    start_scheduler()
+
+
+@app.on_event("shutdown")
+def shutdown_event() -> None:
+    stop_scheduler()
 
 app.add_middleware(RequestLoggingMiddleware)
 
@@ -42,6 +55,7 @@ app.include_router(products_router)
 app.include_router(roles_router)
 app.include_router(sales_router)
 app.include_router(settings_router)
+app.include_router(notifications_router)
 app.include_router(tasks_router)
 
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)

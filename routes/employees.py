@@ -1,5 +1,6 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -252,3 +253,25 @@ def delete_employee(
     employee.deleted_at = datetime.utcnow()
     employee.is_active = 0
     db.commit()
+
+
+class _FcmTokenBody(BaseModel):
+    token: str
+
+
+@router.post("/me/fcm-token", summary="Register or update FCM device token")
+def register_fcm_token(
+    body: _FcmTokenBody,
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """
+    POST /employees/me/fcm-token — store the caller's FCM push token.
+
+    Called by the web app and mobile app after login. The token is used by the backend to
+    send push notifications to this employee's current browser or phone.
+    One token per employee: the latest registration replaces the previous one.
+    """
+    current_user.fcm_token = body.token.strip()
+    db.commit()
+    return {"ok": True}

@@ -864,6 +864,27 @@ def create_contact(
     db.commit()
     db.refresh(contact)  # Reload so relationships (lead_source, assigned_employee, etc.) are populated
 
+    # Fire notifications — after commit so contact.id is guaranteed persisted
+    try:
+        from services.notification_service import create_notification, notify_roles
+        notify_roles(
+            db, ["admin", "manager"], "contact_created",
+            f"New contact: {contact.name}",
+            f"{current_user.name} added a new {contact.contact_type} contact.",
+            "contact", contact.id,
+        )
+        # If assigned to a sales exec, notify them too
+        if contact.assigned_to and contact.assigned_to != current_user.id:
+            create_notification(
+                db, contact.assigned_to, "contact_assigned",
+                f"Contact assigned to you: {contact.name}",
+                f"{contact.name} ({contact.contact_type}) has been assigned to you.",
+                "contact", contact.id,
+            )
+        db.commit()
+    except Exception:
+        pass
+
     # Steps 9–10: build response
     response = ContactResponse.model_validate(contact, from_attributes=True)
     response.referrals_count = 0  # Brand new contact cannot have referrals yet
@@ -956,10 +977,11 @@ def update_contact(
         setattr(contact, field, value)
 
     # Write assignment history if the owner changed
-    if "assigned_to" in update_data and update_data["assigned_to"] != previous_owner:
+    new_owner = update_data.get("assigned_to")
+    if "assigned_to" in update_data and new_owner != previous_owner:
         db.add(ContactAssignment(
             contact_id=contact.id, assigned_from=previous_owner,
-            assigned_to=update_data["assigned_to"], changed_by=current_user.id,
+            assigned_to=new_owner, changed_by=current_user.id,
         ))
 
     # If the phone was updated, recalculate the phone_key for duplicate detection
@@ -1025,6 +1047,20 @@ def update_contact(
     db.add(contact)
     db.commit()
     db.refresh(contact)
+
+    # Notify assigned employee when contact is reassigned
+    if "assigned_to" in update_data and new_owner != previous_owner and new_owner:
+        try:
+            from services.notification_service import create_notification
+            create_notification(
+                db, new_owner, "contact_assigned",
+                f"Contact assigned to you: {contact.name}",
+                f"{contact.name} ({contact.contact_type}) has been assigned to you.",
+                "contact", contact.id,
+            )
+            db.commit()
+        except Exception:
+            pass
 
     response = ContactResponse.model_validate(contact, from_attributes=True)
     response.referrals_count = (

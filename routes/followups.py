@@ -122,6 +122,21 @@ def create_followup(
     db.commit()
     db.refresh(fs)
     db.refresh(fs, attribute_names=["contact", "assignee"])
+
+    # Notify the assigned employee and admin/manager about the new follow-up
+    try:
+        from services.notification_service import create_notification, notify_roles
+        contact_name = fs.contact.name if fs.contact else "a contact"
+        due_str = fs.due_at.strftime("%d %b %Y")
+        title = f"Follow-up scheduled: {contact_name}"
+        msg = f"A follow-up with {contact_name} is scheduled for {due_str}."
+        if fs.assigned_to != current_user.id:
+            create_notification(db, fs.assigned_to, "followup_created", title, msg, "followup", fs.id)
+        notify_roles(db, ["admin", "manager"], "followup_created", title, msg, "followup", fs.id)
+        db.commit()
+    except Exception:
+        pass
+
     return _followup_response(fs)
 
 
