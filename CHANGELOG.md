@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-10-23 — `4c918e0` (branch `version1`)
+
+**feat(pipeline): Sprint 1 — task system redesign + bug fixes**
+
+Author: sajad yoosuf
+Previous commit on this side: `6a5c757` feat(web/employees): add branch to employee form, filters and exports (2026-10-23)
+
+### Summary
+Redesigns the follow-up/task system with proper fields (created_by, audit log, pending status, actual channel at completion, priority) and fixes four bugs. See `docs/changes/2026-10-23-sprint1-pipeline-tasks.md`. Web side also updated in same commit.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Added | `docs/changes/2026-10-23-sprint1-pipeline-tasks.md` | Change notes |
+| Modified | `models/__init__.py` | Register FollowupEditLog |
+| Added | `models/followup_edit_log.py` | New audit table: one row per field changed on a follow-up |
+| Modified | `models/followup_schedule.py` | Add created_by FK column |
+| Modified | `routes/followups.py` | Creator-only reschedule, actual_channel, retry dedup, edit log, pending status |
+| Modified | `routes/history.py` | Include followup_edit events in timeline |
+| Modified | `routes/tasks.py` | Bug 1 fix: activity_log on completion; creator-only reschedule; edit log; pending |
+| Modified | `schemas/activity_log.py` | Add "followup_edit" event_type + field_name/old/new_value to HistoryItem |
+| Modified | `schemas/followup_schedule.py` | Add pending to FollowupStatus; actual_channel to Update; created_by_id to Response |
+| Added | `scripts/migrate_sprint1_pipeline.sql` | ADD COLUMN created_by, CREATE TABLE followup_edit_log, INSERT meeting+email types |
+| Modified | `settings_catalog.py` | Add meeting and email to DEFAULT_ENUMS activity types |
+
+### Notes
+Run `scripts/migrate_sprint1_pipeline.sql` against the database before deploying.
+Web side (ActivityLogForm, FollowupScheduleForm, icons, tokens, activities.ts) is in the same commit.
+
+---
+
 ## 2026-10-22 — `fce4d1f` (branch `phase1-redesign`)
 
 **feat: house stage and tank type lists move to Settings**
