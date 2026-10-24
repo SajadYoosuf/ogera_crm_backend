@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from business_time import ist_now
 
-FollowupStatus = Literal["todo", "inprogress", "pending", "completed"]
+FollowupStatus = Literal["todo", "inprogress", "completed"]
 Priority = Literal["high", "medium", "low"]
 Outcome = Literal["done", "not_now", "no_answer"]
 

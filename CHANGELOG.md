@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-10-24 — `2c0218a` (branch `fix/task-status-in-progress`)
+
+**fix(tasks): keep real followup status so In Progress sticks**
+
+Author: sajad yoosuf
+Previous commit on this side: `6467469` test(backend): add employee CRUD test suite
+
+### Summary
+Choosing "In Progress" on a task snapped back to "Pending", because the task list only reported "pending" or "done". The list now also returns `followup_status` with the stored value (`todo`, `inprogress`, `completed`). `pending` is no longer accepted when changing a task's status. The legacy `status` and `task_state` fields are unchanged so the mobile app keeps working.
+
+### Files
+| Status | File | Change |
+| --- | --- | --- |
+| Modified | `routes/tasks.py` | Added `followup_status` to the task response; removed `pending` from PATCH |
+| Modified | `routes/followups.py` | Removed `pending` from the status change and retry-check lists |
+| Modified | `schemas/followup_schedule.py` | `FollowupStatus` is now `todo`, `inprogress`, `completed` |
+| Added | `tests/test_task_status.py` | Round trip for In Progress, default `todo`, 422 for `pending` |
+
+### Notes
+Existing rows saved as `pending` are not migrated yet; they stay out of the open-task filters until they are changed to `todo`. Full backend suite: 322 passed, 9 failed in employees, partner stages, lead pipeline and no-role rules. None of the failures are in the status code changed here.
+
+---
+
 ## 2026-10-23 — `5c7648c` (branch `version1`)
 
 **feat(pipeline): Sprint 2 — contact creation auto follow-up (48h rule)**

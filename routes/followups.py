@@ -169,7 +169,7 @@ def update_followup(
     (e.g. was scheduled as phone_call but actually used whatsapp).
     outcome in (no_answer, not_now) → auto-schedules a retry follow-up if none is already open.
     Reschedule (due_at) → creator-only (admin/manager can always reschedule).
-    Status change (todo / inprogress / pending) → any employee.
+    Status change (todo / inprogress) → any employee.
     Every field change is recorded in followup_edit_log.
     """
     get_live_contact(db, contact_id)
@@ -209,7 +209,7 @@ def update_followup(
                 existing_open = db.query(FollowupSchedule).filter(
                     FollowupSchedule.contact_id == fs.contact_id,
                     FollowupSchedule.assigned_to == fs.assigned_to,
-                    FollowupSchedule.status.in_(("todo", "inprogress", "pending")),
+                    FollowupSchedule.status.in_(("todo", "inprogress")),
                 ).count()
                 if existing_open == 0:
                     retry = FollowupSchedule(
@@ -223,7 +223,7 @@ def update_followup(
                     )
                     db.add(retry)
 
-    elif body.status in ("todo", "inprogress", "pending"):
+    elif body.status in ("todo", "inprogress"):
         _log_edit(db, fs, current_user.id, "status", fs.status, body.status)
         fs.status = body.status
 
