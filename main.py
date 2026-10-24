@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS, UPLOAD_DIR
 from database import engine, Base, SessionLocal
 import models  # noqa: F401 — registers all models with Base before create_all
-from routes import auth_router, password_reset_router, contacts_router, dashboard_router, employees_router, lead_activities_router, followups_router, history_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router, attendance_router, staff_locations_router, expenses_router
+from routes import auth_router, password_reset_router, recent_activity_router, contacts_router, dashboard_router, employees_router, lead_activities_router, followups_router, history_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router, attendance_router, staff_locations_router, expenses_router
 import settings_catalog
 from middleware import RequestLoggingMiddleware
 from firebase_init import init_firebase
@@ -43,6 +43,7 @@ app.add_middleware(
 # Include routers
 app.include_router(auth_router)
 app.include_router(password_reset_router)
+app.include_router(recent_activity_router)  # before contacts_router: /contacts/recent-activity must win over /contacts/{contact_id}
 app.include_router(contacts_router)
 app.include_router(dashboard_router)
 app.include_router(employees_router)

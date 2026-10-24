@@ -32,7 +32,7 @@ class Notification(Base):
     type: Mapped[str] = mapped_column(String(40))
     title: Mapped[str] = mapped_column(String(200))
     message: Mapped[str] = mapped_column(Text)
-    entity_type: Mapped[str | None] = mapped_column(String(20))   # "contact" / "task" / "followup"
+    entity_type: Mapped[str | None] = mapped_column(String(20))   # "contact" / "task" / "followup" / "expense"
     entity_id: Mapped[int | None] = mapped_column(BigInteger)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime.datetime] = mapped_column(

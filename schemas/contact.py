@@ -328,6 +328,8 @@ class ContactListItem(BaseModel):
     lead_source: LeadSourceSummary | None = None
     assigned_to: NameRef | None = None
     created_by: NameRef | None = None
+    # Branch of the employee who created the contact (e.g. "malappuram"); None when unknown
+    created_by_branch: str | None = None
     created_at: datetime.datetime
     # Computed on read: True when all required fields for the contact type are filled
     is_verified: bool = False

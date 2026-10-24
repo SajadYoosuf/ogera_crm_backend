@@ -7,6 +7,7 @@ from database import get_db
 from models import Employee
 from models.activity_log import ActivityLog
 from schemas.activity_log import ActivityLogCreate, ActivityLogResponse
+from services.lead_access import ensure_can_log_activity
 import settings_catalog as catalog
 
 router = APIRouter(
@@ -46,8 +47,12 @@ def create_activity(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Log an interaction that was not pre-scheduled (no followup_id). For completing a scheduled follow-up, use PATCH /tasks/{id}."""
-    get_live_contact(db, contact_id)
+    """Log an interaction that was not pre-scheduled (no followup_id). For completing a scheduled follow-up, use PATCH /tasks/{id}.
+
+    Who may log: admin and manager on any lead; any other employee on a lead assigned to them or created by them (403 otherwise).
+    """
+    contact = get_live_contact(db, contact_id)
+    ensure_can_log_activity(current_user, contact)
     catalog.ensure_allowed(db, catalog.ACTIVITY_TYPE, body.activity_type)
 
     done_by = current_user.id
@@ -78,7 +83,6 @@ def create_activity(
     # Notify admin and manager when an activity is logged
     try:
         from services.notification_service import notify_roles
-        from contact_lookup import get_live_contact
         contact = get_live_contact(db, contact_id)
         doer_name = log.doer.name if log.doer else "Someone"
         title = f"Activity logged: {contact.name}"

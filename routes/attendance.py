@@ -18,6 +18,7 @@ BUSINESS RULES:
 import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from auth import get_current_user
 from business_time import ist_now, today_ist
@@ -121,7 +122,13 @@ def checkin(
         checkin_lng=body.longitude,
     )
     db.add(record)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two taps can race past the check above; the unique (employee, date)
+        # constraint then rejects the second insert. Report it as the same 409.
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Already checked in today")
     db.refresh(record)
     return _to_response(record)
 
