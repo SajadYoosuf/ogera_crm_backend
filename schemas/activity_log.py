@@ -69,3 +69,19 @@ class HistoryItem(BaseModel):
     field_name: str | None = None    # which field changed, e.g. 'channel', 'priority', 'due_at'
     old_value: str | None = None
     new_value: str | None = None
+
+
+class RecentActivityItem(BaseModel):
+    """One recent contact event (a contact created or assigned) for the activity log picker.
+
+    `event_type` is "created" or "assigned". For "assigned", `assigned_to_name`
+    is the new owner; `actor_name` is who made the change in both cases.
+    """
+
+    event_type: Literal["created", "assigned"]
+    timestamp: datetime.datetime
+    contact_id: int
+    contact_name: str | None = None
+    actor_id: int | None = None
+    actor_name: str | None = None
+    assigned_to_name: str | None = None
