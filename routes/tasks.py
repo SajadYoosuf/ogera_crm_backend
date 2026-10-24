@@ -10,9 +10,10 @@ from models import Contact, Employee
 from models.followup_schedule import FollowupSchedule
 from models.activity_log import ActivityLog
 from models.followup_edit_log import FollowupEditLog
-from routes.followups import _followup_response, _log_edit, _task_state, checked_channel, LEGACY_CHANNELS, MONITORING_ROLES
+from routes.followups import _followup_response, _log_edit, _task_state, checked_channel, LEGACY_CHANNELS
 from schemas.followup_schedule import FollowupScheduleResponse, FollowupScheduleUpdate, Priority
 from business_time import ist_now, today_ist
+from services.lead_access import ensure_can_assign_followup, ensure_can_work_followup
 
 router = APIRouter(prefix="/tasks", tags=["tasks"], dependencies=[Depends(get_current_user)])
 
@@ -209,6 +210,7 @@ def create_task(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
+    ensure_can_assign_followup(current_user, body.assigned_to)
     assignee = db.query(Employee).filter(Employee.id == body.assigned_to, Employee.deleted_at.is_(None), Employee.is_active == 1).first()
     if not assignee:
         raise HTTPException(status_code=400, detail="Assigned employee not found or inactive")
@@ -263,6 +265,7 @@ def update_task(
     ).filter(FollowupSchedule.id == task_id).first()
     if not fs:
         raise HTTPException(status_code=404, detail="Task not found")
+    ensure_can_work_followup(current_user, fs)
     if fs.status == "completed":
         raise HTTPException(status_code=409, detail="Task is already completed")
 
@@ -292,15 +295,6 @@ def update_task(
         fs.status = body.status
 
     else:  # reschedule
-        # Only the creator of this task can reschedule it.
-        # Admin and manager can always reschedule regardless of ownership.
-        if (
-            fs.created_by is not None
-            and fs.created_by != current_user.id
-            and current_user.role not in MONITORING_ROLES
-        ):
-            raise HTTPException(status_code=403, detail="Only the employee who scheduled this task can reschedule it")
-
         _log_edit(db, fs, current_user.id, "due_at", fs.due_at.isoformat(), body.due_at.isoformat())
         fs.due_at = body.due_at
 

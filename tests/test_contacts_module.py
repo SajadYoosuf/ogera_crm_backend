@@ -240,6 +240,19 @@ def test_dealer_appears_in_list_with_owner_name(client, login, lead_source_id):
     assert [(r["name"], r["owner_name"]) for r in rows] == [("Kerala Tanks", "Ravi")]
 
 
+def test_list_row_shows_who_created_it_and_their_branch(client, login, lead_source_id, staff):
+    """Each list row names the creator and the creator's branch, so admins can see it at a glance."""
+    admin = staff["admin"]
+    anu_headers, anu_id = staff["anu"]
+    assert client.put(f"/employees/{anu_id}", headers=admin, json={"branch": "kottakkal"}).status_code == 200
+    _contact(client, anu_headers, lead_source_id("meta"), phone="9100000050", name="By Anu")
+    _contact(client, admin, lead_source_id("meta"), phone="9100000051", name="By Admin")
+    rows = {r["name"]: r for r in client.get("/contacts", headers=admin).json()["items"]}
+    assert rows["By Anu"]["created_by"]["name"] == "Anu Sales"
+    assert rows["By Anu"]["created_by_branch"] == "kottakkal"
+    assert rows["By Admin"]["created_by_branch"] is None
+
+
 # --- who can see which contacts --------------------------------------------------------------
 
 @pytest.fixture()

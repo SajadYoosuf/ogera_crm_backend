@@ -17,9 +17,13 @@ from schemas.activity_log import ActivityLogCreate
 from models.activity_log import ActivityLog
 import settings_catalog as catalog
 from business_time import ist_now
+from services.lead_access import (
+    ensure_can_assign_followup,
+    ensure_can_work_contact,
+    ensure_can_work_followup,
+)
 
-# Roles that monitor but do not execute work. They can reschedule any follow-up regardless of
-# who created it, because they need to manage their team's schedule.
+# Kept for the other modules that import it. Access rules now live in services/lead_access.py.
 MONITORING_ROLES = {"admin", "manager"}
 
 router = APIRouter(
@@ -103,7 +107,10 @@ def create_followup(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    get_live_contact(db, contact_id)
+    """Schedule a follow-up. Admin and manager: any lead, any assignee. Others: their own lead, for themselves."""
+    contact = get_live_contact(db, contact_id)
+    ensure_can_work_contact(current_user, contact)
+    ensure_can_assign_followup(current_user, body.assigned_to)
     assignee = db.query(Employee).filter(Employee.id == body.assigned_to).first()
     if not assignee or assignee.deleted_at or not assignee.is_active:
         raise HTTPException(status_code=400, detail="Assigned employee not found or inactive")
@@ -168,12 +175,12 @@ def update_followup(
     actual_channel overrides the logged activity type at completion time
     (e.g. was scheduled as phone_call but actually used whatsapp).
     outcome in (no_answer, not_now) → auto-schedules a retry follow-up if none is already open.
-    Reschedule (due_at) → creator-only (admin/manager can always reschedule).
-    Status change (todo / inprogress) → any employee.
+    Who may change it: admin and manager on any follow-up; any other employee only on a follow-up assigned to them.
     Every field change is recorded in followup_edit_log.
     """
     get_live_contact(db, contact_id)
     fs = _get_followup_or_404(db, contact_id, followup_id)
+    ensure_can_work_followup(current_user, fs)
 
     if fs.status == "completed":
         raise HTTPException(status_code=409, detail="Follow-up is already completed")
@@ -228,15 +235,6 @@ def update_followup(
         fs.status = body.status
 
     else:  # reschedule (body.due_at is set)
-        # Only the creator of this follow-up can reschedule it.
-        # Admin and manager can always reschedule regardless of ownership.
-        if (
-            fs.created_by is not None
-            and fs.created_by != current_user.id
-            and current_user.role not in MONITORING_ROLES
-        ):
-            raise HTTPException(status_code=403, detail="Only the employee who scheduled this follow-up can reschedule it")
-
         db.add(FollowupReschedule(
             followup_id=fs.id, contact_id=fs.contact_id, from_due_at=fs.due_at, to_due_at=body.due_at, changed_by=current_user.id,
         ))

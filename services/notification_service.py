@@ -13,7 +13,7 @@ NEVER RAISES:
 """
 import logging
 from datetime import timedelta
-from sqlalchemy import func as sqlfunc
+from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.orm import Session
 from models.notification import Notification
 from models.employee import Employee
@@ -204,11 +204,16 @@ def run_48h_rule(db: Session) -> int:
     sent = 0
     try:
         # Contacts that have had recent activity — we exclude these
+        # select() builds an explicit SQL SELECT, which IN() accepts without the
+        # SAWarning. The NULL filter matters: "x NOT IN (..., NULL)" is never true
+        # in SQL, so a NULL contact_id would silently stop every reminder.
         active_contact_ids = (
-            db.query(ActivityLog.contact_id)
-            .filter(ActivityLog.logged_at >= cutoff)
+            select(ActivityLog.contact_id)
+            .where(
+                ActivityLog.logged_at >= cutoff,
+                ActivityLog.contact_id.isnot(None),
+            )
             .distinct()
-            .subquery()
         )
         # Also exclude contacts whose follow-ups have been completed recently
         # (completing a follow-up writes an ActivityLog row, so this is handled above)

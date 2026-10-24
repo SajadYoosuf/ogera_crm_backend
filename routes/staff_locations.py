@@ -2,7 +2,8 @@
 Staff location streaming — receives live GPS pings from the mobile foreground service.
 
 WHAT THIS FILE DOES:
-    POST /staff/location — upsert the current employee's live GPS position.
+    POST /staff/location     — upsert the current employee's live GPS position.
+    GET  /staff/location/me  — read back the employee's own last known position.
 
 THROTTLE:
     The server ignores a ping that arrives within THROTTLE_SECONDS of the previous one.
@@ -32,6 +33,40 @@ THROTTLE_SECONDS = 30
 class LocationBody(BaseModel):
     latitude: float
     longitude: float
+
+
+class LocationResponse(BaseModel):
+    latitude: float
+    longitude: float
+    recorded_at: datetime.datetime
+
+
+@router.get(
+    "/location/me",
+    response_model=LocationResponse | None,
+    summary="My last known GPS position",
+)
+def get_my_location(
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """
+    Returns the signed-in employee's most recent stored position, or null when
+    no ping has been received yet. Only the caller's own row is ever read, so
+    one employee can never see another employee's location (no IDOR).
+    """
+    row = (
+        db.query(StaffLocation)
+        .filter(StaffLocation.employee_id == current_user.id)
+        .first()
+    )
+    if row is None:
+        return None
+    return LocationResponse(
+        latitude=row.latitude,
+        longitude=row.longitude,
+        recorded_at=row.recorded_at,
+    )
 
 
 @router.post(

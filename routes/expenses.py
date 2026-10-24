@@ -7,7 +7,8 @@ WHAT THIS FILE DOES:
     GET    /expenses/{id}           — single expense detail
     DELETE /expenses/{id}           — soft delete (creator only, pending status only)
     POST   /expenses/{id}/approve   — manager/admin approves a pending expense
-    POST   /expenses/{id}/reject    — manager/admin rejects a pending expense
+    POST   /expenses/{id}/reject    — manager/admin rejects a pending expense and
+                                      notifies the submitter (in-app + FCM push)
     POST   /expenses/{id}/bill      — upload/replace the receipt photo (creator only)
 
 BUSINESS RULES:
@@ -36,6 +37,7 @@ from config import UPLOAD_DIR
 from database import get_db
 from models import Employee
 from models.expense import Expense, EXPENSE_CATEGORIES, EXPENSE_STATUSES
+from services.notification_service import create_notification
 
 router = APIRouter(prefix="/expenses", tags=["expenses"], dependencies=[Depends(get_current_user)])
 
@@ -172,6 +174,8 @@ def create_expense(
 def list_expenses(
     employee_id: int | None = None,
     expense_status: ExpenseStatus | None = Query(default=None, alias="status"),
+    date_from: datetime.date | None = Query(default=None, description="Submitted on or after this date (YYYY-MM-DD)"),
+    date_to: datetime.date | None = Query(default=None, description="Submitted on or before this date (YYYY-MM-DD)"),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -179,9 +183,13 @@ def list_expenses(
 ):
     """
     Staff: returns only their own expenses.
-    Manager/admin: returns all expenses, with optional filters by employee_id and status.
+    Manager/admin: returns all expenses, with optional filters by employee_id, status
+    and a date range (date_from / date_to, both inclusive).
     Also returns a pending_count so the manager badge stays accurate.
     """
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="date_from must be on or before date_to")
+
     base_q = (
         db.query(Expense)
         .options(joinedload(Expense.employee), joinedload(Expense.reviewer))
@@ -196,6 +204,14 @@ def list_expenses(
 
     if expense_status is not None:
         base_q = base_q.filter(Expense.status == expense_status)
+
+    # Dates are whole days. "To" includes the full last day, so we compare
+    # with the start of the NEXT day using "<" instead of "<= 23:59:59".
+    if date_from is not None:
+        base_q = base_q.filter(Expense.created_at >= datetime.datetime.combine(date_from, datetime.time.min))
+    if date_to is not None:
+        next_day = date_to + datetime.timedelta(days=1)
+        base_q = base_q.filter(Expense.created_at < datetime.datetime.combine(next_day, datetime.time.min))
 
     total = base_q.count()
     # Pending count for the badge (ignores the status filter, scoped to the same employee set)
@@ -300,16 +316,36 @@ def reject_expense(
     """
     Rejects the expense with a reason. Manager and admin only.
     Returns 409 when the expense is not pending.
+
+    The submitter gets an in-app notification and an FCM push that carries the
+    rejection note, so they know why the claim was refused.
     """
     if current_user.role not in HEAD_OFFICE_ROLES:
         raise HTTPException(status_code=403, detail="Only managers and admins may reject expenses")
+    # min_length=1 lets "   " through, so check again after trimming.
+    reason = body.rejection_reason.strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="A rejection note is required")
     expense = _get_expense(db, expense_id, current_user)
     if expense.status != "pending":
         raise HTTPException(status_code=409, detail=f"Cannot reject a {expense.status} expense")
     expense.status = "rejected"
     expense.reviewed_by = current_user.id
     expense.reviewed_at = ist_now()
-    expense.rejection_reason = body.rejection_reason.strip()
+    expense.rejection_reason = reason
+    # Added to the same session, so the notification row is saved by the commit below.
+    create_notification(
+        db,
+        recipient_id=expense.employee_id,
+        notif_type="expense_rejected",
+        title="Expense claim rejected",
+        message=(
+            f'Your claim "{expense.title}" ({expense.amount:.2f} INR) was rejected. '
+            f"Reason: {reason}"
+        ),
+        entity_type="expense",
+        entity_id=expense.id,
+    )
     db.commit()
     db.expire_all()
     return _to_response(_get_expense(db, expense_id, current_user))

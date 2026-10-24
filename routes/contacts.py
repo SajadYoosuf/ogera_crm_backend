@@ -513,6 +513,8 @@ def list_contacts(
                 "lead_source": contact.lead_source,
                 "assigned_to": contact.assigned_employee,
                 "created_by": contact.creator,
+                # Creator's branch, so admins and managers can see where a lead came from at a glance
+                "created_by_branch": contact.creator.branch if contact.creator else None,
                 "created_at": contact.created_at,
                 "is_verified": not pending,
                 "missing_fields": pending,

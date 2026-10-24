@@ -70,8 +70,12 @@ def test_partner_stages_do_not_appear_on_the_consumer_board(client, login):
 def test_tasks_filter_by_consumer_or_partner_and_list_all_dates_when_none_given(client, login, lead_source_id):
     import datetime
     headers, anu = login("anu")
-    consumer = _contact(client, headers, lead_source_id)
-    partner = _partner(client, headers, lead_source_id)
+    # Anu may only schedule follow-ups on leads assigned to her, so both leads are hers.
+    consumer = _contact(client, headers, lead_source_id, assigned_to=anu["id"])
+    partner = _contact(client, headers, lead_source_id, contact_type="partner", name="Plumber Raju",
+                       phone="9222222222", consumer_profile=None,
+                       partner_profile={"profession_type": "plumber", "work_area": "Calicut"},
+                       assigned_to=anu["id"])
     today = datetime.date.today()
     for contact, day in ((consumer, today), (partner, today + datetime.timedelta(days=90))):
         due_at = datetime.datetime.combine(day, datetime.time(12, 0))
@@ -97,7 +101,7 @@ def test_tasks_status_due_today_and_overdue_ignore_the_date_range(client, login,
     from database import SessionLocal
     from models.followup_schedule import FollowupSchedule
     headers, anu = login("anu")
-    contact = _contact(client, headers, lead_source_id)
+    contact = _contact(client, headers, lead_source_id, assigned_to=anu["id"])
     today = datetime.date.today()
     ids = {}
     for key, day in (("today", today), ("later", today + datetime.timedelta(days=5))):
