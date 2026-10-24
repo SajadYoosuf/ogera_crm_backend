@@ -32,7 +32,10 @@ class TaskItemResponse(BaseModel):
     title: str | None = None
     type: str
     notes: str | None = None
+    # Legacy UI status ("pending" = still open, "done" = completed). Kept so the mobile app keeps working.
     status: Literal["pending", "done"]
+    # The real stored status. The web dropdown binds to this so it shows todo / inprogress / completed.
+    followup_status: str
     priority: str = "medium"
     scheduled_date: str
     scheduled_time: str
@@ -71,6 +74,7 @@ def _task_item(fs: FollowupSchedule) -> TaskItemResponse:
         type=LEGACY_CHANNELS.get(channel, channel) if channel else "other",
         notes=fs.notes,
         status="done" if done else "pending",
+        followup_status=fs.status,
         priority=fs.priority,
         scheduled_date=fs.due_at.date().isoformat(),
         scheduled_time=fs.due_at.strftime("%H:%M:%S"),
@@ -283,7 +287,7 @@ def update_task(
                 followup_id=fs.id,
             ))
 
-    elif body.status in ("todo", "inprogress", "pending"):
+    elif body.status in ("todo", "inprogress"):
         _log_edit(db, fs, current_user.id, "status", fs.status, body.status)
         fs.status = body.status
 
