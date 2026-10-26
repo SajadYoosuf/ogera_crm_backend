@@ -239,6 +239,33 @@ def test_manager_can_create_employee(client, login, no_mail):
     assert resp.status_code == 201, resp.text
 
 
+def test_employee_is_not_created_when_credentials_email_fails(client, login, monkeypatch):
+    from routes import employees as emp_routes
+
+    monkeypatch.setattr(
+        emp_routes,
+        "send_employee_credentials",
+        lambda *a, **k: {"sent": False, "message": "Credentials email not sent"},
+    )
+    headers, _ = login("admin")
+    payload = {
+        "name": "Retry Employee", "email": "retry.employee@example.com",
+        "password": "Passw0rd!", "role": "sales_executive",
+    }
+
+    failed = client.post("/employees", json=payload, headers=headers)
+    assert failed.status_code == 503
+
+    # The failed attempt must not reserve the email address for a retry.
+    monkeypatch.setattr(
+        emp_routes,
+        "send_employee_credentials",
+        lambda *a, **k: {"sent": True, "message": "Credentials email sent"},
+    )
+    retried = client.post("/employees", json=payload, headers=headers)
+    assert retried.status_code == 201, retried.text
+
+
 def test_create_without_phone_is_allowed_and_phone_is_null(client, login, no_mail):
     headers, _ = login("admin")
     resp = client.post("/employees", json={
