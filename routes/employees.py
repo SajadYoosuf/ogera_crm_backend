@@ -1,13 +1,13 @@
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from auth import get_current_user, get_password_hash, require_admin_or_manager
 from database import get_db
 from mailer import send_employee_credentials, send_password_changed_notice
-from models import Employee, Role
+from models import Employee, FcmDevice, Role
 from schemas import (
     EmployeeCreate,
     EmployeeCreateResponse,
@@ -266,7 +266,9 @@ def delete_employee(
 
 
 class _FcmTokenBody(BaseModel):
-    token: str
+    token: str = Field(min_length=1, max_length=512)
+    platform: str | None = Field(default=None, max_length=20)
+    device_id: str | None = Field(default=None, max_length=255)
 
 
 @router.post("/me/fcm-token", summary="Register or update FCM device token")
@@ -279,9 +281,42 @@ def register_fcm_token(
     POST /employees/me/fcm-token — store the caller's FCM push token.
 
     Called by the web app and mobile app after login. The token is used by the backend to
-    send push notifications to this employee's current browser or phone.
-    One token per employee: the latest registration replaces the previous one.
+    send push notifications to this employee's browsers and phones.
+    The same token is updated idempotently when the client starts again.
     """
-    current_user.fcm_token = body.token.strip()
+    token = body.token.strip()
+    existing = db.query(FcmDevice).filter(FcmDevice.token == token).first()
+    if existing:
+        existing.employee_id = current_user.id
+        existing.platform = body.platform
+        existing.device_id = body.device_id
+        existing.last_seen_at = datetime.utcnow()
+    else:
+        db.add(FcmDevice(
+            employee_id=current_user.id,
+            token=token,
+            platform=body.platform,
+            device_id=body.device_id,
+        ))
+    # Keep the legacy field populated while older workers are being upgraded.
+    current_user.fcm_token = token
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/me/fcm-token", summary="Unregister an FCM device token")
+def unregister_fcm_token(
+    body: _FcmTokenBody,
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """Remove one browser/phone registration, normally called on logout."""
+    token = body.token.strip()
+    db.query(FcmDevice).filter(
+        FcmDevice.employee_id == current_user.id,
+        FcmDevice.token == token,
+    ).delete(synchronize_session=False)
+    if current_user.fcm_token == token:
+        current_user.fcm_token = None
     db.commit()
     return {"ok": True}
