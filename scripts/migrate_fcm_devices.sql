@@ -1,7 +1,7 @@
 -- Run once on existing MySQL databases. New installations receive this table via create_all().
 CREATE TABLE IF NOT EXISTS fcm_devices (
     id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    employee_id INT NOT NULL,
+    employee_id BIGINT NOT NULL,
     token VARCHAR(512) NOT NULL,
     platform VARCHAR(20) NULL,
     device_id VARCHAR(255) NULL,
