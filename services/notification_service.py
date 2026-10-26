@@ -17,6 +17,7 @@ from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.orm import Session
 from models.notification import Notification
 from models.employee import Employee
+from models.fcm_device import FcmDevice
 from models.activity_log import ActivityLog
 from models.followup_schedule import FollowupSchedule
 from models.contact import Contact
@@ -63,7 +64,12 @@ def check_dedup(
 # FCM push helper
 # ---------------------------------------------------------------------------
 
-def send_fcm(token: str | None, title: str, message: str, data: dict | None = None) -> bool:
+def _is_invalid_token_error(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    return "unregistered" in name or "registrationtokennotregistered" in name or "senderidmismatch" in name
+
+
+def send_fcm(token: str | None, title: str, message: str, data: dict | None = None, on_invalid_token=None) -> bool:
     """
     Send a Firebase Cloud Messaging push notification to one device token.
 
@@ -89,6 +95,8 @@ def send_fcm(token: str | None, title: str, message: str, data: dict | None = No
         messaging.send(msg)
         return True
     except Exception as exc:
+        if _is_invalid_token_error(exc) and on_invalid_token:
+            on_invalid_token(token)
         logger.warning("FCM send failed (token ...%s): %s", (token or "")[-6:], exc)
         return False
 
@@ -133,21 +141,51 @@ def create_notification(
 
         # Attempt FCM push — read the recipient's token from the session
         recipient = db.get(Employee, recipient_id)
+        devices = db.query(FcmDevice).filter(FcmDevice.employee_id == recipient_id).all()
+        tokens = {device.token for device in devices}
         if recipient and recipient.fcm_token:
+            tokens.add(recipient.fcm_token)
+        payload = {
+            "type": notif_type,
+            "entity_type": entity_type or "",
+            "entity_id": str(entity_id or ""),
+        }
+        for token in tokens:
             send_fcm(
-                recipient.fcm_token,
+                token,
                 title,
                 message,
-                {
-                    "type": notif_type,
-                    "entity_type": entity_type or "",
-                    "entity_id": str(entity_id or ""),
-                },
+                payload,
+                on_invalid_token=lambda invalid: _remove_invalid_token(db, invalid),
             )
         return notif
     except Exception as exc:
         logger.error("create_notification failed for recipient_id=%s: %s", recipient_id, exc)
         return None
+
+
+def _remove_invalid_token(db: Session, token: str | None) -> None:
+    if not token:
+        return
+    db.query(FcmDevice).filter(FcmDevice.token == token).delete(synchronize_session=False)
+    db.query(Employee).filter(Employee.fcm_token == token).update({Employee.fcm_token: None})
+
+
+def notify_task_completed(db: Session, task, completed_by: Employee) -> None:
+    """Notify the assignee and leadership after a task becomes completed."""
+    task_title = task.title or "Task"
+    title = f"Task completed: {task_title}"
+    msg = f'{completed_by.name} completed the task "{task_title}".'
+    recipients = {task.assigned_to}
+    leaders = db.query(Employee).filter(
+        Employee.role.in_(["admin", "manager"]),
+        Employee.is_active == 1,
+        Employee.deleted_at.is_(None),
+    ).all()
+    recipients.update(emp.id for emp in leaders)
+    for recipient_id in recipients:
+        if recipient_id and recipient_id != completed_by.id:
+            create_notification(db, recipient_id, "task_completed", title, msg, "task", task.id)
 
 
 # ---------------------------------------------------------------------------

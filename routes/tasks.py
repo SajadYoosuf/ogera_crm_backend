@@ -301,4 +301,11 @@ def update_task(
     db.commit()
     db.refresh(fs)
     db.refresh(fs, attribute_names=["contact", "assignee"])
+    if body.status == "completed":
+        try:
+            from services.notification_service import notify_task_completed
+            notify_task_completed(db, fs, current_user)
+            db.commit()
+        except Exception:
+            pass
     return _followup_response(fs)

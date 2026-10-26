@@ -18,8 +18,7 @@ class Employee(Base):
     phone: Mapped[str | None] = mapped_column(String(20))
     # One of: malappuram, perinthalmanna, kottakkal. Nullable for legacy rows.
     branch: Mapped[str | None] = mapped_column(String(60))
-    # FCM device/browser token registered after login. Updated each time the user logs in
-    # on a new device. One token per employee (last-registration-wins) for MVP.
+    # Legacy FCM token retained during migration. New clients are stored in fcm_devices.
     fcm_token: Mapped[str | None] = mapped_column(String(255))
     is_active: Mapped[int] = mapped_column(SmallInteger, default=1)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
