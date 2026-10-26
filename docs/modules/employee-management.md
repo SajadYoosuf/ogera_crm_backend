@@ -52,7 +52,7 @@ Two roles have extra rules across the module:
 4. If a phone is given, it must not match another non-deleted employee. Phones are compared on their last 10 digits, so `+91 90000 00003` and `9000000003` match (`409`).
 5. The password is hashed with argon2 and stored. The plain password is never saved or returned.
 6. The row is inserted. A database uniqueness conflict is also reported as `409`.
-7. The login details are emailed. The outcome is returned as `credentials_email`; the employee exists even if the email fails.
+7. The login details are emailed before the transaction is committed. If the email fails, the transaction is rolled back and the employee is not created; the API returns `503` so the request can be retried.
 
 ### Update (`PUT /employees/{id}`)
 
@@ -122,7 +122,7 @@ Admin creates a tele caller
     ▶ employees: email unused (any case) and phone unused (last 10 digits)
     ▶ argon2 hash ▶ INSERT employees
     ▶ mailer.send_employee_credentials ──▶ new employee's inbox
-    ◀── 201 {employee, credentials_email}
+    ◀── 201 {employee, credentials_email} (or 503 when email sending fails; no employee is saved)
 
 Staff pick an assignee
   app ──GET /employees/directory──▶ employees where deleted_at IS NULL AND is_active = 1
