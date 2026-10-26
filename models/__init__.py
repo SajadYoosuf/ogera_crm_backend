@@ -21,6 +21,7 @@ from .contact_interested_product import contact_interested_products  # registers
 from .notification import Notification
 from .attendance import StaffAttendance
 from .staff_location import StaffLocation
+from .staff_location_history import StaffLocationHistory
 from .expense import Expense, EXPENSE_CATEGORIES, EXPENSE_STATUSES
 
 __all__ = [
@@ -50,6 +51,7 @@ __all__ = [
     "Notification",
     "StaffAttendance",
     "StaffLocation",
+    "StaffLocationHistory",
     "Expense",
     "EXPENSE_CATEGORIES",
     "EXPENSE_STATUSES",
