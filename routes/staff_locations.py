@@ -163,6 +163,7 @@ def get_live_staff(db: Session = Depends(get_db)):
         .order_by(Employee.name.asc())
         .all()
     )
+
     now = datetime.datetime.utcnow()
     result = []
     for index, (location, employee) in enumerate(rows):
@@ -179,6 +180,41 @@ def get_live_staff(db: Session = Depends(get_db)):
             colorIndex=index,
         ))
     return result
+
+
+@router.get(
+    "/location/history",
+    response_model=list[RoutePointResponse],
+    summary="My location history for a day",
+)
+def get_my_location_history(
+    date: str,
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """Returns only the signed-in employee's server-accepted route points."""
+    try:
+        day = datetime.date.fromisoformat(date)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD") from error
+    start = datetime.datetime.combine(day, datetime.time.min)
+    end = start + datetime.timedelta(days=1)
+    rows = (
+        db.query(StaffLocationHistory)
+        .filter(
+            StaffLocationHistory.employee_id == current_user.id,
+            StaffLocationHistory.recorded_at >= start,
+            StaffLocationHistory.recorded_at < end,
+        )
+        .order_by(StaffLocationHistory.recorded_at.asc())
+        .all()
+    )
+    return [RoutePointResponse(
+        latitude=row.latitude,
+        longitude=row.longitude,
+        recordedAt=row.recorded_at,
+        state="saved",
+    ) for row in rows]
 
 
 @router.get("/locations/history", response_model=RouteResponse, dependencies=[Depends(_manager)])
