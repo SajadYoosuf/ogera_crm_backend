@@ -16,13 +16,15 @@ WHO CAN USE IT:
     while a field session is open (after check-in, before checkout).
 """
 import datetime
-from fastapi import APIRouter, Depends
+import math
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from auth import get_current_user
+from auth import get_current_user, require_roles
 from database import get_db
 from models import Employee
 from models.staff_location import StaffLocation
+from models.staff_location_history import StaffLocationHistory
 
 router = APIRouter(prefix="/staff", tags=["staff-location"], dependencies=[Depends(get_current_user)])
 
@@ -110,4 +112,109 @@ def update_location(
         ))
 
     db.commit()
+    db.add(StaffLocationHistory(
+        employee_id=current_user.id,
+        latitude=body.latitude,
+        longitude=body.longitude,
+        recorded_at=now,
+    ))
+    db.commit()
     return {"ok": True, "throttled": False}
+
+
+class LiveStaffResponse(BaseModel):
+    userId: int
+    name: str
+    phone: str | None
+    latitude: float | None
+    longitude: float | None
+    address: str | None = None
+    recordedAt: datetime.datetime | None
+    state: str
+    colorIndex: int
+
+
+class RoutePointResponse(BaseModel):
+    latitude: float
+    longitude: float
+    address: str | None = None
+    recordedAt: datetime.datetime
+    state: str
+
+
+class RouteResponse(BaseModel):
+    points: list[RoutePointResponse]
+    stops: list[dict] = []
+    distanceMeters: float
+    firstSeen: datetime.datetime | None = None
+    lastSeen: datetime.datetime | None = None
+
+
+def _manager(current_user: Employee = Depends(require_roles("admin", "manager"))) -> Employee:
+    return current_user
+
+
+@router.get("/locations/live", response_model=list[LiveStaffResponse], dependencies=[Depends(_manager)])
+def get_live_staff(db: Session = Depends(get_db)):
+    rows = (
+        db.query(StaffLocation, Employee)
+        .join(Employee, Employee.id == StaffLocation.employee_id)
+        .filter(Employee.is_active == 1, Employee.deleted_at.is_(None))
+        .order_by(Employee.name.asc())
+        .all()
+    )
+    now = datetime.datetime.utcnow()
+    result = []
+    for index, (location, employee) in enumerate(rows):
+        age = (now - location.recorded_at).total_seconds()
+        state = "connection_lost" if age > 180 else "moving"
+        result.append(LiveStaffResponse(
+            userId=employee.id,
+            name=employee.name or "Ogera user",
+            phone=employee.phone,
+            latitude=location.latitude,
+            longitude=location.longitude,
+            recordedAt=location.recorded_at,
+            state=state,
+            colorIndex=index,
+        ))
+    return result
+
+
+@router.get("/locations/history", response_model=RouteResponse, dependencies=[Depends(_manager)])
+def get_staff_history(userId: int, date: str, db: Session = Depends(get_db)):
+    try:
+        day = datetime.date.fromisoformat(date)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD") from error
+    start = datetime.datetime.combine(day, datetime.time.min)
+    end = start + datetime.timedelta(days=1)
+    rows = (
+        db.query(StaffLocationHistory)
+        .filter(
+            StaffLocationHistory.employee_id == userId,
+            StaffLocationHistory.recorded_at >= start,
+            StaffLocationHistory.recorded_at < end,
+        )
+        .order_by(StaffLocationHistory.recorded_at.asc())
+        .all()
+    )
+    points = [RoutePointResponse(
+        latitude=row.latitude,
+        longitude=row.longitude,
+        recordedAt=row.recorded_at,
+        state="moving",
+    ) for row in rows]
+    distance = 0.0
+    for previous, current in zip(points, points[1:]):
+        lat1, lat2 = math.radians(previous.latitude), math.radians(current.latitude)
+        dlat = lat2 - lat1
+        dlon = math.radians(current.longitude - previous.longitude)
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        distance += 6371000 * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return RouteResponse(
+        points=points,
+        distanceMeters=round(distance, 1),
+        firstSeen=points[0].recordedAt if points else None,
+        lastSeen=points[-1].recordedAt if points else None,
+    )
