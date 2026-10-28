@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+import logging
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,17 +12,28 @@ from middleware import RequestLoggingMiddleware
 from firebase_init import init_firebase
 from scheduler import start_scheduler, stop_scheduler
 
-Base.metadata.create_all(bind=engine)
-
-with SessionLocal() as _db:
-    models.seed_system_roles(_db)  # built-in roles must exist before employees can reference them
-    settings_catalog.seed_defaults(_db)  # default dropdown options and company name
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Ogera CRM API", version="1.0.0")
 
 
 @app.on_event("startup")
 def startup_event() -> None:
+    # Do not connect to the database while importing this module. If the remote
+    # database is unavailable, importing main.py must still allow Uvicorn to
+    # start and Render to detect the listening port.
+    try:
+        Base.metadata.create_all(bind=engine)
+        with SessionLocal() as _db:
+            models.seed_system_roles(_db)  # built-in roles must exist before employees can reference them
+            settings_catalog.seed_defaults(_db)  # default dropdown options and company name
+        logger.info("Database initialization completed")
+    except Exception:
+        logger.exception(
+            "Database initialization failed; the API will remain available, "
+            "but database-backed requests may fail until the database is reachable"
+        )
+
     init_firebase()
     start_scheduler()
 
