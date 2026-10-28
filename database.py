@@ -33,8 +33,15 @@ if DATABASE_URL.startswith("sqlite"):
             DATABASE_URL, echo=SQL_ECHO, connect_args={"check_same_thread": False, "timeout": 30}
         )
 else:
-    # Avoid "MySQL server has gone away" after idle periods
-    engine = create_engine(DATABASE_URL, echo=SQL_ECHO, pool_pre_ping=True, pool_recycle=280)
+    # Avoid "MySQL server has gone away" after idle periods and allow enough
+    # time for Render-to-Hostinger network connections to establish.
+    engine = create_engine(
+        DATABASE_URL,
+        echo=SQL_ECHO,
+        pool_pre_ping=True,
+        pool_recycle=280,
+        connect_args={"connect_timeout": 30},
+    )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
