@@ -22,8 +22,14 @@ RESET_CODE_RESEND_SECONDS = int(os.getenv("RESET_CODE_RESEND_SECONDS", "60"))  #
 RESET_CODE_MAX_ATTEMPTS = int(os.getenv("RESET_CODE_MAX_ATTEMPTS", "5"))    # wrong tries before the code locks
 RESET_TOKEN_TTL_MINUTES = int(os.getenv("RESET_TOKEN_TTL_MINUTES", "10"))    # time to set the new password after verifying
 
-# Where uploaded files (the company logo) are stored and served from at /uploads. Point this at a persistent disk in production.
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads"))
+# Where uploaded files (the company logo) are stored and served from at /uploads.
+# Vercel's deployed filesystem is read-only; /tmp is writable but ephemeral.
+DEFAULT_UPLOAD_DIR = (
+    "/tmp/ogera_uploads"
+    if os.getenv("VERCEL")
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+)
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", DEFAULT_UPLOAD_DIR)
 
 # Outgoing email (SMTP). Email sending is skipped, with a log line, when SMTP_HOST is unset.
 SMTP_HOST = os.getenv("SMTP_HOST", "")
