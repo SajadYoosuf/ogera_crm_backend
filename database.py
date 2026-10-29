@@ -40,7 +40,7 @@ else:
         echo=SQL_ECHO,
         pool_pre_ping=True,
         pool_recycle=280,
-        connect_args={"connect_timeout": 30},
+        connect_args={"connect_timeout": 50},
     )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
