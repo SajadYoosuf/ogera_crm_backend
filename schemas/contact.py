@@ -187,6 +187,13 @@ class ContactCreate(ContactBase):
     # Products this contact is interested in. Empty list = no products linked.
     interested_product_ids: list[int] = []
 
+    @field_validator("interested_product_ids")
+    @classmethod
+    def one_interested_product(cls, value: list[int]) -> list[int]:
+        if len(set(value)) > 1:
+            raise ValueError("Select only one interested product")
+        return value
+
 
 class ContactUpdate(BaseModel):
     """
@@ -217,8 +224,8 @@ class ContactUpdate(BaseModel):
     consumer_profile: ConsumerProfileUpdate | None = None
     partner_profile: PartnerProfileUpdate | None = None
     dealer_profile: DealerProfileUpdate | None = None
-    # Replaces the full list of interested products when provided.
-    # Omit → keep existing. Send [] → clear all. Send [1, 2] → replace with those ids.
+    # Replaces the interested product when provided.
+    # Omit → keep existing. Send [] → clear it. Send [id] → select one product.
     interested_product_ids: list[int] | None = None
     # Free-text note. Omit → keep existing. Send null → clear. Send string → replace.
     notes: str | None = None
@@ -233,6 +240,13 @@ class ContactUpdate(BaseModel):
             return clean_phone(value)
         except ValueError as exc:
             raise ValueError(str(exc))
+
+    @field_validator("interested_product_ids")
+    @classmethod
+    def one_interested_product(cls, value: list[int] | None) -> list[int] | None:
+        if value is not None and len(set(value)) > 1:
+            raise ValueError("Select only one interested product")
+        return value
 
 
 class ContactResponse(ContactBase):

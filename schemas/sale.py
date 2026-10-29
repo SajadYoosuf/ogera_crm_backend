@@ -29,6 +29,7 @@ class SaleBase(BaseModel):
     alt_phone: str | None = None
     address: str | None = None
     purchased_product: str | None = Field(default=None, max_length=150)
+    created_by_employee_id: int | None = None
 
     _text = field_validator("address", "purchased_product", mode="before")(_blank_to_none)
     _phones = field_validator("phone", "alt_phone", mode="before")(_clean_phone)
@@ -37,6 +38,14 @@ class SaleBase(BaseModel):
     @classmethod
     def _name(cls, value):
         return value.strip() if isinstance(value, str) else value
+
+
+class SaleEmployeeRef(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    branch: str | None = None
 
 
 class SaleCreate(SaleBase):
@@ -52,6 +61,7 @@ class SaleUpdate(BaseModel):
     alt_phone: str | None = None
     address: str | None = None
     purchased_product: str | None = Field(default=None, max_length=150)
+    created_by_employee_id: int | None = None
 
     _text = field_validator("address", "purchased_product", mode="before")(_blank_to_none)
     _phones = field_validator("phone", "alt_phone", mode="before")(_clean_phone)
@@ -66,6 +76,9 @@ class SaleResponse(SaleBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    contact_id: int | None = None
+    created_by_employee_id: int | None = None
+    created_by: SaleEmployeeRef | None = None
     created_at: datetime.datetime
 
 

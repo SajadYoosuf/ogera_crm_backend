@@ -2,11 +2,11 @@ import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from auth import get_current_user
 from database import get_db
-from models import Sale
+from models import Employee, Sale
 from schemas.sale import SaleCreate, SaleListResponse, SaleResponse, SaleUpdate
 
 # Everyone signed in can read the sales; only admins and managers change them.
@@ -34,7 +34,7 @@ def list_sales(
     """Paged list of past sales, newest purchase first.
     Filter by search text, exact product name, or a purchase date range. Requires sign-in.
     """
-    q = db.query(Sale)
+    q = db.query(Sale).options(joinedload(Sale.created_by_employee))
     if search and search.strip():
         like = f"%{search.strip()}%"
         q = q.filter(or_(Sale.name.like(like), Sale.phone.like(like), Sale.alt_phone.like(like),
@@ -61,13 +61,34 @@ def list_products(db: Session = Depends(get_db)):
 @router.get("/{sale_id}", response_model=SaleResponse, summary="Get a sale")
 def get_sale(sale_id: int, db: Session = Depends(get_db)):
     """One past sale record. Returns 404 if it does not exist."""
-    return _get_or_404(db, sale_id)
+    sale = db.query(Sale).options(joinedload(Sale.created_by_employee)).filter(Sale.id == sale_id).first()
+    if sale is None:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    return sale
+
+
+def _creator_id(db: Session, requested_id: int | None, current_user: Employee) -> int:
+    """Use the signed-in employee by default, while validating a selected employee."""
+    employee_id = requested_id if requested_id is not None else current_user.id
+    employee = db.query(Employee).filter(
+        Employee.id == employee_id,
+        Employee.deleted_at.is_(None),
+    ).first()
+    if employee is None:
+        raise HTTPException(status_code=422, detail="Selected employee does not exist")
+    return employee.id
 
 
 @router.post("", response_model=SaleResponse, status_code=201, dependencies=[writers], summary="Create a sale record")
-def create_sale(body: SaleCreate, db: Session = Depends(get_db)):
+def create_sale(
+    body: SaleCreate,
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
     """Adds a past sale to the register. Admin and manager only."""
-    sale = Sale(**body.model_dump())
+    values = body.model_dump(exclude={"created_by_employee_id"})
+    values["created_by_employee_id"] = _creator_id(db, body.created_by_employee_id, current_user)
+    sale = Sale(**values)
     db.add(sale)
     db.commit()
     db.refresh(sale)
@@ -75,12 +96,19 @@ def create_sale(body: SaleCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{sale_id}", response_model=SaleResponse, dependencies=[writers], summary="Update a sale record")
-def update_sale(sale_id: int, body: SaleUpdate, db: Session = Depends(get_db)):
+def update_sale(
+    sale_id: int,
+    body: SaleUpdate,
+    db: Session = Depends(get_db),
+    current_user: Employee = Depends(get_current_user),
+):
     """Partial update of a past sale. Admin and manager only."""
     sale = _get_or_404(db, sale_id)
     changes = body.model_dump(exclude_unset=True)
     if "name" in changes and changes["name"] is None:
         raise HTTPException(status_code=422, detail="Name cannot be empty")
+    if "created_by_employee_id" in changes:
+        changes["created_by_employee_id"] = _creator_id(db, changes["created_by_employee_id"], current_user)
     for field, value in changes.items():
         setattr(sale, field, value)
     db.commit()

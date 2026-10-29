@@ -60,7 +60,7 @@ from database import get_db
 from phone_utils import phone_key
 from request_context import client_platform
 from verification import missing_fields, verified_clause
-from models import Contact, ConsumerProfile, ContactAssignment, DealerProfile, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage, Product
+from models import Contact, ConsumerProfile, ContactAssignment, DealerProfile, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage, Product, Sale
 from schemas import (
     ContactCreate,
     ContactListItem,
@@ -1221,12 +1221,28 @@ def add_contact_stage(
     if body.loss_reason is not None:
         catalog.ensure_allowed(db, catalog.LOSS_REASON, body.loss_reason)
 
-    # Verification gate: a contact cannot advance past new_lead until all required
-    # fields are filled. missing_fields() checks type-specific required fields.
+    completed_sale_stage = stage_type.slug in {"won", "after_sales_referring"}
+
+    # Completed-sale stages do not require house_stage: the sale itself is the
+    # conversion event. Other required identity/contact fields remain enforced.
     if stage_type.slug != "new_lead":
         pending = missing_fields(contact)
+        if completed_sale_stage:
+            pending = [field for field in pending if field != "house_stage"]
         if pending:
             raise HTTPException(status_code=409, detail={"missing_fields": pending, "message": "Complete the contact's details before advancing the stage"})
+
+    # A completed consumer conversion must have the one product that will be
+    # copied into the sales register. Existing legacy contacts with multiple
+    # links use the first linked product until they are cleaned up.
+    product = None
+    if completed_sale_stage:
+        product = contact.interested_products[0] if contact.interested_products else None
+        if product is None:
+            raise HTTPException(status_code=409, detail={
+                "missing_fields": ["interested_product"],
+                "message": "Select an interested product before converting this contact",
+            })
 
     new_stage = LeadStage(
         contact_id=contact_id,
@@ -1237,6 +1253,22 @@ def add_contact_stage(
         awareness_note=body.awareness_note,
     )
     db.add(new_stage)
+
+    # Stage changes are append-only. The linked sale is created only once, so
+    # moving from Won to After Sales does not create a duplicate register row.
+    # Attribute the sale to the employee who originally created the contact;
+    # the administrator remains recorded separately in the stage history.
+    if completed_sale_stage and db.query(Sale.id).filter(Sale.contact_id == contact.id).first() is None:
+        db.add(Sale(
+            contact_id=contact.id,
+            created_by_employee_id=contact.created_by or current_user.id,
+            purchase_date=date.today(),
+            name=contact.name or contact.phone,
+            phone=contact.phone,
+            alt_phone=contact.phone_alt,
+            address=contact.address,
+            purchased_product=product.name,
+        ))
     db.commit()
     db.refresh(new_stage)
 

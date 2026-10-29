@@ -356,6 +356,57 @@ def test_sending_empty_product_list_clears_products(client, login, lead_source_i
     assert updated["interested_products"] == []
 
 
+def test_completed_stage_creates_linked_sale_without_house_stage(client, login, lead_source_id, stage_id_for):
+    headers, employee = login("admin")
+    pid = _product_id(client, headers)
+    contact = _make(client, headers, lead_source_id("meta"), phone="9600000075",
+                    consumer_profile=None, interested_product_ids=[pid]).json()
+
+    assert contact["missing_fields"] == ["house_stage"]
+    response = client.post(
+        f"/contacts/{contact['id']}/stages",
+        json={"stage_id": stage_id_for("won", "consumer"), "changed_by": employee["id"]},
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+
+    sales = client.get("/sales", headers=headers).json()
+    assert sales["total"] == 1
+    sale = sales["items"][0]
+    assert sale["contact_id"] == contact["id"]
+    assert sale["created_by_employee_id"] == employee["id"]
+    assert sale["purchased_product"] == f"Tank {_product_counter}"
+
+
+def test_completed_stage_does_not_duplicate_sale(client, login, lead_source_id, stage_id_for):
+    headers, employee = login("admin")
+    pid = _product_id(client, headers)
+    contact = _make(client, headers, lead_source_id("meta"), phone="9600000076",
+                    consumer_profile=None, interested_product_ids=[pid]).json()
+    won = stage_id_for("won", "consumer")
+    after_sales = stage_id_for("after_sales_referring", "consumer")
+
+    for stage_id in (won, after_sales):
+        response = client.post(
+            f"/contacts/{contact['id']}/stages",
+            json={"stage_id": stage_id, "changed_by": employee["id"]},
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+
+    assert client.get("/sales", headers=headers).json()["total"] == 1
+
+
+def test_multiple_interested_products_are_rejected(client, login, lead_source_id):
+    headers, _ = login("admin")
+    pid1 = _product_id(client, headers)
+    pid2 = _product_id(client, headers)
+    response = _make(client, headers, lead_source_id("meta"), phone="9600000077",
+                     interested_product_ids=[pid1, pid2])
+    assert response.status_code == 422
+    assert "one interested product" in response.text.lower()
+
+
 # ── Referral tracking ─────────────────────────────────────────────────────────
 
 def test_referral_is_recorded_and_counted(client, login, lead_source_id):
