@@ -1,6 +1,7 @@
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.pool import NullPool
 from dotenv import load_dotenv
 import os
 
@@ -34,14 +35,13 @@ if DATABASE_URL.startswith("sqlite"):
             DATABASE_URL, echo=SQL_ECHO, connect_args={"check_same_thread": False, "timeout": 30}
         )
 else:
-    # Avoid "MySQL server has gone away" after idle periods and allow enough
-    # time for Render-to-Hostinger network connections to establish.
+    # Vercel functions should not keep a process-wide connection pool between
+    # invocations. Open and close a fresh MySQL connection per request.
     engine = create_engine(
         DATABASE_URL,
         echo=SQL_ECHO,
-        pool_pre_ping=True,
-        pool_recycle=280,
-        connect_args={"connect_timeout": 50},
+        poolclass=NullPool,
+        connect_args={"connect_timeout": 10, "ssl_disabled": True},
     )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

@@ -1,14 +1,11 @@
-import os
-import socket
-import urllib.request
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS, UPLOAD_DIR
-from database import DB_HOST, DB_PORT, engine, Base, SessionLocal
+from database import engine, Base, SessionLocal
 import models  # noqa: F401 — registers all models with Base before create_all
 from routes import auth_router, password_reset_router, recent_activity_router, contacts_router, dashboard_router, employees_router, lead_activities_router, followups_router, history_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router, attendance_router, staff_locations_router, expenses_router, diagnostics_router
 import settings_catalog
@@ -91,48 +88,3 @@ def root():
 @app.get("/health", summary="Health check", description="Returns healthy when the server is up. Used by uptime checks. No sign-in needed.")
 def health_check():
     return {"status": "healthy"}
-
-
-@app.get("/debug-db-network", include_in_schema=False)
-def debug_db_network(x_debug_token: str | None = Header(default=None)):
-    """Temporarily diagnose Render egress and TCP access to the database.
-
-    Disabled unless ENABLE_DB_NETWORK_DEBUG=1 is set. If
-    DB_NETWORK_DEBUG_TOKEN is configured, callers must provide it in the
-    X-Debug-Token header. Remove the environment variable after testing.
-    """
-    if os.getenv("ENABLE_DB_NETWORK_DEBUG", "0") != "1":
-        raise HTTPException(status_code=404, detail="Not found")
-
-    expected_token = os.getenv("DB_NETWORK_DEBUG_TOKEN")
-    if expected_token and x_debug_token != expected_token:
-        raise HTTPException(status_code=403, detail="Invalid debug token")
-
-    try:
-        egress_ip = urllib.request.urlopen("https://api.ipify.org", timeout=5).read().decode("utf-8")
-    except Exception as exc:
-        egress_ip = f"Error finding egress IP: {exc}"
-
-    db_port = int(DB_PORT)
-    result = None
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(5)
-            result = sock.connect_ex((DB_HOST, db_port))
-        can_connect = result == 0
-        status_message = (
-            f"Port {db_port} is REACHABLE from Render"
-            if can_connect
-            else f"Connection failed with code: {result}"
-        )
-    except Exception as exc:
-        can_connect = False
-        status_message = f"Socket error: {exc}"
-
-    return {
-        "render_outbound_ip": egress_ip,
-        "database_host": DB_HOST,
-        "database_port": db_port,
-        "mysql_reachable": can_connect,
-        "detail": status_message,
-    }
