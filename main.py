@@ -2,6 +2,7 @@ import os
 import socket
 import urllib.request
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -9,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS, UPLOAD_DIR
 from database import DB_HOST, DB_PORT, engine, Base, SessionLocal
 import models  # noqa: F401 — registers all models with Base before create_all
-from routes import auth_router, password_reset_router, recent_activity_router, contacts_router, dashboard_router, employees_router, lead_activities_router, followups_router, history_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router, attendance_router, staff_locations_router, expenses_router
+from routes import auth_router, password_reset_router, recent_activity_router, contacts_router, dashboard_router, employees_router, lead_activities_router, followups_router, history_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router, attendance_router, staff_locations_router, expenses_router, diagnostics_router
 import settings_catalog
 from middleware import RequestLoggingMiddleware
 from firebase_init import init_firebase
@@ -17,19 +18,15 @@ from scheduler import start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Ogera CRM API", version="1.0.0")
-
-
-@app.on_event("startup")
-def startup_event() -> None:
-    # Do not connect to the database while importing this module. If the remote
-    # database is unavailable, importing main.py must still allow Uvicorn to
-    # start and Render to detect the listening port.
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Initialize optional services without preventing the API from starting."""
+    logger.info("FastAPI is starting up...")
     try:
         Base.metadata.create_all(bind=engine)
         with SessionLocal() as _db:
-            models.seed_system_roles(_db)  # built-in roles must exist before employees can reference them
-            settings_catalog.seed_defaults(_db)  # default dropdown options and company name
+            models.seed_system_roles(_db)
+            settings_catalog.seed_defaults(_db)
         logger.info("Database initialization completed")
     except Exception:
         logger.exception(
@@ -40,10 +37,14 @@ def startup_event() -> None:
     init_firebase()
     start_scheduler()
 
+    yield
 
-@app.on_event("shutdown")
-def shutdown_event() -> None:
     stop_scheduler()
+    logger.info("FastAPI is shutting down...")
+
+
+app = FastAPI(title="Ogera CRM API", version="1.0.0", lifespan=lifespan)
+
 
 app.add_middleware(RequestLoggingMiddleware)
 
@@ -76,6 +77,7 @@ app.include_router(tasks_router)
 app.include_router(attendance_router)
 app.include_router(staff_locations_router)
 app.include_router(expenses_router)
+app.include_router(diagnostics_router)
 
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
