@@ -92,6 +92,7 @@ class NameRef(BaseModel):
 
     id: int
     name: str
+    branch: str | None = None
 
 
 class LeadStageSummary(BaseModel):
