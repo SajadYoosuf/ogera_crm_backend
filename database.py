@@ -13,7 +13,8 @@ DB_PORT = os.getenv("DB_PORT", "3306")
 DB_NAME = os.getenv("DB_NAME", "ogera_crm")
 
 # DATABASE_URL overrides the MySQL settings above (the automated tests point it at SQLite).
-DATABASE_URL = os.getenv("DATABASE_URL") or f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# Disable SSL explicitly for the configured MySQL endpoint.
+DATABASE_URL = os.getenv("DATABASE_URL") or f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?ssl_disabled=True"
 # Raw SQL printing is off by default; set SQL_ECHO=1 in .env to see every query while debugging.
 SQL_ECHO = os.getenv("SQL_ECHO", "0") == "1"
 
