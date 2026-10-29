@@ -109,8 +109,12 @@ def _active_code(db: Session, employee_id: int) -> PasswordResetCode | None:
 
 
 @router.post("/request", summary="Send a reset code")
-def request_code(body: EmailRequest, db: Session = Depends(get_db)):
-    """Emails a new 6-digit code to the address of the employee's account. Any active employee can use this.
+def request_code(
+    body: EmailRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Queues a new 6-digit code email after its database transaction commits. Any active employee can use this.
     A code expires after 10 minutes, and requests are limited by a short cooldown.
     Sending a new code stops older codes from working. Returns 404 if no active account uses the email.
     """
@@ -139,12 +143,14 @@ def request_code(body: EmailRequest, db: Session = Depends(get_db)):
         )
     )
 
-    result = send_password_reset_code(account.name, account.email, code, int(CODE_TTL.total_seconds() // 60))
-    if not result["sent"]:
-        db.rollback()  # no code is left behind that the user cannot receive
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=result["message"])
-
     db.commit()
+    background_tasks.add_task(
+        send_password_reset_code,
+        account.name,
+        account.email,
+        code,
+        int(CODE_TTL.total_seconds() // 60),
+    )
     return {
         "email_masked": _mask_email(account.email),
         "expires_in_seconds": int(CODE_TTL.total_seconds()),

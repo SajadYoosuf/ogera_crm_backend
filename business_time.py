@@ -19,3 +19,9 @@ def today_ist() -> datetime.date:
 def ist_day_start_utc(day: datetime.date) -> datetime.datetime:
     """Midnight IST of `day`, as the naive UTC value that created_at and changed_at store."""
     return datetime.datetime.combine(day, datetime.time.min) - IST_OFFSET
+
+
+def ist_day_bounds(day: datetime.date) -> tuple[datetime.datetime, datetime.datetime]:
+    """Return the UTC start and exclusive end for one IST calendar day."""
+    start = ist_day_start_utc(day)
+    return start, start + datetime.timedelta(days=1)

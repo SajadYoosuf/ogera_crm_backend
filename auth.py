@@ -4,8 +4,10 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 from config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
-from database import SessionLocal
+from database import get_db
 from models import Employee
 
 # Password hashing
@@ -36,35 +38,41 @@ def create_access_token(employee_id: int, expires_delta: Optional[timedelta] = N
     return encoded_jwt
 
 
-def get_current_user(credentials = Depends(security)) -> Employee:
+def get_current_user(
+    credentials=Depends(security),
+    db: Session = Depends(get_db),
+) -> Employee:
     """Verify JWT token and return current employee."""
     token = credentials.credentials
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        employee_id: str = payload.get("sub")
+        employee_id = payload.get("sub")
         if employee_id is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token",
             )
-    except JWTError:
+        employee_id = int(employee_id)
+    except (JWTError, TypeError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
         )
 
-    db = SessionLocal()
-    try:
-        employee = db.query(Employee).filter(Employee.id == int(employee_id)).first()
-        if employee is None or employee.deleted_at is not None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Employee not found",
-            )
-        return employee
-    finally:
-        db.close()
+    employee = db.scalar(
+        select(Employee).where(
+            Employee.id == employee_id,
+            Employee.deleted_at.is_(None),
+            Employee.is_active == 1,
+        )
+    )
+    if employee is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Employee not found",
+        )
+    return employee
 
 
 # The head-office roles. They use the website; everyone else uses the mobile app.

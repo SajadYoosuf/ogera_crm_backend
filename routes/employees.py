@@ -1,5 +1,5 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
@@ -156,13 +156,14 @@ def get_employee(
 @router.post("", response_model=EmployeeCreateResponse, status_code=201, summary="Create an employee")
 def create_employee(
     body: EmployeeCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: Employee = Depends(manage_employees),
 ):
     """Admin or manager creates an employee. Only an admin can assign the admin or manager role. The role must exist and be active.
     Email must be unique, ignoring case, and a deleted employee's email still counts. Phone must be unique by its last 10 digits, and a deleted employee's phone can be reused.
-    The password is stored hashed and the login details are emailed before the employee is committed.
-    If the credentials email cannot be sent, the employee is not created and the request returns 503.
+    The employee is committed before the credentials email is queued, so SMTP
+    latency never holds an open database transaction.
     Returns 409 for a duplicate email or phone, and 422 for an unknown role.
     """
     _ensure_role_assignable(db, body.role, actor=actor)
@@ -175,24 +176,27 @@ def create_employee(
     employee = Employee(**data, password_hash=get_password_hash(body.password))
     db.add(employee)
     try:
-        # Flush first so the database uniqueness constraint is checked while the
-        # employee is still part of this transaction.  Do not commit until the
-        # credentials email has been accepted by the mail server.
-        db.flush()
+        db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
 
-    mail = send_employee_credentials(employee.name, employee.email, body.password, employee.role)
-    if not mail.get("sent"):
-        db.rollback()
-        raise HTTPException(status_code=503, detail=mail.get("message", "Credentials email could not be sent"))
-
-    db.commit()
     db.refresh(employee)
+
+    background_tasks.add_task(
+        send_employee_credentials,
+        employee.name,
+        employee.email,
+        body.password,
+        employee.role,
+    )
+
     return EmployeeCreateResponse(
         **EmployeeResponse.model_validate(employee, from_attributes=True).model_dump(),
-        credentials_email=mail,
+        credentials_email={
+            "sent": False,
+            "message": "Credentials email queued for delivery",
+        },
     )
 
 

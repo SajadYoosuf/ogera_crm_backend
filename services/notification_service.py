@@ -1,10 +1,10 @@
 """
-Notification service — the single place that creates in-app notifications and sends FCM push.
+Notification service — creates in-app notifications and dispatches FCM after commit.
 
 HOW IT WORKS:
-    1. A route handler calls notify_roles() or create_notification() right after a DB commit.
+    1. A route handler creates notification rows in its transaction.
     2. create_notification() inserts one row in the `notifications` table (in-app inbox).
-    3. It also calls send_fcm() to send a push to the recipient's device if they have an FCM token.
+    3. Route-provided BackgroundTasks dispatch FCM after the response transaction commits.
     4. The scheduler calls run_48h_rule() and run_daily_digest() on a background timer.
 
 NEVER RAISES:
@@ -13,8 +13,10 @@ NEVER RAISES:
 """
 import logging
 from datetime import timedelta
+from fastapi import BackgroundTasks
 from sqlalchemy import func as sqlfunc, select
 from sqlalchemy.orm import Session
+from database import SessionLocal
 from models.notification import Notification
 from models.employee import Employee
 from models.fcm_device import FcmDevice
@@ -113,9 +115,10 @@ def create_notification(
     message: str,
     entity_type: str | None = None,
     entity_id: int | None = None,
+    background_tasks: BackgroundTasks | None = None,
 ) -> Notification | None:
     """
-    Insert one notification row for one recipient and attempt an FCM push.
+    Insert one notification row for one recipient.
 
     INPUTS:
         db           — SQLAlchemy session (caller owns the commit)
@@ -126,7 +129,8 @@ def create_notification(
         entity_type  — "contact", "task", or "followup" (None for digest)
         entity_id    — id of the entity so the UI can link to it
 
-    NEVER RAISES — a notification failure must not crash the caller.
+    FCM delivery is queued as a post-response background task when the caller
+    provides `background_tasks`. It never runs inside the caller's transaction.
     """
     try:
         notif = Notification(
@@ -139,29 +143,73 @@ def create_notification(
         )
         db.add(notif)
 
-        # Attempt FCM push — read the recipient's token from the session
-        recipient = db.get(Employee, recipient_id)
-        devices = db.query(FcmDevice).filter(FcmDevice.employee_id == recipient_id).all()
-        tokens = {device.token for device in devices}
-        if recipient and recipient.fcm_token:
-            tokens.add(recipient.fcm_token)
-        payload = {
-            "type": notif_type,
-            "entity_type": entity_type or "",
-            "entity_id": str(entity_id or ""),
-        }
-        for token in tokens:
-            send_fcm(
-                token,
+        if background_tasks is not None:
+            background_tasks.add_task(
+                dispatch_notification_push,
+                recipient_id,
+                notif_type,
                 title,
                 message,
-                payload,
-                on_invalid_token=lambda invalid: _remove_invalid_token(db, invalid),
+                entity_type,
+                entity_id,
             )
         return notif
     except Exception as exc:
         logger.error("create_notification failed for recipient_id=%s: %s", recipient_id, exc)
         return None
+
+
+def dispatch_notification_push(
+    recipient_id: int,
+    notif_type: str,
+    title: str,
+    message: str,
+    entity_type: str | None = None,
+    entity_id: int | None = None,
+) -> None:
+    """Send FCM after commit without holding a database transaction during I/O."""
+    db = SessionLocal()
+    try:
+        recipient = db.get(Employee, recipient_id)
+        devices = db.query(FcmDevice).filter(
+            FcmDevice.employee_id == recipient_id
+        ).all()
+        tokens = {device.token for device in devices}
+        if recipient and recipient.fcm_token:
+            tokens.add(recipient.fcm_token)
+    except Exception as exc:
+        db.rollback()
+        logger.error("FCM recipient lookup failed for recipient_id=%s: %s", recipient_id, exc)
+        return
+    finally:
+        db.close()
+
+    payload = {
+        "type": notif_type,
+        "entity_type": entity_type or "",
+        "entity_id": str(entity_id or ""),
+    }
+    invalid_tokens: set[str] = set()
+    for token in tokens:
+        send_fcm(
+            token,
+            title,
+            message,
+            payload,
+            on_invalid_token=invalid_tokens.add,
+        )
+
+    if invalid_tokens:
+        cleanup_db = SessionLocal()
+        try:
+            for token in invalid_tokens:
+                _remove_invalid_token(cleanup_db, token)
+            cleanup_db.commit()
+        except Exception as exc:
+            cleanup_db.rollback()
+            logger.error("Invalid FCM token cleanup failed: %s", exc)
+        finally:
+            cleanup_db.close()
 
 
 def _remove_invalid_token(db: Session, token: str | None) -> None:
@@ -171,7 +219,12 @@ def _remove_invalid_token(db: Session, token: str | None) -> None:
     db.query(Employee).filter(Employee.fcm_token == token).update({Employee.fcm_token: None})
 
 
-def notify_task_completed(db: Session, task, completed_by: Employee) -> None:
+def notify_task_completed(
+    db: Session,
+    task,
+    completed_by: Employee,
+    background_tasks: BackgroundTasks | None = None,
+) -> None:
     """Notify the assignee and leadership after a task becomes completed."""
     task_title = task.title or "Task"
     title = f"Task completed: {task_title}"
@@ -185,7 +238,16 @@ def notify_task_completed(db: Session, task, completed_by: Employee) -> None:
     recipients.update(emp.id for emp in leaders)
     for recipient_id in recipients:
         if recipient_id and recipient_id != completed_by.id:
-            create_notification(db, recipient_id, "task_completed", title, msg, "task", task.id)
+            create_notification(
+                db,
+                recipient_id,
+                "task_completed",
+                title,
+                msg,
+                "task",
+                task.id,
+                background_tasks,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +262,7 @@ def notify_roles(
     message: str,
     entity_type: str | None = None,
     entity_id: int | None = None,
+    background_tasks: BackgroundTasks | None = None,
 ) -> None:
     """
     Send the same notification to every active employee who holds any of the given roles.
@@ -215,7 +278,16 @@ def notify_roles(
             Employee.deleted_at.is_(None),
         ).all()
         for emp in employees:
-            create_notification(db, emp.id, notif_type, title, message, entity_type, entity_id)
+            create_notification(
+                db,
+                emp.id,
+                notif_type,
+                title,
+                message,
+                entity_type,
+                entity_id,
+                background_tasks,
+            )
     except Exception as exc:
         logger.error("notify_roles failed (roles=%s): %s", roles, exc)
 
@@ -240,6 +312,7 @@ def run_48h_rule(db: Session) -> int:
     hours = config.NOTIF_INACTIVITY_HOURS
     cutoff = ist_now() - timedelta(hours=hours)
     sent = 0
+    pending_pushes = []
     try:
         # Contacts that have had recent activity — we exclude these
         # select() builds an explicit SQL SELECT, which IN() accepts without the
@@ -279,16 +352,20 @@ def run_48h_rule(db: Session) -> int:
             # Notify the assigned sales executive
             if not check_dedup(db, contact.assigned_to, "inactivity", contact.id, 24):
                 create_notification(db, contact.assigned_to, "inactivity", title, msg, "contact", contact.id)
+                pending_pushes.append((contact.assigned_to, "inactivity", title, msg, "contact", contact.id))
                 sent += 1
 
             # Notify admin / manager (skip if they are the assigned person too)
             for emp in admins_managers:
                 if emp.id != contact.assigned_to and not check_dedup(db, emp.id, "inactivity", contact.id, 24):
                     create_notification(db, emp.id, "inactivity", title, msg, "contact", contact.id)
+                    pending_pushes.append((emp.id, "inactivity", title, msg, "contact", contact.id))
                     sent += 1
 
         if sent:
             db.commit()
+            for push in pending_pushes:
+                dispatch_notification_push(*push)
         logger.info("Inactivity rule run: %d notification(s) sent", sent)
     except Exception as exc:
         logger.error("run_48h_rule failed: %s", exc)
@@ -309,6 +386,7 @@ def run_daily_digest(db: Session) -> int:
         return 0
     today = ist_now().date()
     sent = 0
+    pending_pushes = []
     try:
         rows = (
             db.query(
@@ -328,10 +406,13 @@ def run_daily_digest(db: Session) -> int:
             title = f"You have {count} task{s} today"
             msg = f"Good morning! You have {count} follow-up task{s} scheduled for today."
             create_notification(db, assigned_to, "daily_digest", title, msg)
+            pending_pushes.append((assigned_to, "daily_digest", title, msg, None, None))
             sent += 1
 
         if sent:
             db.commit()
+            for push in pending_pushes:
+                dispatch_notification_push(*push)
         logger.info("Daily digest sent to %d employee(s)", sent)
     except Exception as exc:
         logger.error("run_daily_digest failed: %s", exc)

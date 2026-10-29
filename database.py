@@ -43,7 +43,11 @@ else:
         poolclass=NullPool,
         connect_args={"connect_timeout": 10, "ssl_disabled": True},
     )
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal =  sessionmaker(
+    bind=engine,
+    autoflush=False,
+    expire_on_commit=False,  # <-- Keeps loaded objects in memory after commit
+)
 
 
 class Base(DeclarativeBase):

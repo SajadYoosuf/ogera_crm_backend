@@ -14,7 +14,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from auth import get_current_user
-from business_time import ist_day_start_utc, today_ist
+from business_time import ist_day_bounds, ist_day_start_utc, today_ist
 from database import get_db
 from models import Contact, Employee, FollowupSchedule, LeadStage, PipelineStage
 from routes.contacts import contact_query
@@ -174,13 +174,14 @@ def _stage_breakdown(db: Session, user: Employee, f: dict) -> list[StageCount]:
 
 def _open_followups(db: Session, user: Employee, today: datetime.date):
     """Open follow-ups due today or earlier. Standalone tasks (no contact) count; deleted contacts do not."""
+    _, next_day = ist_day_bounds(today)
     q = (
         db.query(FollowupSchedule)
         .outerjoin(Contact, FollowupSchedule.contact_id == Contact.id)
         .filter(
             or_(FollowupSchedule.contact_id.is_(None), Contact.deleted_at.is_(None)),
             FollowupSchedule.status.in_(OPEN_STATUSES),
-            func.date(FollowupSchedule.due_at) <= today,
+            FollowupSchedule.due_at < next_day,
         )
     )
     return q
@@ -256,7 +257,8 @@ def dashboard_summary(
 
     open_q = _open_followups(db, current_user, today)
     due_total = open_q.count()
-    overdue = open_q.filter(func.date(FollowupSchedule.due_at) < today).count()
+    day_start, _ = ist_day_bounds(today)
+    overdue = open_q.filter(FollowupSchedule.due_at < day_start).count()
     followups = (
         open_q.options(joinedload(FollowupSchedule.contact), joinedload(FollowupSchedule.assignee))
         .order_by(FollowupSchedule.due_at.asc(), FollowupSchedule.id.asc())

@@ -5,10 +5,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS, UPLOAD_DIR
-from database import engine, Base, SessionLocal
-import models  # noqa: F401 — registers all models with Base before create_all
 from routes import auth_router, password_reset_router, recent_activity_router, contacts_router, dashboard_router, employees_router, lead_activities_router, followups_router, history_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router, attendance_router, staff_locations_router, expenses_router, diagnostics_router
-import settings_catalog
 from middleware import RequestLoggingMiddleware
 from firebase_init import init_firebase
 from scheduler import start_scheduler, stop_scheduler
@@ -17,19 +14,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Initialize optional services without preventing the API from starting."""
+    """Initialize runtime services without performing database DDL or seeding."""
     logger.info("FastAPI is starting up...")
-    try:
-        Base.metadata.create_all(bind=engine)
-        with SessionLocal() as _db:
-            models.seed_system_roles(_db)
-            settings_catalog.seed_defaults(_db)
-        logger.info("Database initialization completed")
-    except Exception:
-        logger.exception(
-            "Database initialization failed; the API will remain available, "
-            "but database-backed requests may fail until the database is reachable"
-        )
 
     init_firebase()
     start_scheduler()

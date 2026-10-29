@@ -1,5 +1,5 @@
 import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
 from contact_lookup import get_live_contact
@@ -44,6 +44,7 @@ def list_activities(
 def create_activity(
     contact_id: int,
     body: ActivityLogCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -87,7 +88,7 @@ def create_activity(
         doer_name = log.doer.name if log.doer else "Someone"
         title = f"Activity logged: {contact.name}"
         msg = f"{doer_name} logged a {body.activity_type.replace('_', ' ')} with {contact.name}."
-        notify_roles(db, ["admin", "manager"], "activity_logged", title, msg, "contact", contact_id)
+        notify_roles(db, ["admin", "manager"], "activity_logged", title, msg, "contact", contact_id, background_tasks)
         db.commit()
     except Exception:
         pass

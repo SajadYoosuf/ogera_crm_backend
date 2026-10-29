@@ -1,5 +1,5 @@
 import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
 from contact_lookup import get_live_contact
@@ -104,6 +104,7 @@ def list_followups(
 def create_followup(
     contact_id: int,
     body: FollowupScheduleCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -138,8 +139,8 @@ def create_followup(
         title = f"Follow-up scheduled: {contact_name}"
         msg = f"A follow-up with {contact_name} is scheduled for {due_str}."
         if fs.assigned_to != current_user.id:
-            create_notification(db, fs.assigned_to, "followup_created", title, msg, "followup", fs.id)
-        notify_roles(db, ["admin", "manager"], "followup_created", title, msg, "followup", fs.id)
+            create_notification(db, fs.assigned_to, "followup_created", title, msg, "followup", fs.id, background_tasks)
+        notify_roles(db, ["admin", "manager"], "followup_created", title, msg, "followup", fs.id, background_tasks)
         db.commit()
     except Exception:
         pass
@@ -167,6 +168,7 @@ def update_followup(
     contact_id: int,
     followup_id: int,
     body: FollowupScheduleUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -247,7 +249,7 @@ def update_followup(
     if body.status == "completed":
         try:
             from services.notification_service import notify_task_completed
-            notify_task_completed(db, fs, current_user)
+            notify_task_completed(db, fs, current_user, background_tasks)
             db.commit()
         except Exception:
             pass

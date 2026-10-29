@@ -27,7 +27,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
@@ -310,6 +310,7 @@ def approve_expense(
 def reject_expense(
     expense_id: int,
     body: RejectBody,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -345,6 +346,7 @@ def reject_expense(
         ),
         entity_type="expense",
         entity_id=expense.id,
+        background_tasks=background_tasks,
     )
     db.commit()
     db.expire_all()

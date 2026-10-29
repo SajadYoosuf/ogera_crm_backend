@@ -44,11 +44,11 @@ ROUTE OVERVIEW:
 from datetime import date, datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 import config
-from sqlalchemy.orm import Session, aliased, joinedload
+from sqlalchemy.orm import Session, aliased, joinedload, selectinload
 import json
 
 import contact_export
@@ -721,36 +721,57 @@ def get_contact(
     """
     GET /contacts/{id} — Full detail for one contact.
 
-    HOW IT WORKS:
-        1. `get_live_contact()` fetches the contact and raises 404 if it is
-           deleted or not found — so the rest of the function can trust that
-           `contact` is a valid, live row.
-        2. `model_validate(..., from_attributes=True)` converts the SQLAlchemy
-           object to a Pydantic response. Relationships already loaded (assigned_employee,
-           lead_source, profiles) are included automatically.
-        3. `referrals_count` requires a COUNT query that Pydantic cannot run,
-           so we set it explicitly.
-        4. `missing_fields()` returns the list of required fields still empty,
-           from which `is_verified` is derived.
-        5. The current stage is the lead_stage with the latest changed_at timestamp.
+    The contact relationships are eagerly loaded, and only the latest pipeline
+    stage is queried. This prevents response serialization from issuing hidden
+    lazy-load queries and avoids loading the complete stage history.
     """
-    contact = get_live_contact(db, contact_id)
+    contact = db.scalar(
+        select(Contact)
+        .options(
+            joinedload(Contact.assigned_employee),
+            joinedload(Contact.creator),
+            joinedload(Contact.lead_source),
+            joinedload(Contact.referred_by),
+            joinedload(Contact.consumer_profile),
+            joinedload(Contact.partner_profile),
+            joinedload(Contact.dealer_profile),
+            selectinload(Contact.interested_products),
+        )
+        .where(
+            Contact.id == contact_id,
+            Contact.deleted_at.is_(None),
+        )
+    )
+
+    if contact is None:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    current_stage = db.scalar(
+        select(LeadStage)
+        .options(
+            joinedload(LeadStage.stage_type),
+            joinedload(LeadStage.changed_by_employee),
+        )
+        .where(LeadStage.contact_id == contact_id)
+        .order_by(LeadStage.id.desc())
+        .limit(1)
+    )
 
     response = ContactResponse.model_validate(contact, from_attributes=True)
 
     # How many contacts does this person refer? Requires a COUNT — set it explicitly.
-    response.referrals_count = (
-        db.query(func.count(Contact.id))
-        .filter(Contact.referred_by_id == contact_id)
-        .scalar() or 0
-    )
+    response.referrals_count = db.scalar(
+        select(func.count(Contact.id)).where(
+            Contact.referred_by_id == contact_id,
+            Contact.deleted_at.is_(None),
+        )
+    ) or 0
 
     response.missing_fields = missing_fields(contact)
     response.is_verified = not response.missing_fields
 
-    if contact.lead_stages:
-        latest_stage = max(contact.lead_stages, key=lambda s: s.changed_at)
-        response.current_stage = _stage_response(latest_stage)
+    if current_stage is not None:
+        response.current_stage = _stage_response(current_stage)
 
     return response
 
@@ -758,6 +779,7 @@ def get_contact(
 @router.post("", response_model=ContactResponse, status_code=201, summary="Create a contact")
 def create_contact(
     body: ContactCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
     platform: str = Depends(client_platform),
@@ -874,6 +896,7 @@ def create_contact(
             f"New contact: {contact.name}",
             f"{current_user.name} added a new {contact.contact_type} contact.",
             "contact", contact.id,
+            background_tasks=background_tasks,
         )
         # If assigned to a sales exec, notify them too
         if contact.assigned_to and contact.assigned_to != current_user.id:
@@ -882,6 +905,7 @@ def create_contact(
                 f"Contact assigned to you: {contact.name}",
                 f"{contact.name} ({contact.contact_type}) has been assigned to you.",
                 "contact", contact.id,
+                background_tasks=background_tasks,
             )
         db.commit()
     except Exception:
@@ -901,6 +925,7 @@ def create_contact(
 def update_contact(
     contact_id: int,
     body: ContactUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
     platform: str = Depends(client_platform),
@@ -1059,6 +1084,7 @@ def update_contact(
                 f"Contact assigned to you: {contact.name}",
                 f"{contact.name} ({contact.contact_type}) has been assigned to you.",
                 "contact", contact.id,
+                background_tasks=background_tasks,
             )
             db.commit()
         except Exception:

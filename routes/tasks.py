@@ -1,8 +1,8 @@
 import datetime
 from typing import Literal
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import and_, func, or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
 from database import get_db
@@ -12,7 +12,7 @@ from models.activity_log import ActivityLog
 from models.followup_edit_log import FollowupEditLog
 from routes.followups import _followup_response, _log_edit, _task_state, checked_channel, LEGACY_CHANNELS
 from schemas.followup_schedule import FollowupScheduleResponse, FollowupScheduleUpdate, Priority
-from business_time import ist_now, today_ist
+from business_time import ist_day_bounds, ist_now, today_ist
 from services.lead_access import ensure_can_assign_followup, ensure_can_work_followup
 
 router = APIRouter(prefix="/tasks", tags=["tasks"], dependencies=[Depends(get_current_user)])
@@ -156,12 +156,16 @@ def list_tasks(
     )
 
     open_statuses = ("todo", "inprogress")
+    day_start, next_day = ist_day_bounds(today)
 
     # Summary counts (ignoring date range)
     open_q = base_q.filter(FollowupSchedule.status.in_(open_statuses))
-    overdue_count = open_q.filter(func.date(FollowupSchedule.due_at) < today).count()
-    today_count = open_q.filter(func.date(FollowupSchedule.due_at) == today).count()
-    upcoming_count = open_q.filter(func.date(FollowupSchedule.due_at) > today).count()
+    overdue_count = open_q.filter(FollowupSchedule.due_at < day_start).count()
+    today_count = open_q.filter(
+        FollowupSchedule.due_at >= day_start,
+        FollowupSchedule.due_at < next_day,
+    ).count()
+    upcoming_count = open_q.filter(FollowupSchedule.due_at >= next_day).count()
     done_count = base_q.filter(FollowupSchedule.status == "completed").count()
     summary = TaskSummaryResponse(overdue=overdue_count, today=today_count, upcoming=upcoming_count, done=done_count)
 
@@ -170,34 +174,43 @@ def list_tasks(
         statuses = open_statuses if status == "open" else (status,)
         filters = [FollowupSchedule.status.in_(statuses)]
         if date_from:
-            filters.append(func.date(FollowupSchedule.due_at) >= date_from)
             if include_overdue:
-                filters = [FollowupSchedule.status.in_(statuses), or_(
-                    func.date(FollowupSchedule.due_at) < date_from,
-                    and_(
-                        func.date(FollowupSchedule.due_at) >= date_from,
-                        func.date(FollowupSchedule.due_at) <= (date_to or date_from),
-                    ),
-                )]
+                _, include_end = ist_day_bounds(date_to or date_from)
+                filters.append(FollowupSchedule.due_at < include_end)
+            else:
+                start_at, _ = ist_day_bounds(date_from)
+                filters.append(FollowupSchedule.due_at >= start_at)
         if date_to and not include_overdue:
-            filters.append(func.date(FollowupSchedule.due_at) <= date_to)
+            _, end_at = ist_day_bounds(date_to)
+            filters.append(FollowupSchedule.due_at < end_at)
         items_q = base_q.filter(*filters)
     elif status == "due_today":
-        items_q = base_q.filter(FollowupSchedule.status.in_(open_statuses), func.date(FollowupSchedule.due_at) == today)
+        items_q = base_q.filter(
+            FollowupSchedule.status.in_(open_statuses),
+            FollowupSchedule.due_at >= day_start,
+            FollowupSchedule.due_at < next_day,
+        )
     elif status == "overdue":
-        items_q = base_q.filter(FollowupSchedule.status.in_(open_statuses), func.date(FollowupSchedule.due_at) < today)
+        items_q = base_q.filter(
+            FollowupSchedule.status.in_(open_statuses),
+            FollowupSchedule.due_at < day_start,
+        )
     elif status == "completed":
         items_q = base_q.filter(FollowupSchedule.status == "completed")
         if date_from:
-            items_q = items_q.filter(func.date(FollowupSchedule.due_at) >= date_from)
+            start_at, _ = ist_day_bounds(date_from)
+            items_q = items_q.filter(FollowupSchedule.due_at >= start_at)
         if date_to:
-            items_q = items_q.filter(func.date(FollowupSchedule.due_at) <= date_to)
+            _, end_at = ist_day_bounds(date_to)
+            items_q = items_q.filter(FollowupSchedule.due_at < end_at)
     else:  # all
         items_q = base_q
         if date_from:
-            items_q = items_q.filter(func.date(FollowupSchedule.due_at) >= date_from)
+            start_at, _ = ist_day_bounds(date_from)
+            items_q = items_q.filter(FollowupSchedule.due_at >= start_at)
         if date_to:
-            items_q = items_q.filter(func.date(FollowupSchedule.due_at) <= date_to)
+            _, end_at = ist_day_bounds(date_to)
+            items_q = items_q.filter(FollowupSchedule.due_at < end_at)
 
     total = items_q.count()
     rows = items_q.order_by(FollowupSchedule.due_at.asc()).offset(skip).limit(limit).all()
@@ -207,6 +220,7 @@ def list_tasks(
 @router.post("", response_model=FollowupScheduleResponse, status_code=201, summary="Create a standalone task (not linked to a contact)")
 def create_task(
     body: StandaloneTaskCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -239,8 +253,8 @@ def create_task(
         title = f"New task: {task_title}"
         msg = f'A task "{task_title}" has been assigned to you, due {due_str}.'
         if body.assigned_to != current_user.id:
-            create_notification(db, body.assigned_to, "task_created", title, msg, "task", fs.id)
-        notify_roles(db, ["admin", "manager"], "task_created", title, msg, "task", fs.id)
+            create_notification(db, body.assigned_to, "task_created", title, msg, "task", fs.id, background_tasks)
+        notify_roles(db, ["admin", "manager"], "task_created", title, msg, "task", fs.id, background_tasks)
         db.commit()
     except Exception:
         pass
@@ -252,6 +266,7 @@ def create_task(
 def update_task(
     task_id: int,
     body: FollowupScheduleUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -304,7 +319,7 @@ def update_task(
     if body.status == "completed":
         try:
             from services.notification_service import notify_task_completed
-            notify_task_completed(db, fs, current_user)
+            notify_task_completed(db, fs, current_user, background_tasks)
             db.commit()
         except Exception:
             pass
