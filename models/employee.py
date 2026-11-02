@@ -23,7 +23,7 @@ while keeping the SQLModel style for everything else.
 import datetime
 from typing import Optional, List, TYPE_CHECKING
 
-from sqlalchemy import Column, SmallInteger, DateTime, func
+from sqlalchemy import Column, SmallInteger, DateTime, String, func
 from sqlmodel import SQLModel, Field, Relationship
 
 if TYPE_CHECKING:
@@ -60,7 +60,13 @@ class Employee(SQLModel, table=True):
         foreign_key="roles.slug",
     )
 
-    phone: Optional[str] = Field(default=None, max_length=20)
+    # unique=True → MySQL enforces one account per phone number (NULLs are exempt).
+    # Phones are stored as last 10 digits (normalized in the Pydantic schema) so
+    # "+919000000003" and "9000000003" both land as "9000000003" and collide correctly.
+    phone: Optional[str] = Field(
+        default=None,
+        sa_column=Column("phone", String(20), nullable=True, unique=True),
+    )
 
     # One of: malappuram, perinthalmanna, kottakkal. Nullable for older rows.
     branch: Optional[str] = Field(default=None, max_length=60)

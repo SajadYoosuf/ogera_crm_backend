@@ -29,13 +29,20 @@ VALID_BRANCHES = {"malappuram", "perinthalmanna", "kottakkal"}
 
 
 def _validate_phone(v: str | None) -> str | None:
-    """Strip spaces/dashes and check the format. Returns None unchanged."""
+    """Strip spaces/dashes, validate format, and normalize to last 10 digits.
+
+    Storing just the last 10 digits makes every Indian number consistent regardless
+    of whether the caller included a +91 country code. This lets us put a DB unique
+    index on the phone column without needing a generated/virtual column.
+    Returns None unchanged.
+    """
     if v is None:
         return v
     cleaned = re.sub(r"[\s\-()]", "", v)
     if not _PHONE_RE.match(cleaned):
         raise ValueError("Phone must be 7-15 digits, optionally starting with +")
-    return cleaned
+    digits = re.sub(r"\D", "", cleaned)
+    return digits[-10:]
 
 
 def _validate_password(v: str | None) -> str | None:
