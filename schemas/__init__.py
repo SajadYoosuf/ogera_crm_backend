@@ -4,7 +4,7 @@ from .enums import (
     LossReasonEnum,
 )
 from .employee import EmployeeBase, EmployeeCreate, EmployeeUpdate, EmployeeSummary, EmployeeResponse
-from .employee import EmployeeListResponse, EmployeeCreateResponse, CredentialsEmailStatus
+from .employee import EmployeeListResponse, EmployeeCreateResponse
 from .role import RoleCreate, RoleUpdate, RoleResponse, RoleListResponse
 from .lead_source import (
     LeadSourceBase,

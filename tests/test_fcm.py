@@ -41,4 +41,6 @@ def test_notification_sends_to_all_registered_devices(client, login, monkeypatch
     )
     with SessionLocal() as db:
         notification_service.create_notification(db, employee["id"], "test", "Test", "Hello")
+    # create_notification only writes the DB row; FCM is dispatched separately.
+    notification_service.dispatch_notification_push(employee["id"], "test", "Test", "Hello")
     assert set(sent) == {"web-token", "phone-token"}

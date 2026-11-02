@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlmodel import Session
 from auth import get_current_user, get_password_hash, require_admin_or_manager
 from database import get_db
 from mailer import send_employee_credentials, send_password_changed_notice
@@ -41,7 +41,9 @@ def _get_employee_or_404(db: Session, employee_id: int, viewer: Employee | None 
     employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee or employee.deleted_at:
         raise HTTPException(status_code=404, detail="Employee not found")
-    if viewer and employee.role in _hidden_roles(viewer):
+    # A viewer can always look up their own record regardless of role visibility rules.
+    # The hidden-role filter only applies when looking up someone else.
+    if viewer and viewer.id != employee.id and employee.role in _hidden_roles(viewer):
         raise HTTPException(status_code=404, detail="Employee not found")
     return employee
 
@@ -105,11 +107,11 @@ def list_employees(
     is_active: bool | None = None,
     search: str | None = Query(None, description="Matches name, email or phone"),
     db: Session = Depends(get_db),
-    viewer: Employee = Depends(get_current_user),
+    viewer: Employee = Depends(manage_employees),
 ):
     """Paged list of employees with optional filters for role, active status and search (name, email or phone).
     Soft-deleted employees are excluded.
-    Open to every signed-in employee.
+    Admin and manager only — sales executives are blocked with 403.
     """
     hidden = _hidden_roles(viewer)
     q = db.query(Employee).filter(
@@ -264,7 +266,7 @@ def delete_employee(
     if employee.id == actor.id:
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
 
-    employee.deleted_at = datetime.utcnow()
+    employee.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
     employee.is_active = 0
     db.commit()
 
@@ -294,7 +296,7 @@ def register_fcm_token(
         existing.employee_id = current_user.id
         existing.platform = body.platform
         existing.device_id = body.device_id
-        existing.last_seen_at = datetime.utcnow()
+        existing.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
     else:
         db.add(FcmDevice(
             employee_id=current_user.id,

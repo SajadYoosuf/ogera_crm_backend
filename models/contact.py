@@ -111,10 +111,10 @@ class Contact(Base):
 
     # The employee currently responsible for following up with this contact
     assigned_employee: Mapped["Employee | None"] = relationship(
-        "Employee", back_populates="contacts", foreign_keys=[assigned_to]
+        "Employee", back_populates="assigned_contacts", foreign_keys=[assigned_to]
     )
     # Employee who entered the lead
-    creator: Mapped["Employee | None"] = relationship("Employee", foreign_keys=[created_by])
+    creator: Mapped["Employee | None"] = relationship("Employee", foreign_keys=[created_by], back_populates="created_contacts")
 
     # Self-referential referral relationships:
     #   referred_by  → the ONE contact that referred this one (parent)

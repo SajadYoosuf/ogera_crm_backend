@@ -93,10 +93,10 @@ def test_follow_up_can_be_assigned_to_a_manager(client, login, lead_source_id):
     assert response.status_code == 201, response.text
 
 
-def test_employee_list_shows_admins_and_managers(client, login):
+def test_sales_executive_cannot_access_employee_list(client, login):
+    # Sales executives have no reason to browse the staff directory — blocked with 403.
     anu, _ = login("anu")
-    roles = {person["role"] for person in client.get("/employees?limit=100", headers=anu).json()["items"]}
-    assert {"admin", "manager", "sales_executive"} <= roles
+    assert client.get("/employees?limit=100", headers=anu).status_code == 403
 
 
 # ---- the one guard that stays --------------------------------------------------------------
