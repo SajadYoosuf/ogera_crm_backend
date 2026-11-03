@@ -58,18 +58,6 @@ def test_analyze_partner_row_recognized(client, login, lead_source_id):
     assert r.json()["summary"]["ready"] == 1
 
 
-def test_analyze_dealer_row_recognized(client, login, lead_source_id):
-    headers, _ = login("admin")
-    content = _csv([
-        ["Name", "Phone", "District", "Address", "Type", "Owner"],
-        ["Kerala Tanks", "9100001002", "Calicut", "MG Road", "dealer", "Ravi"],
-    ])
-    r = _upload(client, headers, "/contacts/import/analyze", content,
-                default_source_id=lead_source_id("meta"))
-    assert r.status_code == 200
-    assert r.json()["summary"]["ready"] == 1
-
-
 def test_analyze_nameless_row_is_ready(client, login, lead_source_id):
     """Name is optional — a row with only phone should pass analysis."""
     headers, _ = login("admin")
@@ -109,18 +97,6 @@ def test_analyze_invalid_phone_is_error(client, login, lead_source_id):
                 default_source_id=lead_source_id("meta"))
     rows = r.json()["rows"]
     assert any(row["status"] == "error" for row in rows)
-
-
-def test_analyze_dealer_without_owner_name_is_error(client, login, lead_source_id):
-    headers, _ = login("admin")
-    content = _csv([
-        ["Name", "Phone", "Type"],
-        ["Shop X", "9100001010", "dealer"],
-    ])
-    r = _upload(client, headers, "/contacts/import/analyze", content,
-                default_source_id=lead_source_id("meta"))
-    rows = r.json()["rows"]
-    assert any(row["status"] == "error" and "owner" in " ".join(row["issues"]).lower() for row in rows)
 
 
 def test_analyze_duplicate_phone_within_file_is_error(client, login, lead_source_id):
@@ -357,22 +333,20 @@ def test_commit_creates_correct_profiles_per_type(client, login, lead_source_id)
     headers, _ = login("admin")
     src = lead_source_id("meta")
     content = _csv([
-        ["Name", "Phone", "Type", "House stage", "Profession", "Owner"],
-        ["Consumer A", "9100002040", "consumer", "ready", "", ""],
-        ["Partner B", "9100002041", "partner", "", "plumber", ""],
-        ["Dealer C", "9100002042", "dealer", "", "", "Ravi"],
+        ["Name", "Phone", "Type", "House stage", "Profession"],
+        ["Consumer A", "9100002040", "consumer", "ready", ""],
+        ["Partner B", "9100002041", "partner", "", "plumber"],
     ])
     r = _upload(client, headers, "/contacts/import/commit", content,
-                mapping='{"0":"name","1":"phone","2":"contact_type","3":"house_stage","4":"profession_type","5":"owner_name"}',
+                mapping='{"0":"name","1":"phone","2":"contact_type","3":"house_stage","4":"profession_type"}',
                 default_source_id=str(src))
-    assert r.json()["created"] == 3
+    assert r.json()["created"] == 2
 
     items = {c["name"]: c for c in
              client.get("/contacts", headers=headers).json()["items"]
-             if c["name"] in ("Consumer A", "Partner B", "Dealer C")}
+             if c["name"] in ("Consumer A", "Partner B")}
     assert items["Consumer A"]["house_stage"] == "ready"
     assert items["Partner B"]["profession_type"] == "plumber"
-    assert items["Dealer C"]["owner_name"] == "Ravi"
 
 
 def test_commit_requires_name_and_phone_columns_mapped(client, login, lead_source_id):

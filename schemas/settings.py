@@ -17,13 +17,13 @@ class EnumValueResponse(BaseModel):
     is_active: bool
     locked: bool = False  # the app relies on this option: it can be renamed but not turned off
     usage_count: int | None = None  # admin list only
-    group: str | None = None  # lead stages: consumer | partner | dealer
+    group: str | None = None  # lead stages: consumer | partner
 
 
 class EnumValueCreate(BaseModel):
     label: Annotated[str, Field(min_length=1, max_length=100)]
     value: Annotated[str, Field(max_length=100)] | None = None  # defaults to a slug of the label
-    group: Annotated[str, Field(pattern="^(consumer|partner|dealer)$")] | None = None  # lead stages only: the pipeline
+    group: Annotated[str, Field(pattern="^(consumer|partner)$")] | None = None  # lead stages only: the pipeline
 
     @field_validator("label", mode="after")
     @classmethod

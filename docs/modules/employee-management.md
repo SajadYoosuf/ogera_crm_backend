@@ -3,6 +3,7 @@
 Covers the staff accounts: who can see them, how they are created, changed, deactivated and removed, and how their data links to the rest of the CRM.
 
 Status: committed (`routes/employees.py`, `schemas/employee.py`, `models/employee.py`, `mailer.py`). The role catalogue is a separate module (`/roles`).
+Last updated: 2026-11-03 — SQLModel migration, role-visibility tightened, tests corrected.
 
 ## Files
 
@@ -10,18 +11,21 @@ Status: committed (`routes/employees.py`, `schemas/employee.py`, `models/employe
 | --- | --- |
 | `routes/employees.py` | All `/employees` routes and the rules behind them |
 | `schemas/employee.py` | Request and response shapes; phone, password and email checks |
-| `models/employee.py` | `Employee` table |
+| `models/employee.py` | `Employee` SQLModel table (`table=True`) |
 | `models/role.py` | `Role` table and the built-in role list (`SYSTEM_ROLES`) |
+| `database.py` | Engine, shared registry, `get_db()` session, `SessionLocal` backward-compat export |
 | `mailer.py` | `send_employee_credentials` (new account), `send_password_changed_notice` (password change) |
 | `config.py` | `PASSWORD_MIN_LENGTH`, `PASSWORD_MAX_LENGTH` |
 
 ## Roles
 
-`employees.role` holds a role slug from the `roles` table. The built-in slugs are `admin`, `manager`, `team_lead`, `sales_executive` (the default), `tele_caller`, `field_executive` and `support`. Admins can add custom roles. A role used by an employee cannot be deleted; it is deactivated instead.
+`employees.role` holds a role slug from the `roles` table. The active slugs in use are `admin`, `manager`, and `sales_executive` (the default). Custom roles can be added via `/roles`. A role used by an employee cannot be deleted; it is deactivated instead.
+
+Note: `team_lead`, `tele_caller`, `field_executive`, and `support` slugs may exist in older data but are not actively assigned. `team_lead_id` column was dropped from the DB.
 
 Two roles have extra rules across the module:
 
-- `admin` and `manager` are **monitoring** roles. They see everything and never receive work, so they are never offered as assignees (see rule 1 in `rule.md`).
+- `admin` and `manager` are **monitoring** roles. They see everything and never receive work, so they are never offered as assignees.
 - Only an `admin` can create, promote, change or delete an `admin` or `manager` account.
 
 ## Routes
@@ -29,18 +33,22 @@ Two roles have extra rules across the module:
 | Method and path | Who may call | Result |
 | --- | --- | --- |
 | `GET /employees/directory` | Any signed-in employee | Active staff as `id`, `name`, `role`, `phone`, sorted by name |
-| `GET /employees` | Any signed-in employee | Paged list with filters |
+| `GET /employees` | `admin`, `manager` only (403 for sales_executive) | Paged list with filters |
 | `GET /employees/{id}` | Any signed-in employee | One employee |
 | `POST /employees` | `admin`, `manager` | Creates an employee and emails the login details |
 | `PUT /employees/{id}` | `admin`, `manager` | Partial update; a password change sends a notice email |
 | `DELETE /employees/{id}` | `admin`, `manager` | Soft delete |
+| `POST /employees/me/fcm-token` | Any signed-in employee | Register a push notification device token |
+| `DELETE /employees/me/fcm-token` | Any signed-in employee | Unregister a push notification device token |
 
 ## Who sees which employees
 
-- **Hidden roles.** `admin` accounts are never returned by the list or by id, to anyone. A `manager` caller also cannot see other `manager` accounts. A hidden id gives `404`, the same as an unknown id.
-- **The directory is not filtered by hidden roles.** It lists every active, non-deleted employee, including admins and managers, with only `id`, `name`, `role` and `phone`.
+- **`GET /employees` is admin and manager only.** Sales executives get `403`. They have no UI to browse the staff list on web or mobile.
+- **Hidden roles.** `admin` accounts are never returned by the list or by-id endpoints, to any viewer. A `manager` caller also cannot see other `manager` accounts. A hidden id gives `404`, the same as an unknown id.
+- **Self-lookup exception.** A viewer can always look up their own record (`GET /employees/{id}`) and edit themselves (`PUT /employees/{id}`), even if their role is normally hidden from others. This allows a manager to update their own name or email.
+- **The directory is not filtered by hidden roles.** It lists every active, non-deleted employee with only `id`, `name`, `role` and `phone`, sorted by name. Used for assignment dropdowns in the UI.
 - **Deleted employees** (`deleted_at` set) are excluded from lists and from the directory.
-- **Inactive employees** (`is_active = 0`) are excluded from the directory, so they are not offered as assignees. They still appear in the employee list, which shows `is_active` as the account status.
+- **Inactive employees** (`is_active = 0`) are excluded from the directory, so they are not offered as assignees. They still appear in the employee list with `is_active` shown.
 
 ## Business logic
 
@@ -52,7 +60,7 @@ Two roles have extra rules across the module:
 4. If a phone is given, it must not match another non-deleted employee. Phones are compared on their last 10 digits, so `+91 90000 00003` and `9000000003` match (`409`).
 5. The password is hashed with argon2 and stored. The plain password is never saved or returned.
 6. The row is inserted. A database uniqueness conflict is also reported as `409`.
-7. The login details are emailed before the transaction is committed. If the email fails, the transaction is rolled back and the employee is not created; the API returns `503` so the request can be retried.
+7. The employee row is inserted and committed first. The credentials email is then queued as a **background task** (sent after the response). A mailer failure does not roll back the employee. The response always returns `201` with `credentials_email.sent = false` (queued, not yet confirmed).
 
 ### Update (`PUT /employees/{id}`)
 
@@ -91,11 +99,14 @@ id              PK
 name            VARCHAR(120)
 email           VARCHAR(180) UNIQUE          lowercase
 password_hash   VARCHAR(255)                 argon2
-role            VARCHAR(40) FK roles.slug    ON UPDATE CASCADE
+role            VARCHAR(40) FK roles.slug
 phone           VARCHAR(20) NULL             no unique index (checked in code)
+branch          VARCHAR(60) NULL             one of: malappuram, perinthalmanna, kottakkal
+fcm_token       VARCHAR(512) NULL            legacy push token; new devices use fcm_devices table
 is_active       SMALLINT default 1           admin switch: may sign in
 deleted_at      DATETIME NULL                soft delete
-created_at, updated_at
+created_at      DATETIME server_default      set by MySQL on INSERT
+updated_at      DATETIME server_default      updated by MySQL on every change
 
 roles
 -----
@@ -103,26 +114,36 @@ id, slug UNIQUE, name UNIQUE, description, is_system, is_active
 
 Rows that point at employees.id (kept on soft delete):
   contacts.assigned_to, contacts.created_by
-  lead_activities.assigned_to, lead_activities.completed_by, lead_activities.created_by
   lead_stages.changed_by
+  fcm_devices.employee_id              ON DELETE CASCADE
+  attendance.employee_id               ON DELETE CASCADE
+  expenses.employee_id, expenses.reviewed_by
+  followup_schedules.assigned_to, followup_schedules.created_by
+  followup_edit_log.changed_by
+  followup_reschedule.changed_by
+  contact_assignments.assigned_from, .assigned_to, .changed_by
+  activity_log.done_by
+  sales.created_by_employee_id
+  password_reset.employee_id
   staff_locations.employee_id          ON DELETE CASCADE
-  staff_location_states.employee_id    ON DELETE CASCADE
-  password_reset_codes.employee_id
+  staff_location_history.employee_id   ON DELETE CASCADE
 ```
 
-`is_field_staff` was removed from the model. If the column still exists in an older database, drop it with `ALTER TABLE employees DROP COLUMN is_field_staff;`. The code no longer reads or writes it.
+Columns dropped from the DB:
+- `team_lead_id` — dropped; the team lead role is not in use.
+- `is_field_staff` — no longer in the model or code; drop with `ALTER TABLE employees DROP COLUMN is_field_staff;` when ready.
 
 ## End-to-end flow
 
 ```
-Admin creates a tele caller
+Admin creates a sales executive
   web/mobile ──POST /employees {name,email,phone,role,password}──▶ routes/employees.py
     ▶ schemas/employee.py: field rules (phone, password length, role slug)
     ▶ roles: role exists and is active
     ▶ employees: email unused (any case) and phone unused (last 10 digits)
-    ▶ argon2 hash ▶ INSERT employees
-    ▶ mailer.send_employee_credentials ──▶ new employee's inbox
-    ◀── 201 {employee, credentials_email} (or 503 when email sending fails; no employee is saved)
+    ▶ argon2 hash ▶ INSERT employees ▶ db.commit()
+    ▶ background task: mailer.send_employee_credentials ──▶ new employee's inbox
+    ◀── 201 {employee, credentials_email: {sent: false, message: "queued"}}
 
 Staff pick an assignee
   app ──GET /employees/directory──▶ employees where deleted_at IS NULL AND is_active = 1
@@ -159,4 +180,10 @@ Admin removes an employee
 
 ## Tests
 
-`tests/test_employee_duplicates.py` (email and phone duplicates, country-code phones, soft-deleted rows), `tests/test_employee_passwords.py` (length limits, change notice), `tests/test_mobile_api.py` (directory, list visibility, hidden admins and managers, deactivation).
+| File | What it covers |
+| --- | --- |
+| `tests/test_employees.py` | Full CRUD: create, list, get, update, delete, duplicates, self-guards |
+| `tests/test_fcm.py` | FCM token registration, unregistration, push to all registered devices |
+| `tests/test_no_role_rules.py` | Role-based access: who can see what, 403 for sales executive on list |
+| `tests/test_employee_duplicates.py` | Email and phone duplicates, country-code phones, soft-deleted rows |
+| `tests/test_employee_passwords.py` | Password length limits, change notice email |

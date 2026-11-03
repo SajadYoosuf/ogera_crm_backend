@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlmodel import Session
 from auth import get_current_user, get_password_hash, require_admin_or_manager
 from database import get_db
 from mailer import send_employee_credentials, send_password_changed_notice
@@ -41,7 +41,9 @@ def _get_employee_or_404(db: Session, employee_id: int, viewer: Employee | None 
     employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee or employee.deleted_at:
         raise HTTPException(status_code=404, detail="Employee not found")
-    if viewer and employee.role in _hidden_roles(viewer):
+    # A viewer can always look up their own record regardless of role visibility rules.
+    # The hidden-role filter only applies when looking up someone else.
+    if viewer and viewer.id != employee.id and employee.role in _hidden_roles(viewer):
         raise HTTPException(status_code=404, detail="Employee not found")
     return employee
 
@@ -67,20 +69,18 @@ def _email_taken(db: Session, email: str, exclude_id: int | None = None) -> bool
     return q.first() is not None
 
 
-def _phone_key(phone: str) -> str:
-    """Last 10 digits, so '+91 90000 00003' and '9000000003' are the same number."""
-    digits = "".join(ch for ch in phone if ch.isdigit())
-    return digits[-10:]
-
 
 def _phone_taken(db: Session, phone: str, exclude_id: int | None = None) -> bool:
-    # Phone has no DB unique index, so soft-deleted employees don't reserve their number.
-    # Compared in Python on the normalised key, so the country code and spacing don't matter.
-    key = _phone_key(phone)
-    q = db.query(Employee.id, Employee.phone).filter(Employee.phone.is_not(None), Employee.deleted_at.is_(None))
+    # Phones are stored as last 10 digits (normalized by the schema validator), so a
+    # direct equality check is enough — no Python iteration over all rows needed.
+    # Soft-deleted rows are excluded: a deleted employee's number can be reused.
+    q = db.query(Employee.id).filter(
+        Employee.phone == phone,
+        Employee.deleted_at.is_(None),
+    )
     if exclude_id is not None:
         q = q.filter(Employee.id != exclude_id)
-    return any(_phone_key(stored) == key for _, stored in q.all() if key)
+    return q.first() is not None
 
 
 @router.get("/directory", summary="Staff directory")
@@ -105,11 +105,11 @@ def list_employees(
     is_active: bool | None = None,
     search: str | None = Query(None, description="Matches name, email or phone"),
     db: Session = Depends(get_db),
-    viewer: Employee = Depends(get_current_user),
+    viewer: Employee = Depends(manage_employees),
 ):
     """Paged list of employees with optional filters for role, active status and search (name, email or phone).
     Soft-deleted employees are excluded.
-    Open to every signed-in employee.
+    Admin and manager only — sales executives are blocked with 403.
     """
     hidden = _hidden_roles(viewer)
     q = db.query(Employee).filter(
@@ -147,7 +147,12 @@ def get_employee(
     db: Session = Depends(get_db),
     viewer: Employee = Depends(get_current_user),
 ):
-    """One employee by id. Returns 404 for an unknown id, a deleted employee, or a role hidden from the list."""
+    """One employee by id. Every employee may fetch their own record.
+    Fetching another employee's record requires admin or manager role.
+    Returns 404 for an unknown id, a deleted employee, or a role hidden from the viewer.
+    """
+    if viewer.id != employee_id and viewer.role not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="You do not have permission to view this employee")
     return EmployeeResponse.model_validate(
         _get_employee_or_404(db, employee_id, viewer=viewer), from_attributes=True
     )
@@ -177,9 +182,11 @@ def create_employee(
     db.add(employee)
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
+        # Both email and phone have DB unique indexes — inspect which one fired.
+        detail = DUPLICATE_PHONE if "phone" in str(exc.orig).lower() else DUPLICATE_EMAIL
+        raise HTTPException(status_code=409, detail=detail)
 
     db.refresh(employee)
 
@@ -241,9 +248,10 @@ def update_employee(
 
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
+        detail = DUPLICATE_PHONE if "phone" in str(exc.orig).lower() else DUPLICATE_EMAIL
+        raise HTTPException(status_code=409, detail=detail)
     db.refresh(employee)
     if password_changed:
         # Best effort: the password is already changed, so a failed email is only logged.
@@ -264,8 +272,17 @@ def delete_employee(
     if employee.id == actor.id:
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
 
-    employee.deleted_at = datetime.utcnow()
+    employee.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
     employee.is_active = 0
+    employee.fcm_token = None
+    # Free the phone so another employee can be assigned the same number.
+    # The DB unique index on phone allows multiple NULLs, so clearing it here
+    # is the correct way to release the slot for a soft-deleted row.
+    employee.phone = None
+    # Remove all push-notification device registrations so the deleted account
+    # stops receiving notifications. The FK has ON DELETE CASCADE for hard deletes,
+    # but soft deletes don't fire the cascade, so we clear them manually.
+    db.query(FcmDevice).filter(FcmDevice.employee_id == employee.id).delete(synchronize_session=False)
     db.commit()
 
 
@@ -294,7 +311,7 @@ def register_fcm_token(
         existing.employee_id = current_user.id
         existing.platform = body.platform
         existing.device_id = body.device_id
-        existing.last_seen_at = datetime.utcnow()
+        existing.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
     else:
         db.add(FcmDevice(
             employee_id=current_user.id,

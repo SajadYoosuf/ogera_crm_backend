@@ -60,7 +60,7 @@ from database import get_db
 from phone_utils import phone_key
 from request_context import client_platform
 from verification import missing_fields, verified_clause
-from models import Contact, ConsumerProfile, ContactAssignment, DealerProfile, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage, Product, Sale
+from models import Contact, ConsumerProfile, ContactAssignment, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage, Product, Sale
 from schemas import (
     ContactCreate,
     ContactListItem,
@@ -72,7 +72,6 @@ from schemas import (
     LeadStageResponse,
     PipelineStageItem,
 )
-from schemas.dealer_profile import DealerProfileResponse, DealerProfileUpdate
 from schemas.enums import profession_key
 import settings_catalog as catalog
 
@@ -119,7 +118,7 @@ def _get_new_lead_stage(db: Session, contact_type: str) -> PipelineStage:
     Raises 500 if the pipeline has not been seeded (should never happen in production,
     but a clear error is better than a confusing NoneType crash).
 
-    INPUT:  db session, contact_type string ("consumer" / "partner" / "dealer")
+    INPUT:  db session, contact_type string ("consumer" / "partner")
     OUTPUT: PipelineStage ORM object for the 'new_lead' stage of that type
     """
     st = db.query(PipelineStage).filter(
@@ -244,22 +243,20 @@ def _check_location(source: LeadSource | None, latitude, longitude, creating: bo
         )
 
 
-def _check_type_profiles(contact_type: str, consumer_profile, partner_profile, dealer_profile) -> None:
+def _check_type_profiles(contact_type: str, consumer_profile, partner_profile) -> None:
     """
     Ensure the caller isn't sending a profile block for the wrong contact type.
 
     For example, sending `partner_profile` for a consumer contact is a mistake.
     This catches it early before any DB writes happen.
 
-    INPUT:  the resolved contact_type string, and the three optional profile inputs
+    INPUT:  the resolved contact_type string, and the two optional profile inputs
     RAISES: 400 if a profile block does not match the contact type
     """
     if consumer_profile is not None and contact_type != "consumer":
         raise HTTPException(status_code=400, detail="consumer_profile is only allowed for consumer contacts")
     if partner_profile is not None and contact_type != "partner":
         raise HTTPException(status_code=400, detail="partner_profile is only allowed for partner contacts")
-    if dealer_profile is not None and contact_type != "dealer":
-        raise HTTPException(status_code=400, detail="dealer_profile is only allowed for dealer contacts")
 
 
 def _check_consumer_options(db: Session, profile, current=None) -> None:
@@ -466,7 +463,6 @@ def list_contacts(
             joinedload(Contact.creator),
             joinedload(Contact.partner_profile),
             joinedload(Contact.consumer_profile),
-            joinedload(Contact.dealer_profile),
         )
         .order_by(*CONTACT_ORDERINGS[sort])
         .offset(skip)
@@ -498,6 +494,8 @@ def list_contacts(
             {
                 "id": contact.id,
                 "contact_type": contact.contact_type,
+                # Branch belongs to the contact record, not the employee who created it.
+                "branch": contact.branch,
                 "name": contact.name,
                 "phone": contact.phone,
                 "address": contact.address,
@@ -505,7 +503,6 @@ def list_contacts(
                 # Type-specific headline fields — None when the type doesn't apply
                 "profession_type": profession_key(contact.partner_profile.profession_type) if contact.partner_profile else None,
                 "house_stage": contact.consumer_profile.house_stage if contact.consumer_profile else None,
-                "owner_name": contact.dealer_profile.owner_name if contact.dealer_profile else None,
                 "work_area": contact.partner_profile.work_area if contact.partner_profile else None,
                 "latitude": contact.latitude,
                 "longitude": contact.longitude,
@@ -558,7 +555,6 @@ def export_contacts(
             joinedload(Contact.creator),
             joinedload(Contact.partner_profile),
             joinedload(Contact.consumer_profile),
-            joinedload(Contact.dealer_profile),
         )
         .order_by(Contact.created_at.desc(), Contact.id.desc())
         .all()
@@ -614,8 +610,8 @@ def _read_upload(file: UploadFile, mapping_json: str | None):
 
 
 def _import_options(default_type: str, default_source_id: int | None, duplicates: str) -> contact_import.Options:
-    if default_type not in ("consumer", "partner", "dealer"):
-        raise HTTPException(status_code=400, detail="default_type must be consumer, partner or dealer")
+    if default_type not in ("consumer", "partner"):
+        raise HTTPException(status_code=400, detail="default_type must be consumer or partner")
     if duplicates not in ("skip", "update_blank"):
         raise HTTPException(status_code=400, detail="duplicates must be skip or update_blank")
     return contact_import.Options(default_type, default_source_id, duplicates)
@@ -703,10 +699,10 @@ def contact_type_counts(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """A live count of the contacts per type (consumer, partner, dealer), for the tab badges."""
+    """A live count of the contacts per type (consumer, partner), for the tab badges."""
     q = db.query(Contact.contact_type, func.count(Contact.id)).filter(Contact.deleted_at.is_(None))
     rows = q.group_by(Contact.contact_type).all()
-    counts = {"consumer": 0, "partner": 0, "dealer": 0}
+    counts = {"consumer": 0, "partner": 0}
     for kind, total in rows:
         counts[str(getattr(kind, "value", kind))] = total
     return {"all": sum(counts.values()), **counts}
@@ -734,7 +730,6 @@ def get_contact(
             joinedload(Contact.referred_by),
             joinedload(Contact.consumer_profile),
             joinedload(Contact.partner_profile),
-            joinedload(Contact.dealer_profile),
             selectinload(Contact.interested_products),
         )
         .where(
@@ -785,13 +780,13 @@ def create_contact(
     platform: str = Depends(client_platform),
 ):
     """
-    POST /contacts — Create a new contact (consumer, partner, or dealer).
+    POST /contacts — Create a new contact (consumer or partner).
 
     CREATION FLOW:
         1. Mobile-only validation: mobile app must always send address + district.
         2. Validate lead source, GPS rules, referrer, profile blocks, and phone uniqueness.
         3. Build the Contact ORM object.
-        4. Attach the type-specific profile (consumer/partner/dealer) if provided.
+        4. Attach the type-specific profile (consumer/partner) if provided.
         5. Attach an initial "new_lead" LeadStage row — every contact starts here.
         6. db.flush() writes the contact to get its auto-generated `id` before commit.
         7. If an assignee was chosen, write a ContactAssignment history row.
@@ -818,14 +813,11 @@ def create_contact(
         raise HTTPException(status_code=400, detail="Lead source not found")
     _check_location(source, body.latitude, body.longitude, creating=True, platform=platform)
     _ensure_referrer(db, body.referred_by_id)
-    _check_type_profiles(body.contact_type, body.consumer_profile, body.partner_profile, body.dealer_profile)
+    _check_type_profiles(body.contact_type, body.consumer_profile, body.partner_profile)
     if body.partner_profile is not None:
         catalog.ensure_allowed(db, catalog.PROFESSIONAL_TYPE, body.partner_profile.profession_type)
     _check_consumer_options(db, body.consumer_profile)
     # partner_profile is now optional at create time — profession_type + work_area are required for verification.
-    # dealer_profile is still required at create time because owner_name uniquely identifies the account.
-    if body.contact_type == "dealer" and body.dealer_profile is None:
-        raise HTTPException(status_code=400, detail="dealer_profile (with owner_name) is required for a dealer")
     _ensure_phone_free(db, body.phone, current_user)
 
     # Step 2b: validate assignee if provided
@@ -838,7 +830,7 @@ def create_contact(
     # Step 3: build the Contact row.
     # model_dump() converts the Pydantic object to a plain dict; we exclude profile
     # blocks and assigned_to because they are handled separately below.
-    data = body.model_dump(exclude={"consumer_profile", "partner_profile", "dealer_profile", "assigned_to", "interested_product_ids"})
+    data = body.model_dump(exclude={"consumer_profile", "partner_profile", "assigned_to", "interested_product_ids"})
     contact = Contact(**data, phone_key=phone_key(body.phone), assigned_to=assigned_to, created_by=current_user.id)
 
     # Step 4: attach type-specific profile in the same transaction
@@ -846,8 +838,6 @@ def create_contact(
         contact.consumer_profile = ConsumerProfile(**body.consumer_profile.model_dump(mode="json"))
     if body.partner_profile is not None:
         contact.partner_profile = PartnerProfile(**body.partner_profile.model_dump(mode="json"))
-    if body.dealer_profile is not None:
-        contact.dealer_profile = DealerProfile(**body.dealer_profile.model_dump(mode="json"))
 
     # Link any interested products (validated: must exist and not be deleted)
     if body.interested_product_ids:
@@ -949,7 +939,7 @@ def update_contact(
     PROFILE UPSERT:
         - If the contact already has a profile, we merge the sent fields into it.
         - If the contact has no profile yet, we create one. In that case, required
-          fields (profession_type for partners, owner_name for dealers) must be present.
+          fields (profession_type for partners) must be present.
 
     FIELDS THAT CANNOT BE CLEARED:
         contact_type, name, phone, and assigned_to are required once set.
@@ -986,14 +976,14 @@ def update_contact(
 
     # Use the new type if being changed, otherwise the existing type from the DB
     final_type = body.contact_type.value if body.contact_type is not None else contact.contact_type
-    _check_type_profiles(final_type, body.consumer_profile, body.partner_profile, body.dealer_profile)
+    _check_type_profiles(final_type, body.consumer_profile, body.partner_profile)
     _check_consumer_options(db, body.consumer_profile, contact.consumer_profile)
 
     if "phone" in fields and body.phone is not None:
         _ensure_phone_free(db, body.phone, current_user, exclude_id=contact.id)
 
     # Build a dict of only the fields to apply (excludes profiles and products, handled separately)
-    update_data = body.model_dump(exclude_unset=True, exclude={"consumer_profile", "partner_profile", "dealer_profile", "interested_product_ids"})
+    update_data = body.model_dump(exclude_unset=True, exclude={"consumer_profile", "partner_profile", "interested_product_ids"})
     # Do not allow clearing required fields by sending null
     for key in ("contact_type", "name", "phone", "assigned_to"):
         if key in update_data and update_data[key] is None:
@@ -1058,18 +1048,6 @@ def update_contact(
                 if field == "profession_type" and value is None:
                     continue  # Never clear profession_type via a partial update
                 setattr(contact.partner_profile, field, value)
-
-    if body.dealer_profile is not None:
-        profile_data = body.dealer_profile.model_dump(exclude_unset=True, mode="json")
-        if contact.dealer_profile is None:
-            if not profile_data.get("owner_name"):
-                raise HTTPException(status_code=400, detail="owner_name is required for a dealer")
-            contact.dealer_profile = DealerProfile(**profile_data)
-        else:
-            for field, value in profile_data.items():
-                if field == "owner_name" and value is None:
-                    continue  # Never clear owner_name via a partial update
-                setattr(contact.dealer_profile, field, value)
 
     db.add(contact)
     db.commit()

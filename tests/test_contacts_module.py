@@ -1,4 +1,4 @@
-"""Contacts module: consumer, partner and dealer rules, the duplicate phone rule, mobile-only fields,
+"""Contacts module: consumer and partner rules, the duplicate phone rule, mobile-only fields,
 option lists, and who can see which contacts."""
 import pytest
 
@@ -35,21 +35,14 @@ def test_each_type_creates_with_its_own_details(client, login, lead_source_id):
     consumer = _contact(client, headers, lead_source_id("meta"), phone="9100000001")
     partner = _contact(client, headers, lead_source_id("meta"), phone="9100000002", contact_type="partner",
                        consumer_profile=None, partner_profile={"profession_type": "plumber"})
-    dealer = _contact(client, headers, lead_source_id("meta"), phone="9100000003", contact_type="dealer",
-                      name="Kerala Tanks", consumer_profile=None, dealer_profile={"owner_name": "Ravi"})
     assert consumer.status_code == 201, consumer.text
     assert partner.status_code == 201, partner.text
-    assert dealer.status_code == 201, dealer.text
-    assert dealer.json()["dealer_profile"]["owner_name"] == "Ravi"
     assert partner.json()["partner_profile"]["profession_type"] == "plumber"
 
 
-def test_dealer_needs_owner_name_and_partner_does_not(client, login, lead_source_id):
-    """Dealer requires dealer_profile.owner_name at creation. Partner profile is optional at creation."""
+def test_partner_profile_is_optional_at_creation(client, login, lead_source_id):
+    """Partner profile is optional at creation — contact is unverified until profession_type + work_area are added."""
     headers, _ = login("admin")
-    dealer = _contact(client, headers, lead_source_id("meta"), phone="9100000004", contact_type="dealer",
-                      consumer_profile=None)
-    assert dealer.status_code == 400 and "owner_name" in dealer.json()["detail"]
     # Partner can be created without a profile — it will be unverified until profession_type + work_area are added
     partner = _contact(client, headers, lead_source_id("meta"), phone="9100000005", contact_type="partner",
                        consumer_profile=None)
@@ -60,8 +53,9 @@ def test_dealer_needs_owner_name_and_partner_does_not(client, login, lead_source
 
 def test_details_block_must_match_the_contact_type(client, login, lead_source_id):
     headers, _ = login("admin")
-    response = _contact(client, headers, lead_source_id("meta"), phone="9100000006", contact_type="dealer",
-                        dealer_profile={"owner_name": "Ravi"})  # still carries a consumer_profile
+    # Sending consumer_profile for a partner contact should fail
+    response = _contact(client, headers, lead_source_id("meta"), phone="9100000006", contact_type="partner",
+                        consumer_profile={"house_stage": "ready"})  # consumer_profile on a partner
     assert response.status_code == 400
     assert "consumer_profile is only allowed" in response.json()["detail"]
 
@@ -84,8 +78,8 @@ def test_invalid_phone_is_rejected(client, login, lead_source_id):
 def test_same_phone_is_blocked_across_types(client, login, lead_source_id):
     headers, _ = login("admin")
     assert _contact(client, headers, lead_source_id("meta"), phone="9100000010").status_code == 201
-    response = _contact(client, headers, lead_source_id("meta"), phone="9100000010", contact_type="dealer",
-                        name="Shop", consumer_profile=None, dealer_profile={"owner_name": "Ravi"})
+    response = _contact(client, headers, lead_source_id("meta"), phone="9100000010", contact_type="partner",
+                        name="Shop", consumer_profile=None)
     assert response.status_code == 409
     assert "contact" in response.json()["detail"]  # admins see which contact
 
@@ -230,14 +224,6 @@ def test_awareness_mode_is_gone_from_contacts(client, login, lead_source_id):
                         consumer_profile={"awareness_mode": 1, "house_stage": "ready"})
     assert response.status_code == 201
     assert "awareness_mode" not in response.json()["consumer_profile"]  # awareness lives in the lead stages now
-
-
-def test_dealer_appears_in_list_with_owner_name(client, login, lead_source_id):
-    headers, _ = login("admin")
-    _contact(client, headers, lead_source_id("meta"), phone="9100000035", contact_type="dealer",
-             name="Kerala Tanks", consumer_profile=None, dealer_profile={"owner_name": "Ravi"})
-    rows = client.get("/contacts", params={"contact_type": "dealer"}, headers=headers).json()["items"]
-    assert [(r["name"], r["owner_name"]) for r in rows] == [("Kerala Tanks", "Ravi")]
 
 
 def test_list_row_shows_who_created_it_and_their_branch(client, login, lead_source_id, staff):

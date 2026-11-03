@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
-from models import ConsumerProfile, Contact, DealerProfile, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage
+from models import ConsumerProfile, Contact, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage
 from schemas.enums import profession_key
 from phone_utils import phone_key
 import settings_catalog as catalog
@@ -35,8 +35,6 @@ FIELDS = {
     "lead_source": "Lead source",
     "profession_type": "Profession (partners)",
     "house_stage": "House stage (consumers)",
-    "owner_name": "Owner name (dealers)",
-    "owner_email": "Owner email (dealers)",
     "work_area": "Work area (partners)",
     "notes": "Notes",
     "created_at": "Created date",
@@ -55,8 +53,6 @@ ALIASES = {
     "lead_source": ["source", "leadsource", "sourceofsale", "origin", "channel"],
     "profession_type": ["profession", "professiontype", "occupation", "trade", "partnertype"],
     "house_stage": ["housestage", "constructionstage", "buildingstage"],
-    "owner_name": ["owner", "ownername", "proprietor", "contactperson"],
-    "owner_email": ["owneremail", "email", "emailid", "mail"],
     "work_area": ["workarea", "servicearea", "operatingarea"],
     "notes": ["notes", "note", "remarks", "remark", "comments", "comment", "description"],
     "created_at": ["createdat", "createddate", "date", "created", "enquirydate", "saledate"],
@@ -283,7 +279,7 @@ def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[i
         ctype = _key(d.get("contact_type", ""))
         if not ctype:
             out["contact_type"] = options.default_type
-        elif ctype in ("consumer", "partner", "dealer"):
+        elif ctype in ("consumer", "partner"):
             out["contact_type"] = ctype
         else:
             out["contact_type"] = options.default_type
@@ -306,11 +302,6 @@ def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[i
             out["profession_type"] = key if key in professions else "other"
             if not prof:
                 r.warn("Profession is missing; used 'other'")
-        elif out["contact_type"] == "dealer":
-            out["owner_name"] = (d.get("owner_name") or None) and d["owner_name"][:120]
-            out["owner_email"] = (d.get("owner_email") or None) and d["owner_email"][:180]
-            if not out["owner_name"]:
-                r.fail("Owner name is required for dealers")
 
         if d.get("created_at"):
             out["created_at"] = parse_date(d["created_at"])
@@ -348,8 +339,6 @@ def run_import(db: Session, results: list[RowResult], options: Options, assignee
         if r.status in ("ready", "warning"):
             d = dict(r.data)
             house_stage = d.pop("house_stage", None)
-            owner_name = d.pop("owner_name", None)
-            owner_email = d.pop("owner_email", None)
             work_area = d.pop("work_area", None)
             profession = d.pop("profession_type", None)
             if d.get("created_at") is None:
@@ -362,8 +351,6 @@ def run_import(db: Session, results: list[RowResult], options: Options, assignee
                 contact.consumer_profile = ConsumerProfile(house_stage=house_stage)
             elif ct == "partner":
                 contact.partner_profile = PartnerProfile(profession_type=profession, work_area=work_area)
-            elif ct == "dealer":
-                contact.dealer_profile = DealerProfile(owner_name=owner_name, email=owner_email)
             contact.lead_stages.append(LeadStage(stage_id=new_lead_ids[ct], changed_by=created_by))
             # Auto-schedule initial follow-up (24 hours from now)
             contact.followup_schedules = [FollowupSchedule(

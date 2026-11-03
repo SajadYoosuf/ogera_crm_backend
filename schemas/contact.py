@@ -30,7 +30,7 @@ VALIDATION:
 import datetime
 from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
-from .enums import ContactType
+from .enums import BranchEnum, ContactType
 from .employee import EmployeeSummary
 from .lead_source import LeadSourceSummary
 from .lead_stage import LeadStageResponse
@@ -40,7 +40,6 @@ from .consumer_profile import (
     ConsumerProfileUpdate,
 )
 from .partner_profile import PartnerProfileBase, PartnerProfileResponse, PartnerProfileUpdate
-from .dealer_profile import DealerProfileBase, DealerProfileResponse, DealerProfileUpdate
 from phone_utils import clean_phone
 from pydantic import field_validator
 
@@ -127,7 +126,9 @@ class ContactBase(BaseModel):
         "+91 98765-43210" and the DB will always store "9876543210".
     """
     contact_type: ContactType = ContactType.consumer
-    # Dealers: the account (shop or business) name. Optional — phone is used as display name when absent.
+    # Which branch office this contact belongs to (malappuram / kottakkal / perinthalmanna).
+    branch: BranchEnum | None = None
+    # Optional — phone is used as display name when absent.
     name: Annotated[str, Field(min_length=1, max_length=150)] | None = None
     phone: Annotated[str, Field(min_length=1, max_length=20)]
     phone_alt: Annotated[str, Field(max_length=20)] | None = None
@@ -184,7 +185,6 @@ class ContactCreate(ContactBase):
     # Type details, created in the same transaction. Each one is only allowed for its own contact type.
     consumer_profile: ConsumerProfileBase | None = None
     partner_profile: PartnerProfileBase | None = None
-    dealer_profile: DealerProfileBase | None = None
     # Products this contact is interested in. Empty list = no products linked.
     interested_product_ids: list[int] = []
 
@@ -210,6 +210,7 @@ class ContactUpdate(BaseModel):
         (only the sent fields are updated).
     """
     contact_type: ContactType | None = None
+    branch: BranchEnum | None = None
     name: Annotated[str, Field(min_length=1, max_length=150)] | None = None
     phone: Annotated[str, Field(min_length=1, max_length=20)] | None = None
     phone_alt: Annotated[str, Field(max_length=20)] | None = None
@@ -224,7 +225,6 @@ class ContactUpdate(BaseModel):
     # Creates the profile if the contact has none, otherwise merges the given fields
     consumer_profile: ConsumerProfileUpdate | None = None
     partner_profile: PartnerProfileUpdate | None = None
-    dealer_profile: DealerProfileUpdate | None = None
     # Replaces the interested product when provided.
     # Omit → keep existing. Send [] → clear it. Send [id] → select one product.
     interested_product_ids: list[int] | None = None
@@ -299,7 +299,6 @@ class ContactResponse(ContactBase):
     # Only one of these will have data depending on contact_type
     consumer_profile: ConsumerProfileResponse | None = None
     partner_profile: PartnerProfileResponse | None = None
-    dealer_profile: DealerProfileResponse | None = None
 
     # Products this contact is interested in (populated from the M2M relationship)
     interested_products: list[ProductRef] = []
@@ -322,20 +321,19 @@ class ContactListItem(BaseModel):
         Some fields only apply to one type and will be None for others:
             profession_type  → partner only
             house_stage      → consumer only
-            owner_name       → dealer only
             work_area        → partner only
     """
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     contact_type: ContactType
+    branch: BranchEnum | None = None
     name: str | None = None
     phone: str
     address: str | None = None
     district: str | None = None
     profession_type: str | None = None  # partners only
     house_stage: str | None = None      # consumers only
-    owner_name: str | None = None       # dealers only
     work_area: str | None = None        # partners only
     latitude: float | None = None
     longitude: float | None = None
