@@ -119,7 +119,9 @@ def test_tasks_status_due_today_and_overdue_ignore_the_date_range(client, login,
         db.commit()
 
     def notes(**params):
-        return sorted(item["notes"] for item in client.get("/tasks", headers=headers, params=params).json()["items"])
+        # Skip None-notes (e.g. the auto-scheduled "First Contact" follow-up) so
+        # Python 3 sorted() doesn't crash comparing NoneType with str.
+        return sorted(item["notes"] for item in client.get("/tasks", headers=headers, params=params).json()["items"] if item["notes"] is not None)
 
     assert notes(status="overdue") == ["old"]
     assert notes(status="due_today", date_from=(today + datetime.timedelta(days=5)).isoformat(), date_to=(today + datetime.timedelta(days=5)).isoformat()) == ["today"]

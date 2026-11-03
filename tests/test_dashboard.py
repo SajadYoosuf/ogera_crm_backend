@@ -42,6 +42,15 @@ def _insert_followup(assigned_to, due_at, status="todo", contact_id=None, title=
         db.commit()
 
 
+def _link_product(client, headers, contact_id):
+    """Create a product and link it to the contact so the won/after_sales stage gate passes."""
+    product = client.post("/products", json={"name": "500L Tank", "slug": "500l-tank"}, headers=headers)
+    assert product.status_code == 201, product.text
+    pid = product.json()["id"]
+    r = client.put(f"/contacts/{contact_id}", json={"interested_product_ids": [pid]}, headers=headers)
+    assert r.status_code == 200, r.text
+
+
 def _today_at(hour, days=0):
     day = today_ist() + datetime.timedelta(days=days)
     return datetime.datetime.combine(day, datetime.time(hour, 0))
@@ -136,6 +145,7 @@ def test_all_time_has_no_change_figure(client, login, lead_source_id):
 def test_a_contact_that_reaches_won_twice_counts_once(client, login, lead_source_id):
     headers, admin = login("admin")
     contact = _contact(client, headers, lead_source_id, admin["id"])
+    _link_product(client, headers, contact["id"])
     for slug in ("won", "negotiation", "won"):
         response = client.post(f"/contacts/{contact['id']}/stages",
                                json={"stage_id": _stage_id(slug), "changed_by": admin["id"]}, headers=headers)
@@ -147,6 +157,7 @@ def test_a_contact_that_reaches_won_twice_counts_once(client, login, lead_source
 def test_won_counts_the_stage_move_not_the_lead_creation_date(client, login, lead_source_id):
     headers, admin = login("admin")
     contact = _contact(client, headers, lead_source_id, admin["id"])
+    _link_product(client, headers, contact["id"])
     client.post(f"/contacts/{contact['id']}/stages", json={"stage_id": _stage_id("won"), "changed_by": admin["id"]}, headers=headers)
     with SessionLocal() as db:  # the move happened 10 days ago, the lead was created today
         db.query(LeadStage).filter(LeadStage.contact_id == contact["id"], LeadStage.stage_id == _stage_id("won")).update(

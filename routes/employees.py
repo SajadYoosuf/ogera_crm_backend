@@ -8,6 +8,7 @@ from auth import get_current_user, get_password_hash, require_admin_or_manager
 from database import get_db
 from mailer import send_employee_credentials, send_password_changed_notice
 from models import Employee, FcmDevice, Role
+from request_context import client_platform
 from schemas import (
     EmployeeCreate,
     EmployeeCreateResponse,
@@ -41,9 +42,9 @@ def _get_employee_or_404(db: Session, employee_id: int, viewer: Employee | None 
     employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee or employee.deleted_at:
         raise HTTPException(status_code=404, detail="Employee not found")
-    # A viewer can always look up their own record regardless of role visibility rules.
-    # The hidden-role filter only applies when looking up someone else.
-    if viewer and viewer.id != employee.id and employee.role in _hidden_roles(viewer):
+    # Hidden-role accounts (e.g. admin for all viewers, manager for manager viewers) always
+    # return 404 — even when the viewer is fetching their own record.
+    if viewer and employee.role in _hidden_roles(viewer):
         raise HTTPException(status_code=404, detail="Employee not found")
     return employee
 
@@ -105,12 +106,16 @@ def list_employees(
     is_active: bool | None = None,
     search: str | None = Query(None, description="Matches name, email or phone"),
     db: Session = Depends(get_db),
-    viewer: Employee = Depends(manage_employees),
+    viewer: Employee = Depends(get_current_user),
+    platform: str = Depends(client_platform),
 ):
     """Paged list of employees with optional filters for role, active status and search (name, email or phone).
-    Soft-deleted employees are excluded.
-    Admin and manager only — sales executives are blocked with 403.
+    Admin and manager can list from any client. Sales executives and other roles may only list from the
+    mobile app (x-client-type: mobile). Role-based visibility hides admin accounts from all viewers
+    and manager accounts from manager viewers.
     """
+    if viewer.role not in ("admin", "manager") and platform != "mobile":
+        raise HTTPException(status_code=403, detail="You do not have permission to perform this action")
     hidden = _hidden_roles(viewer)
     q = db.query(Employee).filter(
         Employee.deleted_at.is_(None),
@@ -147,15 +152,16 @@ def get_employee(
     db: Session = Depends(get_db),
     viewer: Employee = Depends(get_current_user),
 ):
-    """One employee by id. Every employee may fetch their own record.
-    Fetching another employee's record requires admin or manager role.
-    Returns 404 for an unknown id, a deleted employee, or a role hidden from the viewer.
+    """One employee by id. Hidden-role accounts (admin for all; manager for manager viewers) return
+    404 before any access check. Sales executives may only fetch their own record (403 otherwise).
+    Admin and manager may fetch any visible record.
     """
+    employee = _get_employee_or_404(db, employee_id, viewer=viewer)
+    # After confirming the employee exists and is visible, check that the viewer is allowed to
+    # read someone else's full profile. Sales executives can only look up themselves.
     if viewer.id != employee_id and viewer.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="You do not have permission to view this employee")
-    return EmployeeResponse.model_validate(
-        _get_employee_or_404(db, employee_id, viewer=viewer), from_attributes=True
-    )
+    return EmployeeResponse.model_validate(employee, from_attributes=True)
 
 
 @router.post("", response_model=EmployeeCreateResponse, status_code=201, summary="Create an employee")
