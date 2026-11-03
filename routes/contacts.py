@@ -494,6 +494,8 @@ def list_contacts(
             {
                 "id": contact.id,
                 "contact_type": contact.contact_type,
+                # Branch belongs to the contact record, not the employee who created it.
+                "branch": contact.branch,
                 "name": contact.name,
                 "phone": contact.phone,
                 "address": contact.address,
