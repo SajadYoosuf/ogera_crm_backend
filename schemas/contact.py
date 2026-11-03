@@ -30,7 +30,7 @@ VALIDATION:
 import datetime
 from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
-from .enums import ContactType
+from .enums import BranchEnum, ContactType
 from .employee import EmployeeSummary
 from .lead_source import LeadSourceSummary
 from .lead_stage import LeadStageResponse
@@ -126,6 +126,8 @@ class ContactBase(BaseModel):
         "+91 98765-43210" and the DB will always store "9876543210".
     """
     contact_type: ContactType = ContactType.consumer
+    # Which branch office this contact belongs to (malappuram / kottakkal / perinthalmanna).
+    branch: BranchEnum | None = None
     # Optional — phone is used as display name when absent.
     name: Annotated[str, Field(min_length=1, max_length=150)] | None = None
     phone: Annotated[str, Field(min_length=1, max_length=20)]
@@ -208,6 +210,7 @@ class ContactUpdate(BaseModel):
         (only the sent fields are updated).
     """
     contact_type: ContactType | None = None
+    branch: BranchEnum | None = None
     name: Annotated[str, Field(min_length=1, max_length=150)] | None = None
     phone: Annotated[str, Field(min_length=1, max_length=20)] | None = None
     phone_alt: Annotated[str, Field(max_length=20)] | None = None
@@ -324,6 +327,7 @@ class ContactListItem(BaseModel):
 
     id: int
     contact_type: ContactType
+    branch: BranchEnum | None = None
     name: str | None = None
     phone: str
     address: str | None = None

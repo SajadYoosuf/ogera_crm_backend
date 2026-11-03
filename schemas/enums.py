@@ -17,6 +17,16 @@ def profession_key(raw: str) -> str:
     return raw.strip().lower().replace(" ", "_")
 
 
+class BranchEnum(str, enum.Enum):
+    """
+    The three physical branch offices.
+    Used on Contact and Sale so every record can be tied to the branch it came from.
+    """
+    malappuram = "malappuram"
+    kottakkal = "kottakkal"
+    perinthalmanna = "perinthalmanna"
+
+
 class LossReasonEnum(str, enum.Enum):
     price = "price"
     competitor = "competitor"

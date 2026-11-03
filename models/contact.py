@@ -87,6 +87,13 @@ class Contact(Base):
     # This creates a self-referential tree: a contact can refer many others.
     referred_by_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("contacts.id"))
 
+    # --- Branch ---
+    # Which office this contact belongs to. One of: malappuram, kottakkal, perinthalmanna.
+    branch: Mapped[str | None] = mapped_column(
+        SAEnum("malappuram", "kottakkal", "perinthalmanna", name="contact_branch_enum"),
+        nullable=True,
+    )
+
     # --- Lead metadata ---
     lead_source_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("lead_sources.id"))
     notes: Mapped[str | None] = mapped_column(Text)

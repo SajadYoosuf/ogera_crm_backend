@@ -3,6 +3,7 @@ import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import contact_import
+from schemas.enums import BranchEnum
 
 
 def _blank_to_none(value):
@@ -29,6 +30,8 @@ class SaleBase(BaseModel):
     alt_phone: str | None = None
     address: str | None = None
     purchased_product: str | None = Field(default=None, max_length=150)
+    # Which branch office this sale belongs to (malappuram / kottakkal / perinthalmanna).
+    branch: BranchEnum | None = None
     created_by_employee_id: int | None = None
 
     _text = field_validator("address", "purchased_product", mode="before")(_blank_to_none)
@@ -61,6 +64,7 @@ class SaleUpdate(BaseModel):
     alt_phone: str | None = None
     address: str | None = None
     purchased_product: str | None = Field(default=None, max_length=150)
+    branch: BranchEnum | None = None
     created_by_employee_id: int | None = None
 
     _text = field_validator("address", "purchased_product", mode="before")(_blank_to_none)
