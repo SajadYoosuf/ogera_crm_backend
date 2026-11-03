@@ -275,6 +275,10 @@ def delete_employee(
     employee.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
     employee.is_active = 0
     employee.fcm_token = None
+    # Free the phone so another employee can be assigned the same number.
+    # The DB unique index on phone allows multiple NULLs, so clearing it here
+    # is the correct way to release the slot for a soft-deleted row.
+    employee.phone = None
     # Remove all push-notification device registrations so the deleted account
     # stops receiving notifications. The FK has ON DELETE CASCADE for hard deletes,
     # but soft deletes don't fire the cascade, so we clear them manually.
