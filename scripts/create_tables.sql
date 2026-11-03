@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS stage_types (
 
 CREATE TABLE IF NOT EXISTS contacts (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    contact_type ENUM('consumer', 'partner', 'dealer') NOT NULL DEFAULT 'consumer',
+    contact_type ENUM('consumer', 'partner') NOT NULL DEFAULT 'consumer',
     name VARCHAR(150) NOT NULL,
     phone VARCHAR(20) NOT NULL,
     phone_alt VARCHAR(20),

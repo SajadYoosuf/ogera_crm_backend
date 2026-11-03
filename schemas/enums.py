@@ -10,7 +10,6 @@ class RoleEnum(str, enum.Enum):
 class ContactType(str, enum.Enum):
     consumer = "consumer"
     partner = "partner"
-    dealer = "dealer"
 
 
 def profession_key(raw: str) -> str:

@@ -116,7 +116,7 @@ def list_tasks(
     status: Literal["open", "todo", "inprogress", "completed", "all", "due_today", "overdue"] = "open",
     assigned_to: int | None = None,
     channel: str | None = None,
-    contact_type: Literal["consumer", "partner", "dealer"] | None = None,
+    contact_type: Literal["consumer", "partner"] | None = None,
     q: str | None = Query(default=None, max_length=100),
     include_overdue: bool = False,
     skip: int = Query(default=0, ge=0),

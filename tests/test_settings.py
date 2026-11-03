@@ -82,8 +82,8 @@ def test_lead_stage_can_be_added_to_one_pipeline(client, login):
     duplicate = client.post("/settings/enums/lead_stage", headers=manager, json={"label": "Site Visit Booked", "group": "partner"})
     assert duplicate.status_code == 409, duplicate.text
 
-    # Same name in another pipeline is a different stage.
-    other = client.post("/settings/enums/lead_stage", headers=manager, json={"label": "Site Visit Booked", "group": "dealer"})
+    # Same name in another pipeline (consumer) is a different stage.
+    other = client.post("/settings/enums/lead_stage", headers=manager, json={"label": "Site Visit Booked", "group": "consumer"})
     assert other.status_code == 201, other.text
 
     listed = client.get("/settings/enums", headers=admin).json()["lead_stage"]

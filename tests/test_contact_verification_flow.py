@@ -3,7 +3,7 @@ High-priority contact verification flow tests.
 
 Covers:
   - Verification gate: contact cannot advance past new_lead until verified
-  - Verification fields per type: consumer, partner, dealer
+  - Verification fields per type: consumer, partner
   - Name required for all types (at verification, not at creation)
   - GPS (lat/lng) required from mobile for field_visit source, forbidden for all others
   - Partner profile optional at creation, required at verification
@@ -16,7 +16,6 @@ WHAT IS A VERIFIED CONTACT?
         All types:  phone, name, district, address, lead_source
         Consumer:   + house_stage
         Partner:    + profession_type, work_area
-        Dealer:     + owner_name
         Field visit: + latitude, longitude (mobile only at creation)
 """
 
@@ -102,15 +101,6 @@ def test_name_missing_blocks_partner_verification(client, login, lead_source_id)
     r = _make(client, headers, lead_source_id("meta"), phone="9600000021",
               name=None, contact_type="partner", consumer_profile=None,
               partner_profile={"profession_type": "plumber", "work_area": "Calicut"}).json()
-    assert r["is_verified"] is False
-    assert "name" in r["missing_fields"]
-
-
-def test_name_missing_blocks_dealer_verification(client, login, lead_source_id):
-    headers, _ = login("admin")
-    r = _make(client, headers, lead_source_id("meta"), phone="9600000022",
-              name=None, contact_type="dealer", consumer_profile=None,
-              dealer_profile={"owner_name": "Ravi Stores"}).json()
     assert r["is_verified"] is False
     assert "name" in r["missing_fields"]
 
@@ -208,26 +198,6 @@ def test_partner_verified_flag_appears_in_list(client, login, lead_source_id):
     unverified_list = client.get("/contacts?verified=false&contact_type=partner", headers=headers).json()
     ids_unv = [c["id"] for c in unverified_list["items"]]
     assert contact["id"] not in ids_unv
-
-
-# ── Dealer-specific verification ──────────────────────────────────────────────
-
-def test_dealer_verified_with_all_required_fields(client, login, lead_source_id):
-    headers, _ = login("admin")
-    r = _make(client, headers, lead_source_id("meta"), phone="9600000050",
-              name="Kerala Tanks", contact_type="dealer", consumer_profile=None,
-              dealer_profile={"owner_name": "Ravi"}).json()
-    assert r["is_verified"] is True
-    assert r["missing_fields"] == []
-
-
-def test_dealer_without_profile_is_rejected_at_creation(client, login, lead_source_id):
-    """Dealer requires dealer_profile at create time (unlike partner)."""
-    headers, _ = login("admin")
-    r = _make(client, headers, lead_source_id("meta"), phone="9600000051",
-              contact_type="dealer", consumer_profile=None)
-    assert r.status_code == 400
-    assert "owner_name" in r.json()["detail"]
 
 
 # ── GPS / field_visit source ──────────────────────────────────────────────────

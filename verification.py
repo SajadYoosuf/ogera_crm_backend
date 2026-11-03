@@ -13,7 +13,6 @@ REQUIRED FIELDS BY TYPE:
     Field visit:  + latitude, longitude (GPS captured by mobile at creation)
     Consumer:     + house_stage
     Partner:      + profession_type, work_area
-    Dealer:       + owner_name
 
 TWO IMPLEMENTATIONS:
     `missing_fields(contact)` — Python function, runs on an already-loaded ORM object.
@@ -24,7 +23,7 @@ TWO IMPLEMENTATIONS:
 """
 
 from sqlalchemy import and_, exists, func, or_, select
-from models import ConsumerProfile, Contact, DealerProfile, LeadSource, PartnerProfile
+from models import ConsumerProfile, Contact, LeadSource, PartnerProfile
 
 
 def missing_fields(contact: Contact) -> list[str]:
@@ -51,10 +50,6 @@ def missing_fields(contact: Contact) -> list[str]:
             missing.append("profession_type")
         if contact.partner_profile is None or not (contact.partner_profile.work_area or "").strip():
             missing.append("work_area")
-
-    if contact.contact_type == "dealer":
-        if contact.dealer_profile is None or not (contact.dealer_profile.owner_name or "").strip():
-            missing.append("owner_name")
 
     return missing
 
@@ -95,11 +90,6 @@ def verified_clause():
         ),
     )
 
-    dealer_ok = or_(
-        Contact.contact_type != "dealer",
-        exists().where(DealerProfile.contact_id == Contact.id, _filled(DealerProfile.owner_name)),
-    )
-
     return and_(
         _filled(Contact.phone),
         _filled(Contact.name),
@@ -109,5 +99,4 @@ def verified_clause():
         location_ok,
         consumer_ok,
         partner_ok,
-        dealer_ok,
     )

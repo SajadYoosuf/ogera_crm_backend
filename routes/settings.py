@@ -101,14 +101,14 @@ def list_enum(category: str, db: Session = Depends(get_db), _: Employee = Depend
     ]
 
 
-PIPELINES = ("consumer", "partner", "dealer")
+PIPELINES = ("consumer", "partner")
 
 
 def _create_stage(db: Session, body: EnumValueCreate) -> EnumValueResponse:
     """Adds a stage to one contact type's pipeline, at the end. A stage turned off earlier comes back instead."""
     pipeline = body.group or "consumer"
     if pipeline not in PIPELINES:
-        raise HTTPException(status_code=422, detail="Choose consumer, partner or dealer")
+        raise HTTPException(status_code=422, detail="Choose consumer or partner")
     if len(body.label) > 60:
         raise HTTPException(status_code=422, detail="Name can be at most 60 characters")
     slug = catalog.slugify(body.value or body.label, 40)
@@ -135,7 +135,7 @@ def _create_stage(db: Session, body: EnumValueCreate) -> EnumValueResponse:
 @router.post("/enums/{category}", response_model=EnumValueResponse, status_code=201, summary="Add a dropdown option")
 def create_enum(category: str, body: EnumValueCreate, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
     """Adds a value to a category (admin and manager). The stored value cannot be changed later, so pick it carefully.
-    Lead stages also take `group` (consumer, partner or dealer): the pipeline the stage joins."""
+    Lead stages also take `group` (consumer or partner): the pipeline the stage joins."""
     _category_or_404(category)
     if category == catalog.LEAD_STAGE:
         return _create_stage(db, body)

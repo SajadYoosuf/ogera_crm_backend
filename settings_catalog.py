@@ -97,17 +97,6 @@ DEFAULT_STAGES: list[tuple[str, str, str, str, int]] = [
     ("active",               "Active",                  "Active partner.",                                     "partner", 7),
     ("referral",             "Referral",                "Partner sending referrals.",                          "partner", 8),
     ("inactive",             "Inactive",                "Partner no longer active.",                           "partner", 9),
-    # Dealer pipeline
-    ("new_lead",             "New Lead",               "Just entered.",                                        "dealer", 1),
-    ("connected",            "Connected",               "Initial contact made.",                               "dealer", 2),
-    ("meeting_done",         "Meeting Done",            "In-person or video meeting completed.",               "dealer", 3),
-    ("aware",                "Aware",                   "Dealer understands the product range.",               "dealer", 4),
-    ("terms_agreed",         "Terms Agreed",            "Commercial terms discussed and agreed.",              "dealer", 5),
-    ("sample_sent",          "Sample Sent",             "Product sample dispatched.",                          "dealer", 6),
-    ("first_order",          "First Order",             "First order placed.",                                 "dealer", 7),
-    ("placed",               "Placed",                  "Order confirmed and in fulfilment.",                  "dealer", 8),
-    ("active_dealer",        "Active Dealer",           "Recurring active dealer.",                            "dealer", 9),
-    ("inactive_dealer",      "Inactive Dealer",         "Dealer no longer ordering.",                          "dealer", 10),
 ]
 
 DEFAULT_COMPANY = {"company_name": "Ogera", "company_logo_url": None}
@@ -122,7 +111,7 @@ class Item:
     is_active: bool
     locked: bool = False
     usage_count: int = 0
-    group: str | None = None  # lead stages: the contact type the stage belongs to (consumer, partner, dealer)
+    group: str | None = None  # lead stages: the contact type the stage belongs to (consumer, partner)
 
 
 def slugify(text: str, max_len: int = 40) -> str:
@@ -178,7 +167,7 @@ def _stage_items(db: Session, category: str) -> list[Item]:
 def list_items(db: Session, category: str, with_usage: bool = False) -> list[Item]:
     items = {LEAD_SOURCE: _source_items, LEAD_STAGE: _stage_items}.get(category, _enum_items)(db, category)
     if with_usage and category == LEAD_STAGE:
-        # Usage per row, not per slug: a slug is shared by the consumer, partner and dealer pipelines.
+        # Usage per row, not per slug: a slug is shared by the consumer and partner pipelines.
         by_id = dict(
             db.query(PipelineStage.id, func.count(func.distinct(LeadStage.contact_id)))
             .join(LeadStage, LeadStage.stage_id == PipelineStage.id)

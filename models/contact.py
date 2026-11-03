@@ -9,7 +9,7 @@ of the class corresponds to a column in the table.
 
 WHY DO WE NEED IT?
 ------------------
-Every lead (potential customer, partner, or dealer) in the CRM is a Contact.
+Every lead (potential customer or partner) in the CRM is a Contact.
 When we run `db.add(contact)` and `db.commit()`, SQLAlchemy converts the
 Python object into an INSERT statement and writes it to MySQL.
 
@@ -25,7 +25,6 @@ RELATIONSHIPS:
     - One Contact may have ONE of:
         • ConsumerProfile  (house stage, tank info)
         • PartnerProfile   (profession, work area)
-        • DealerProfile    (shop/owner details)
     - A Contact can refer other Contacts      (self-referential referral tree)
 """
 
@@ -40,13 +39,12 @@ class Contact(Base):
     """
     Represents one lead/contact in the CRM.
 
-    A contact can be one of three types:
+    A contact can be one of two types:
         • consumer  — individual customer (e.g. homeowner wanting a water tank)
         • partner   — a tradesperson who refers customers (e.g. plumber, interior designer)
-        • dealer    — a shop or business that resells products
 
-    Each type can have its own extra details table (ConsumerProfile, PartnerProfile,
-    DealerProfile), linked via a one-to-one relationship.
+    Each type can have its own extra details table (ConsumerProfile, PartnerProfile),
+    linked via a one-to-one relationship.
 
     SOFT DELETE:
         We never truly delete contacts. Instead we set `deleted_at` to the current time.
@@ -61,7 +59,7 @@ class Contact(Base):
 
     # --- Core identity fields ---
     contact_type: Mapped[str] = mapped_column(
-        SAEnum("consumer", "partner", "dealer"), default="consumer"
+        SAEnum("consumer", "partner"), default="consumer"
     )
     name: Mapped[str | None] = mapped_column(String(150))
     # The phone number as entered (may include country code, spaces, dashes)
@@ -144,10 +142,6 @@ class Contact(Base):
     partner_profile: Mapped["PartnerProfile | None"] = relationship(
         "PartnerProfile", back_populates="contact", uselist=False
     )
-    dealer_profile: Mapped["DealerProfile | None"] = relationship(
-        "DealerProfile", back_populates="contact", uselist=False
-    )
-
     # Products this contact has expressed interest in.
     # `secondary` points at the join table; no extra columns are stored on the join.
     # `lazy="select"` means the list is only fetched when the attribute is accessed
@@ -166,7 +160,7 @@ class Contact(Base):
     # -------------------------------------------------------------------------
     __table_args__ = (
         Index("idx_contacts_phone_key", "phone_key"),   # duplicate-phone check
-        Index("idx_contacts_type", "contact_type"),     # filter by consumer/partner/dealer
+        Index("idx_contacts_type", "contact_type"),     # filter by consumer/partner
         Index("idx_contacts_assigned", "assigned_to"),  # "show my leads" query
         Index("idx_contacts_district", "district"),     # filter by district
         Index("idx_contacts_created_by", "created_by"), # filter by creator

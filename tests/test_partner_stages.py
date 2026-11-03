@@ -93,7 +93,6 @@ def test_tasks_filter_by_consumer_or_partner_and_list_all_dates_when_none_given(
     assert set(everyone) == {"Arun Kumar", "Plumber Raju"}
     assert "Arun Kumar" in names(contact_type="consumer")[0]
     assert "Plumber Raju" in names(contact_type="partner")[0]
-    assert client.get("/tasks", headers=headers, params={"contact_type": "dealer"}).status_code == 200
 
 
 def test_tasks_status_due_today_and_overdue_ignore_the_date_range(client, login, lead_source_id, app):

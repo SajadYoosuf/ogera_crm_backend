@@ -1,7 +1,7 @@
 """Pipeline stage endpoints.
 
 GET /pipeline/stages  — returns the ordered list of stages for one contact type (consumer,
-partner or dealer), or all stages when no type is given. The board uses this to know which
+partner), or all stages when no type is given. The board uses this to know which
 columns to show and in what order.
 """
 from fastapi import APIRouter, Depends, Query
@@ -17,13 +17,13 @@ router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
 @router.get("/stages", response_model=list[PipelineStageItem], summary="List pipeline stages")
 def list_pipeline_stages(
-    contact_type: ContactType | None = Query(None, description="Filter to one pipeline: consumer, partner or dealer"),
+    contact_type: ContactType | None = Query(None, description="Filter to one pipeline: consumer or partner"),
     db: Session = Depends(get_db),
     _: Employee = Depends(get_current_user),
 ):
     """Returns active pipeline stages in board order.
 
-    - Pass `contact_type=consumer` (or partner / dealer) to get only the stages for that board.
+    - Pass `contact_type=consumer` (or partner) to get only the stages for that board.
     - Leave it out to get all stages across every pipeline.
 
     The `id` field is the value to send as `stage_id` when moving a contact to that stage.

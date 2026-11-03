@@ -14,7 +14,6 @@ from .contact_assignment import ContactAssignment
 from .consumer_profile import ConsumerProfile
 from .partner_profile import PartnerProfile
 from .password_reset import PasswordResetCode
-from .dealer_profile import DealerProfile
 from .sale import Sale
 from .product import Product, ProductOption
 from .contact_interested_product import contact_interested_products  # registers the join table with Base.metadata
@@ -44,7 +43,6 @@ __all__ = [
     "ConsumerProfile",
     "PartnerProfile",
     "PasswordResetCode",
-    "DealerProfile",
     "Sale",
     "Product",
     "ProductOption",
