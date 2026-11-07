@@ -11,6 +11,7 @@ def client_platform(
     x_client: str | None = Header(default=None),
     x_client_type: str | None = Header(default=None),
 ) -> str:
+    print("this from client platform line 14 request context.py",x_client_type)
     """'mobile' when either header says mobile, otherwise 'web'."""
     sent = (x_client_type or x_client or "").strip().lower()
     return "mobile" if sent == "mobile" else "web"
