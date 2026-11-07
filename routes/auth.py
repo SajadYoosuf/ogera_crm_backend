@@ -84,10 +84,19 @@ def login(
             detail="Invalid email or password",
         )
 
-    # Check active/deleted BEFORE verify_password.
-    # verify_password runs argon2, which is intentionally slow (~100 ms).
-    # Rejecting inactive accounts here avoids doing that expensive work
-    # for accounts that can never log in anyway.
+    # Verify password BEFORE checking active/deleted status.
+    # This way a wrong password always returns 401 "Invalid email or password",
+    # even for deactivated accounts — the attacker learns nothing about account
+    # status unless they already know the correct password.
+    if not verify_password(body.password, employee.password_hash):
+        logger.warning("LOGIN FAILED — wrong password: email=%s employee_id=%d platform=%s ip=%s",
+                       masked, employee.id, platform, client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+        )
+
+    # Password is correct. Now safe to reveal why login is blocked.
     if employee.is_active != 1 or employee.deleted_at is not None:
         logger.warning("LOGIN BLOCKED — account inactive/deleted: email=%s employee_id=%d ip=%s",
                        masked, employee.id, client_ip)
@@ -103,14 +112,6 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Please sign in on the Ogera mobile app",
-        )
-
-    if not verify_password(body.password, employee.password_hash):
-        logger.warning("LOGIN FAILED — wrong password: email=%s employee_id=%d platform=%s ip=%s",
-                       masked, employee.id, platform, client_ip)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
         )
 
     # Pass password_hash so the token embeds a fingerprint.
