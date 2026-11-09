@@ -167,8 +167,10 @@ def test_change_my_password(client, login):
     assert client.post("/auth/login", json={"email": email_of("sam"), "password": "Kerala2026"}, headers=MOBILE_APP).status_code == 200
     assert client.post("/auth/login", json={"email": email_of("sam"), "password": PASSWORD}, headers=MOBILE_APP).status_code == 401
 
-    # Restore the seeded password for later tests.
-    back = client.post("/auth/change-password", headers=headers, json={"current_password": "Kerala2026", "new_password": PASSWORD})
+    # /change-password returns a fresh token — the old token is now dead because
+    # the password fingerprint changed. Use the new token for the restore call.
+    new_headers = {"Authorization": f"Bearer {changed.json()['access_token']}"}
+    back = client.post("/auth/change-password", headers=new_headers, json={"current_password": "Kerala2026", "new_password": PASSWORD})
     assert back.status_code == 200, back.text
 
 
