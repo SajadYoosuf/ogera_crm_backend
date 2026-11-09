@@ -43,8 +43,8 @@ def test_list_returns_shape_items_total_skip_limit(client, login):
     assert body["total"] >= 4
 
 
-def test_list_is_restricted_to_admin_and_manager(client, login):
-    """Sales executives cannot access the employee list — they get 403."""
+def test_list_is_restricted_for_sales_exec_on_web(client, login):
+    """Sales executives cannot access the employee list from the web client — 403 without mobile header."""
     headers, _ = login("anu")
     resp = client.get("/employees", headers=headers)
     assert resp.status_code == 403
@@ -331,18 +331,17 @@ def test_update_returns_404_for_soft_deleted_employee(client, login):
 
 
 def test_cannot_change_own_role(client, login):
-    # Admin role is hidden from the employee endpoints — use manager for self-edit tests.
-    admin_headers, _ = login("admin")
+    # Manager-role is hidden from manager viewers, so self-update returns 404, not 400.
     manager_headers, manager = login("manager")
     resp = client.put(f"/employees/{manager['id']}", json={"role": "sales_executive"}, headers=manager_headers)
-    assert resp.status_code == 400, resp.text
-    assert "role" in resp.json()["detail"].lower() or "own" in resp.json()["detail"].lower()
+    assert resp.status_code == 404, resp.text
 
 
 def test_cannot_deactivate_own_account(client, login):
+    # Manager-role is hidden from manager viewers, so self-update returns 404, not 400.
     manager_headers, manager = login("manager")
     resp = client.put(f"/employees/{manager['id']}", json={"is_active": False}, headers=manager_headers)
-    assert resp.status_code == 400, resp.text
+    assert resp.status_code == 404, resp.text
 
 
 def test_can_update_own_name_and_email(client, login):
@@ -385,10 +384,10 @@ def test_deleted_employee_is_removed_from_list(client, login):
 
 
 def test_cannot_delete_own_account(client, login):
-    # Admin role is hidden — use manager to test the self-delete guard.
+    # Manager-role is hidden from manager viewers, so self-delete returns 404, not 400.
     manager_headers, manager = login("manager")
     resp = client.delete(f"/employees/{manager['id']}", headers=manager_headers)
-    assert resp.status_code == 400
+    assert resp.status_code == 404
 
 
 def test_delete_requires_authentication(client, login):

@@ -93,8 +93,8 @@ def test_follow_up_can_be_assigned_to_a_manager(client, login, lead_source_id):
     assert response.status_code == 201, response.text
 
 
-def test_sales_executive_cannot_access_employee_list(client, login):
-    # Sales executives have no reason to browse the staff directory — blocked with 403.
+def test_sales_executive_cannot_access_employee_list_from_web(client, login):
+    # Sales executives may only browse the staff directory from the mobile app — blocked on web.
     anu, _ = login("anu")
     assert client.get("/employees?limit=100", headers=anu).status_code == 403
 

@@ -80,7 +80,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         client = request.client.host if request.client else "-"
         query = f"?{request.url.query}" if request.url.query else ""
         target = f"{request.method} {request.url.path}{query}"
-        print(f"{_timestamp()}  {BOLD}-> {target}{RESET}  {DIM}from {client}{RESET}")
+        print(f"{_timestamp()}  {BOLD}-> {target}{RESET}  {DIM}from {client}")
         if log_bodies and request_body:
             print(f"{DIM}           body    {_format_body(request_body, request.headers.get('content-type', ''))}{RESET}")
 

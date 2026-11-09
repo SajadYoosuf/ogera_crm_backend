@@ -2,7 +2,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlmodel import Session
 from auth import require_admin_or_manager
 from database import get_db
 from models import Employee, Role
