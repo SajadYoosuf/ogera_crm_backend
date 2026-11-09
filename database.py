@@ -59,14 +59,36 @@ if DATABASE_URL.startswith("sqlite"):
             connect_args={"check_same_thread": False, "timeout": 30}
         )
 else:
-    # MySQL on Vercel / serverless: NullPool means no persistent connections between requests.
-    # Each request opens and closes its own connection.
-    engine = create_engine(
-        DATABASE_URL,
-        echo=SQL_ECHO,
-        poolclass=NullPool,
-        connect_args={"connect_timeout": 10, "ssl_disabled": True},
-    )
+    # ssl_disabled is a pymysql (MySQL) flag — PostgreSQL uses sslmode in the URL instead.
+    _is_mysql = DATABASE_URL.startswith("mysql")
+    _connect_args: dict = {"connect_timeout": 10}
+    if _is_mysql:
+        _connect_args["ssl_disabled"] = True
+
+    if os.getenv("VERCEL"):
+        # Vercel serverless: each function invocation is stateless — no persistent process
+        # to keep a pool in, so NullPool (open-and-close per request) is the only option.
+        engine = create_engine(
+            DATABASE_URL,
+            echo=SQL_ECHO,
+            poolclass=NullPool,
+            connect_args=_connect_args,
+        )
+    else:
+        # Persistent server (local dev, Docker, cloud VM):
+        # reuse connections across requests so each request does not pay the TCP
+        # handshake + DB auth cost (~500 ms on a remote server).
+        # pool_pre_ping=True tests a connection before handing it to a request and
+        # replaces it if the DB dropped it — this fixes the ECONNRESET errors.
+        # Works with both MySQL and PostgreSQL.
+        engine = create_engine(
+            DATABASE_URL,
+            echo=SQL_ECHO,
+            pool_size=5,
+            max_overflow=5,
+            pool_pre_ping=True,
+            connect_args=_connect_args,
+        )
 
 
 # Base class for models not yet migrated to SQLModel.

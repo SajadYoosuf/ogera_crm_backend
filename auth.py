@@ -82,6 +82,8 @@ def get_current_user(
     credentials=Depends(security),
     db: Session = Depends(get_db),
 ) -> Employee:
+
+
     """Verify JWT token and return current employee."""
     if credentials is None:
         raise HTTPException(
@@ -108,17 +110,19 @@ def get_current_user(
         )
 
     employee = db.scalar(
-        select(Employee).where(
-            Employee.id == employee_id,
-            Employee.deleted_at.is_(None),
-            Employee.is_active == 1,
-        )
+        select(Employee).where(Employee.id == employee_id)
     )
-    if employee is None:
-        logger.warning("TOKEN REJECTED — no active employee for id=%s", employee_id)
+    if employee is None or employee.deleted_at is not None:
+        logger.warning("TOKEN REJECTED — employee not found or deleted: id=%s", employee_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Employee not found",
+            detail="Invalid token",
+        )
+    if not employee.is_active:
+        logger.warning("TOKEN REJECTED — account deactivated: id=%s", employee_id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been deactivated. Please contact your administrator.",
         )
 
     # Validate password fingerprint — rejects tokens issued before a password change.
