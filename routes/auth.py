@@ -177,15 +177,29 @@ def update_profile(
     """
     me = _attached_me(db, current_user)
     data = body.model_dump(exclude_unset=True)
+
+    # Reject empty requests — PATCH with no fields is a client mistake, not a no-op.
+    if not data:
+        raise HTTPException(status_code=400, detail="Provide at least one field to update")
+
     if data.get("name") is not None:
         me.name = data["name"]
-    if data.get("email") and data["email"] != me.email:
-        if not data.get("current_password") or not verify_password(data["current_password"], me.password_hash):
+
+    new_email = data.get("email")
+    if new_email:
+        if new_email == me.email:
+            # Sending the same email is a no-op. Tell the client explicitly rather
+            # than silently succeeding — this was previously allowing the request
+            # through without the current_password check.
+            raise HTTPException(status_code=400, detail="The email address is the same as your current one")
+        if not data.get("current_password"):
             raise HTTPException(status_code=400, detail="Enter your current password to change your email")
-        taken = db.query(Employee).filter(Employee.email == data["email"], Employee.id != me.id).first()
+        if not verify_password(data["current_password"], me.password_hash):
+            raise HTTPException(status_code=400, detail="Incorrect password")
+        taken = db.query(Employee).filter(Employee.email == new_email, Employee.id != me.id).first()
         if taken is not None:
             raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
-        me.email = data["email"]
+        me.email = new_email
     try:
         db.commit()
     except IntegrityError:
