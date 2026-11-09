@@ -79,6 +79,16 @@ def list_roles(
     )
 
 
+def _count_for_slug(db: Session, slug: str) -> int:
+    """Active employee count for a single role slug — targeted query, not a full scan."""
+    return (
+        db.query(func.count(Employee.id))
+        .filter(Employee.role == slug, Employee.deleted_at.is_(None))
+        .scalar()
+        or 0
+    )
+
+
 @router.get("/{role_id}", response_model=RoleResponse, summary="Get a role")
 def get_role(
     role_id: int,
@@ -87,7 +97,7 @@ def get_role(
 ):
     """One role by id. Admin and manager only."""
     role = _get_role_or_404(db, role_id)
-    return _to_response(role, _employee_counts(db).get(role.slug, 0))
+    return _to_response(role, _count_for_slug(db, role.slug))
 
 
 @router.post("", response_model=RoleResponse, status_code=201, summary="Create a custom role")
@@ -139,7 +149,7 @@ def update_role(
         db.rollback()
         raise HTTPException(status_code=409, detail=DUPLICATE_ROLE)
     db.refresh(role)
-    return _to_response(role, _employee_counts(db).get(role.slug, 0))
+    return _to_response(role, _count_for_slug(db, role.slug))
 
 
 @router.delete("/{role_id}", status_code=204, summary="Delete a role")
