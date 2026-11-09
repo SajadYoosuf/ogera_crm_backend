@@ -136,7 +136,7 @@ def get_current_user(
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired, please log in again",
+            detail="Your Login  has expired. Please log in again to continue.",
         )
 
     return employee

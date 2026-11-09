@@ -85,13 +85,19 @@ def _phone_taken(db: Session, phone: str, exclude_id: int | None = None) -> bool
 
 
 @router.get("/directory", summary="Staff directory")
-def employee_directory(db: Session = Depends(get_db), _: Employee = Depends(get_current_user)):
+def employee_directory(db: Session = Depends(get_db), viewer: Employee = Depends(get_current_user)):
     """Active staff with id, name, role and phone, for assignee pickers and the staff directory.
-    Open to every signed-in employee. Deleted and deactivated staff are left out.
+    Open to every signed-in employee. Deleted, deactivated, and hidden-role staff are left out.
+    Admin accounts are hidden from all viewers; manager accounts are hidden from manager viewers.
     """
+    hidden = _hidden_roles(viewer)
     rows = (
         db.query(Employee)
-        .filter(Employee.deleted_at.is_(None), Employee.is_active == 1)
+        .filter(
+            Employee.deleted_at.is_(None),
+            Employee.is_active == 1,
+            Employee.role.not_in(list(hidden)),
+        )
         .order_by(func.lower(Employee.name))
         .all()
     )
