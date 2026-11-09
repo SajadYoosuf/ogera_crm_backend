@@ -108,9 +108,9 @@ def employee_directory(db: Session = Depends(get_db), viewer: Employee = Depends
 def list_employees(
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
-    role: str | None = Query(None, description="Role slug, e.g. sales_executive"),
+    role: str | None = Query(None, pattern=r"^[a-z][a-z0-9_]{1,39}$", description="Role slug, e.g. sales_executive"),
     is_active: bool | None = None,
-    search: str | None = Query(None, description="Matches name, email or phone"),
+    search: str | None = Query(None, max_length=100, description="Matches name, email or phone"),
     db: Session = Depends(get_db),
     viewer: Employee = Depends(get_current_user),
     platform: str = Depends(client_platform),
