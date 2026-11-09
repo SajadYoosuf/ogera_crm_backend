@@ -258,16 +258,18 @@ def test_new_password_must_differ_from_the_current_one(reset):
 
 
 @pytest.mark.parametrize("password, message", [
-    ("short", "Use at least 6 characters."),
-    ("x" * 16, "Use at most 15 characters."),
+    ("short", "New password must be at least 6 characters"),
+    ("x" * 16, "New password must be at most 15 characters"),
 ])
 def test_password_length_is_validated(reset, password, message):
+    # Validation now happens in the Pydantic schema (not in route logic),
+    # so the response is 422 Unprocessable Entity instead of 400.
     reset.request("anu")
     token = reset.verify(reset.last_code()).json()["reset_token"]
 
     response = reset.reset_password(token, password)
 
-    assert response.status_code == 400
+    assert response.status_code == 422
     assert response.json()["detail"] == message
 
 

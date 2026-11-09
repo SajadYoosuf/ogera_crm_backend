@@ -89,6 +89,15 @@ def _friendly_validation_message(error: dict) -> str:
     elif error_type == "enum":
         allowed = ctx.get("expected", "")
         msg = f"must be one of: {allowed}" if allowed else "is not a valid option"
+    elif error_type == "string_pattern_mismatch":
+        # Pattern errors are always from fields with a specific expected format.
+        # Give a plain-English hint based on the field name rather than exposing the regex.
+        if "code" in field.lower():
+            msg = "must be exactly 6 digits"
+        elif "phone" in field.lower():
+            msg = "must be 7–15 digits (e.g. 9876543210)"
+        else:
+            msg = "is not in the expected format"
     elif error_type == "greater_than":
         msg = f"must be greater than {ctx.get('gt', '')}"
     elif error_type == "greater_than_equal":

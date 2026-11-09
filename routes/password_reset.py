@@ -11,15 +11,14 @@ import secrets
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from jose import JWTError, jwt
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from auth import pwd_context, verify_password
 from config import (
     ALGORITHM,
-    PASSWORD_MAX_LENGTH,
-    PASSWORD_MIN_LENGTH,
     RESET_CODE_MAX_ATTEMPTS,
     RESET_CODE_RESEND_SECONDS,
     RESET_CODE_TTL_MINUTES,
@@ -29,6 +28,7 @@ from config import (
 from database import get_db
 from mailer import send_password_changed_notice, send_password_reset_code
 from models import Employee, PasswordResetCode
+from schemas.employee import _validate_password
 
 router = APIRouter(prefix="/auth/password-reset", tags=["auth"])
 
@@ -46,12 +46,22 @@ class EmailRequest(BaseModel):
 
 class VerifyRequest(BaseModel):
     email: EmailStr
-    code: str
+    # Exactly 6 digits — Pydantic rejects blanks, letters, and strings of the wrong length
+    # before the code ever reaches the HMAC comparison.
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
 class ResetRequest(BaseModel):
-    reset_token: str
+    # A non-blank token is the minimum we can enforce before jwt.decode inspects it.
+    reset_token: str = Field(min_length=1, max_length=512)
     new_password: str
+
+    @field_validator("new_password", mode="after")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        # Delegates to the same validator used by EmployeeCreate / EmployeeUpdate,
+        # so length limits and the letter+digit rule stay in one place (schemas/employee.py).
+        return _validate_password(v)
 
 
 def _now() -> datetime.datetime:
@@ -233,20 +243,23 @@ def reset_password(body: ResetRequest, background_tasks: BackgroundTasks, db: Se
     if claims.get("pw") != _password_fingerprint(employee.password_hash):
         raise invalid
 
-    password = body.new_password
-    if len(password) < PASSWORD_MIN_LENGTH:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Use at least {PASSWORD_MIN_LENGTH} characters.")
-    if len(password) > PASSWORD_MAX_LENGTH:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Use at most {PASSWORD_MAX_LENGTH} characters.")
-    if verify_password(password, employee.password_hash):
+    # Length and letter+digit rule are enforced by the Pydantic schema above.
+    if verify_password(body.new_password, employee.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Your new password must be different from your current password.",
         )
 
     # Hash the full password: login verifies the whole string, so nothing may be truncated here.
-    employee.password_hash = pwd_context.hash(password)
-    db.commit()
+    employee.password_hash = pwd_context.hash(body.new_password)
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not save your new password. Please try again in a moment.",
+        )
     # Best effort: password is already saved, so send the notice in the background and respond immediately.
     background_tasks.add_task(send_password_changed_notice, employee.name, employee.email)
     return {"message": "Password updated. You can now log in with your new password."}
