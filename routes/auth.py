@@ -3,7 +3,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from config import PASSWORD_MAX_LENGTH
@@ -140,7 +140,7 @@ def _attached_me(db: Session, current_user: Employee) -> Employee:
     # get_current_user returns an employee whose session is already closed, so load it again to change it.
     me = db.query(Employee).filter(Employee.id == current_user.id, Employee.deleted_at.is_(None)).first()
     if me is None:
-        raise HTTPException(status_code=401, detail="Session expired, please sign in again")
+        raise HTTPException(status_code=401, detail="Your login has expired. Please sign in again to continue.")
     return me
 
 
@@ -210,8 +210,8 @@ def update_profile(
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str = Field(max_length=PASSWORD_MAX_LENGTH)
-    new_password: str
+    current_password: str = Field(min_length=6, max_length=PASSWORD_MAX_LENGTH)
+    new_password: str = Field(max_length=PASSWORD_MAX_LENGTH)
 
     @field_validator("new_password", mode="after")
     @classmethod
@@ -230,12 +230,19 @@ def change_password(
     """
     me = _attached_me(db, current_user)
     if not verify_password(body.current_password, me.password_hash):
-        raise HTTPException(status_code=400, detail="Current password is incorrect")
-    if verify_password(body.new_password, me.password_hash):
+        raise HTTPException(status_code=400, detail="The password you entered doesn't match your current one. Please try again.")
+    if body.new_password == body.current_password:
         raise HTTPException(status_code=400, detail="New password must be different from the current one")
     me.password_hash = get_password_hash(body.new_password)
-    db.commit()
-    db.refresh(me)
+    try:
+        db.commit()
+        db.refresh(me)
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Could not save your new password. Please try again in a moment.",
+        )
     send_password_changed_notice(me.name, me.email)
     # Issue a fresh token with the new password fingerprint so the employee
     # stays logged in after the change. Without this, their next request would

@@ -50,13 +50,13 @@ def _validate_password(v: str | None) -> str | None:
     if v is None:
         return v
     if len(v) < PASSWORD_MIN_LENGTH:
-        raise ValueError(f"Password must be at least {PASSWORD_MIN_LENGTH} characters")
+        raise ValueError(f"must be at least {PASSWORD_MIN_LENGTH} characters")
     if len(v) > PASSWORD_MAX_LENGTH:
-        raise ValueError(f"Password must be at most {PASSWORD_MAX_LENGTH} characters")
+        raise ValueError(f"must be at most {PASSWORD_MAX_LENGTH} characters")
     if len(v.encode()) > 72:
-        raise ValueError("Password must be at most 72 bytes")
+        raise ValueError("must be at most 72 bytes")
     if not (any(c.isalpha() for c in v) and any(c.isdigit() for c in v)):
-        raise ValueError("Password must contain at least one letter and one digit")
+        raise ValueError("must contain at least one letter and one digit")
     return v
 
 
