@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+logger = logging.getLogger(__name__)
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
@@ -173,7 +176,6 @@ def get_employee(
 @router.post("", response_model=EmployeeCreateResponse, status_code=201, summary="Create an employee")
 def create_employee(
     body: EmployeeCreate,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: Employee = Depends(manage_employees),
 ):
@@ -202,8 +204,7 @@ def create_employee(
 
     db.refresh(employee)
 
-    background_tasks.add_task(
-        send_employee_credentials,
+    mail_result = send_employee_credentials(
         employee.name,
         employee.email,
         body.password,
@@ -212,10 +213,7 @@ def create_employee(
 
     return EmployeeCreateResponse(
         **EmployeeResponse.model_validate(employee, from_attributes=True).model_dump(),
-        credentials_email={
-            "sent": False,
-            "message": "Credentials email queued for delivery",
-        },
+        credentials_email=mail_result,
     )
 
 
@@ -258,6 +256,10 @@ def update_employee(
     for field, value in data.items():
         setattr(employee, field, value)
 
+    if data.get("is_active") is False:
+        db.query(FcmDevice).filter(FcmDevice.employee_id == employee.id).delete(synchronize_session=False)
+        employee.fcm_token = None
+
     try:
         db.commit()
     except IntegrityError as exc:
@@ -266,8 +268,13 @@ def update_employee(
         raise HTTPException(status_code=409, detail=detail)
     db.refresh(employee)
     if password_changed:
-        # Best effort: the password is already changed, so a failed email is only logged.
-        send_password_changed_notice(employee.name, employee.email)
+        mail_result = send_password_changed_notice(employee.name, employee.email)
+        if not mail_result["sent"]:
+            logger.warning(
+                "Password change notice not delivered to %s: %s",
+                employee.email,
+                mail_result["message"],
+            )
     return EmployeeResponse.model_validate(employee, from_attributes=True)
 
 
@@ -303,6 +310,14 @@ class _FcmTokenBody(BaseModel):
     platform: str | None = Field(default=None, max_length=20)
     device_id: str | None = Field(default=None, max_length=255)
 
+    @field_validator("token", mode="before")
+    @classmethod
+    def strip_token(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Token must not be blank or whitespace")
+        return v
+
 
 @router.post("/me/fcm-token", summary="Register or update FCM device token")
 def register_fcm_token(
@@ -317,7 +332,7 @@ def register_fcm_token(
     send push notifications to this employee's browsers and phones.
     The same token is updated idempotently when the client starts again.
     """
-    token = body.token.strip()
+    token = body.token  # already stripped and validated by _FcmTokenBody
     existing = db.query(FcmDevice).filter(FcmDevice.token == token).first()
     if existing:
         existing.employee_id = current_user.id
@@ -331,9 +346,12 @@ def register_fcm_token(
             platform=body.platform,
             device_id=body.device_id,
         ))
-    # Keep the legacy field populated while older workers are being upgraded.
     current_user.fcm_token = token
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Concurrent request already registered this token — not an error.
+        db.rollback()
     return {"ok": True}
 
 
@@ -344,7 +362,7 @@ def unregister_fcm_token(
     current_user: Employee = Depends(get_current_user),
 ):
     """Remove one browser/phone registration, normally called on logout."""
-    token = body.token.strip()
+    token = body.token  # already stripped and validated by _FcmTokenBody
     db.query(FcmDevice).filter(
         FcmDevice.employee_id == current_user.id,
         FcmDevice.token == token,
