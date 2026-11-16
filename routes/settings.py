@@ -9,7 +9,7 @@ import settings_catalog as catalog
 from auth import get_current_user, require_admin_or_manager
 from config import UPLOAD_DIR
 from database import get_db
-from models import Employee, EnumValue, LeadSource, PipelineStage
+from models import Employee, EnumValue
 from schemas.settings import (
     CompanyResponse,
     CompanyUpdate,
@@ -29,12 +29,10 @@ LOGO_TYPES = (  # (magic bytes, extension); SVG is left out because it can carry
     (b"\xff\xd8\xff", "jpg"),
 )
 
-# Table + column names behind each category (lead sources and stages live in their own tables).
-MODELS = {catalog.LEAD_SOURCE: LeadSource, catalog.LEAD_STAGE: PipelineStage}
-COLUMNS = {
-    catalog.LEAD_SOURCE: ("name", "slug", None),  # sources are listed by name, no manual order
-    catalog.LEAD_STAGE: ("name", "slug", "order"),
-}
+# lead_source and lead_stage have their own dedicated routes now (routes/lead_sources.py
+# and routes/pipeline.py). All remaining categories live in the enum_values table.
+MODELS: dict = {}           # all categories fall through to EnumValue (the default in _model)
+COLUMNS: dict = {}          # all categories use DEFAULT_COLUMNS
 DEFAULT_COLUMNS = ("label", "value", "sort_order")
 
 
@@ -101,44 +99,10 @@ def list_enum(category: str, db: Session = Depends(get_db), _: Employee = Depend
     ]
 
 
-PIPELINES = ("consumer", "partner")
-
-
-def _create_stage(db: Session, body: EnumValueCreate) -> EnumValueResponse:
-    """Adds a stage to one contact type's pipeline, at the end. A stage turned off earlier comes back instead."""
-    pipeline = body.group or "consumer"
-    if pipeline not in PIPELINES:
-        raise HTTPException(status_code=422, detail="Choose consumer or partner")
-    if len(body.label) > 60:
-        raise HTTPException(status_code=422, detail="Name can be at most 60 characters")
-    slug = catalog.slugify(body.value or body.label, 40)
-
-    existing = db.query(PipelineStage).filter(PipelineStage.slug == slug, PipelineStage.contact_type == pipeline).first()
-    if existing is not None:
-        if existing.is_active:
-            raise HTTPException(status_code=409, detail="This stage already exists in this pipeline")
-        existing.is_active = 1
-        existing.name = body.label
-        _commit(db)
-        return _response(db, catalog.LEAD_STAGE, existing.id)
-
-    last = max(
-        (r.order for r in db.query(PipelineStage).filter(PipelineStage.contact_type == pipeline, PipelineStage.is_active == 1).all()),
-        default=0,
-    )
-    row = PipelineStage(name=body.label, slug=slug, contact_type=pipeline, description=None, order=last + 1, is_active=1)
-    db.add(row)
-    _commit(db)
-    return _response(db, catalog.LEAD_STAGE, row.id)
-
-
 @router.post("/enums/{category}", response_model=EnumValueResponse, status_code=201, summary="Add a dropdown option")
 def create_enum(category: str, body: EnumValueCreate, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
-    """Adds a value to a category (admin and manager). The stored value cannot be changed later, so pick it carefully.
-    Lead stages also take `group` (consumer or partner): the pipeline the stage joins."""
+    """Adds a value to a category (admin and manager). The stored value cannot be changed later, so pick it carefully."""
     _category_or_404(category)
-    if category == catalog.LEAD_STAGE:
-        return _create_stage(db, body)
     label_col, value_col, order_col = _cols(category)
     max_label = 60 if category == catalog.LEAD_SOURCE else 100
     if len(body.label) > max_label:

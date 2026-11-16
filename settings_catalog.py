@@ -17,17 +17,21 @@ LEAD_STAGE = "lead_stage"
 ACTIVITY_TYPE = "activity_type"
 LOSS_REASON = "loss_reason"
 DISTRICT = "district"
-PROFESSIONAL_TYPE = "professional_type"
+PARTNER_TYPE = "partner_type"
 HOUSE_STAGE = "house_stage"  # consumers
 TANK_TYPE = "tank_type"  # consumers: the tank they have now
 
 CATEGORY_LABELS = {
-    LEAD_SOURCE: "Lead sources",
-    LEAD_STAGE: "Lead stages",
+    # lead_source and lead_stage are intentionally excluded here.
+    # They have their own dedicated CRUD endpoints:
+    #   /lead-sources  (routes/lead_sources.py)
+    #   /pipeline/stages  (routes/pipeline.py)
+    # Keeping them out of CATEGORIES means /settings/enums only manages the
+    # pure enum tables and will return 404 for lead_source / lead_stage requests.
     ACTIVITY_TYPE: "Activity types",
     LOSS_REASON: "Loss reasons",
     DISTRICT: "Districts",
-    PROFESSIONAL_TYPE: "Partner types",
+    PARTNER_TYPE: "Partner types",
     HOUSE_STAGE: "House stages",
     TANK_TYPE: "Tank types",
 }
@@ -38,11 +42,8 @@ LOCKED = {
     LEAD_SOURCE: {"field_visit"},  # field visit leads must carry a GPS location from mobile
     LEAD_STAGE: {"new_lead", "won", "lost"},  # pipeline entry/exit stages
     ACTIVITY_TYPE: {"field_visit", "internal_note"},  # GPS capture / cannot be scheduled
-    PROFESSIONAL_TYPE: {"other"},  # imports fall back to it when a profession is missing or unknown
+    PARTNER_TYPE: {"other"},  # imports fall back to it when a partner type is missing or unknown
 }
-# The pipeline is fixed in code (stage rules, follow-up clocks), so stages can be renamed and reordered but not added.
-NO_NEW_VALUES = {LEAD_STAGE}
-
 # Seeded from what the app already stores, so existing records keep matching. (value, label)
 DEFAULT_ENUMS: dict[str, list[tuple[str, str]]] = {
     ACTIVITY_TYPE: [
@@ -55,7 +56,7 @@ DEFAULT_ENUMS: dict[str, list[tuple[str, str]]] = {
         ("price", "Price too high"), ("competitor", "Went to a competitor"), ("timing", "Timing"),
         ("not_interested", "Not interested"), ("other", "Other"),
     ],
-    PROFESSIONAL_TYPE: [
+    PARTNER_TYPE: [
         ("plumber", "Plumber"), ("engineer", "Engineer"), ("contractor", "Contractor"),
         ("interior_designer", "Interior designer"), ("architect", "Architect"),
         ("electrician", "Electrician"), ("other", "Other"),
@@ -207,7 +208,7 @@ def usage_counts(db: Session, category: str) -> dict[str, int]:
             db.query(LeadStage.loss_reason, func.count(LeadStage.id))
             .filter(LeadStage.loss_reason.isnot(None)).group_by(LeadStage.loss_reason).all()
         )
-    elif category == PROFESSIONAL_TYPE:
+    elif category == PARTNER_TYPE:
         rows = (
             db.query(PartnerProfile.profession_type, func.count(PartnerProfile.id))
             .join(Contact, Contact.id == PartnerProfile.contact_id)
@@ -228,7 +229,7 @@ def usage_counts(db: Session, category: str) -> dict[str, int]:
     out: dict[str, int] = {}
     for key, count in rows:
         norm = str(key).strip().lower()
-        if category in (DISTRICT, PROFESSIONAL_TYPE):
+        if category in (DISTRICT, PARTNER_TYPE):
             norm = norm.replace(" ", "_")  # "Interior Designer" and interior_designer are the same option
         out[norm] = out.get(norm, 0) + count
     return out

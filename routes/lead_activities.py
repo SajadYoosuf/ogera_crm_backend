@@ -1,4 +1,5 @@
 import datetime
+import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
@@ -9,6 +10,8 @@ from models.activity_log import ActivityLog
 from schemas.activity_log import ActivityLogCreate, ActivityLogResponse
 from services.lead_access import ensure_can_log_activity
 import settings_catalog as catalog
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/contacts", tags=["activity-log"], dependencies=[Depends(get_current_user)]
@@ -84,13 +87,12 @@ def create_activity(
     # Notify admin and manager when an activity is logged
     try:
         from services.notification_service import notify_roles
-        contact = get_live_contact(db, contact_id)
         doer_name = log.doer.name if log.doer else "Someone"
         title = f"Activity logged: {contact.name}"
         msg = f"{doer_name} logged a {body.activity_type.replace('_', ' ')} with {contact.name}."
         notify_roles(db, ["admin", "manager"], "activity_logged", title, msg, "contact", contact_id, background_tasks)
         db.commit()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Activity notification failed for contact %s: %s", contact_id, exc)
 
     return _activity_response(log)

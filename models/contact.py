@@ -64,8 +64,8 @@ class Contact(Base):
     name: Mapped[str | None] = mapped_column(String(150))
     # The phone number as entered (may include country code, spaces, dashes)
     phone: Mapped[str] = mapped_column(String(20))
-    # Last 10 digits of phone; the duplicate check compares this across every contact type
-    phone_key: Mapped[str] = mapped_column(String(10))
+    # Last 10 digits of phone; unique across all contacts (enforced at DB level to prevent race conditions)
+    phone_key: Mapped[str] = mapped_column(String(10), unique=True)
     phone_alt: Mapped[str | None] = mapped_column(String(20))
 
     # --- Location fields ---
@@ -166,7 +166,6 @@ class Contact(Base):
     # With an index, MySQL uses a B-tree lookup (fast even for millions of rows).
     # -------------------------------------------------------------------------
     __table_args__ = (
-        Index("idx_contacts_phone_key", "phone_key"),   # duplicate-phone check
         Index("idx_contacts_type", "contact_type"),     # filter by consumer/partner
         Index("idx_contacts_assigned", "assigned_to"),  # "show my leads" query
         Index("idx_contacts_district", "district"),     # filter by district

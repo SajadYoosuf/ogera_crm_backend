@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS, UPLOAD_DIR
@@ -143,6 +144,25 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
     detail = _friendly_validation_message(errors[0])
     return JSONResponse(status_code=422, content={"detail": detail})
+
+
+@app.exception_handler(OperationalError)
+async def db_operational_error_handler(request: Request, exc: OperationalError):
+    """
+    Catch SQLAlchemy OperationalError globally (DB down, connection reset, timeout).
+
+    Without this, FastAPI returns a 500 with the raw SQLAlchemy traceback, which
+    exposes connection strings, table names, and internal DB details to the client.
+
+    Returns 503 Service Unavailable so the frontend can show "please try again"
+    instead of a generic "something went wrong" and so load balancers can route
+    away from unhealthy instances.
+    """
+    logger.error("Database operational error: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database unavailable, please retry in a moment"},
+    )
 
 
 app.add_middleware(RequestLoggingMiddleware)

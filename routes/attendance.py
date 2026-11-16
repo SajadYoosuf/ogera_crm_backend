@@ -17,7 +17,7 @@ BUSINESS RULES:
 """
 import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from auth import get_current_user
@@ -32,8 +32,8 @@ router = APIRouter(prefix="/attendance", tags=["attendance"], dependencies=[Depe
 # ── Pydantic schemas ────────────────────────────────────────────────────────
 
 class CheckinBody(BaseModel):
-    latitude: float | None = None
-    longitude: float | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
 
 
 class AttendanceResponse(BaseModel):

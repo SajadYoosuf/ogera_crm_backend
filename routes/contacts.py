@@ -59,6 +59,7 @@ from contact_lookup import get_live_contact
 from database import get_db
 from phone_utils import phone_key
 from request_context import client_platform
+from services.lead_access import is_head
 from verification import missing_fields, verified_clause
 from models import Contact, ConsumerProfile, ContactAssignment, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage, Product, Sale
 from schemas import (
@@ -370,6 +371,15 @@ def contact_query(db: Session, f: dict, entities, user: Employee):
         .outerjoin(current, current.id == latest.c.latest_row_id)
         .filter(Contact.deleted_at.is_(None))  # Exclude soft-deleted contacts
     )
+
+    # Ownership scope: admin/manager ("heads") see every contact. Everyone else
+    # only sees leads they currently own (assigned_to) or originally brought in
+    # (created_by) — the same rule services/lead_access.py already enforces for
+    # writing to a lead. `user` was previously accepted here and never used,
+    # which let any signed-in Sales Executive list/export every contact
+    # company-wide. This is the fix for that.
+    if not is_head(user):
+        q = q.filter(or_(Contact.assigned_to == user.id, Contact.created_by == user.id))
 
     # Apply each filter only if it was provided (avoids unnecessary WHERE clauses)
     if "contact_type" in f:
@@ -740,6 +750,15 @@ def get_contact(
 
     if contact is None:
         raise HTTPException(status_code=404, detail="Contact not found")
+
+    # Same ownership rule as the list: a non-head employee can only open a
+    # contact they own or created. Previously this endpoint had no check at
+    # all — any signed-in employee could open any contact by id.
+    if not is_head(current_user) and contact.assigned_to != current_user.id and contact.created_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the assigned employee, the creator, or an admin or manager can view this contact",
+        )
 
     current_stage = db.scalar(
         select(LeadStage)

@@ -60,8 +60,7 @@ def login(
 ):
     
     """Sign in with email and password. Returns a bearer token (valid 5 days by default) and the employee's profile.
-    Returns 401 for an unknown email or a wrong password, and 403 if the account is inactive or deleted,
-    or if a role other than admin or manager signs in on the website.
+    Returns 401 for an unknown email or a wrong password, and 403 if the account is inactive or deleted.
     Send the token as `Authorization: Bearer <token>` on every later request.
     """
     client_ip = request.client.host if request.client else "unknown"
@@ -103,15 +102,6 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Employee account is inactive",
-        )
-
-    # The website is for admin and manager. Sales executives work from the mobile app.
-    if platform == "web" and employee.role not in HEAD_OFFICE_ROLES:
-        logger.warning("LOGIN BLOCKED — wrong platform: email=%s role=%s tried=web ip=%s",
-                       masked, employee.role, client_ip)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Please sign in on the Ogera mobile app",
         )
 
     # Pass password_hash so the token embeds a fingerprint.

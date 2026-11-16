@@ -17,7 +17,13 @@ from auth import get_current_user
 from database import get_db
 from models import Employee
 from models.notification import Notification
+from pydantic import BaseModel
 from schemas.notification import NotificationListOut
+
+
+class OkResponse(BaseModel):
+    ok: bool = True
+
 
 router = APIRouter(
     prefix="/notifications",
@@ -51,7 +57,7 @@ def list_notifications(
     return NotificationListOut(items=items, unread_count=unread_count)
 
 
-@router.post("/read-all", summary="Mark all notifications as read")
+@router.post("/read-all", response_model=OkResponse, summary="Mark all notifications as read")
 def mark_all_read(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
@@ -65,7 +71,7 @@ def mark_all_read(
     return {"ok": True}
 
 
-@router.post("/{notification_id}/read", summary="Mark one notification as read")
+@router.post("/{notification_id}/read", response_model=OkResponse, summary="Mark one notification as read")
 def mark_read(
     notification_id: int,
     db: Session = Depends(get_db),

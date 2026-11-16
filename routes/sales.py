@@ -29,9 +29,10 @@ import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from auth import get_current_user
+from auth import get_current_user, require_admin_or_manager
 from database import get_db
 from models import Contact, Employee, LeadSource, LeadStage, PipelineStage, Sale
 from phone_utils import phone_key
@@ -39,7 +40,11 @@ from schemas.sale import SaleCreate, SaleListResponse, SaleResponse, SaleUpdate
 
 # Everyone signed in can read the sales; only admins and managers change them.
 router = APIRouter(prefix="/sales", tags=["sales"], dependencies=[Depends(get_current_user)])
-writers = Depends(get_current_user)
+# Was `Depends(get_current_user)` — that only checked "is signed in," not role,
+# so any Sales Executive could create/edit/delete sale records even though every
+# endpoint below is commented "Admin and manager only." This now actually
+# enforces that.
+writers = Depends(require_admin_or_manager)
 
 
 _WON_SLUGS = {"won", "after_sales_referring"}
@@ -191,7 +196,24 @@ def _sync_contact(db: Session, sale: Sale, created_by_id: int) -> None:
             created_by=created_by_id,
         )
         db.add(contact)
-        db.flush()  # get contact.id before adding stage rows
+
+        # Use a savepoint so that if two sales with the same phone arrive at the same
+        # moment, the second INSERT hits the unique constraint on phone_key, we roll
+        # back only the failed contact INSERT (not the whole sale), then re-query to
+        # find the contact the first request just created.
+        sp = db.begin_nested()
+        try:
+            db.flush()  # get contact.id; raises IntegrityError on duplicate phone_key
+            sp.commit()
+        except IntegrityError:
+            sp.rollback()
+            contact = (
+                db.query(Contact)
+                .filter(Contact.phone_key == pkey, Contact.deleted_at.is_(None))
+                .first()
+            )
+            if contact is None:
+                return  # truly unrecoverable; skip contact linking
 
         # Every contact must enter the pipeline at new_lead before moving to won
         db.add(LeadStage(contact_id=contact.id, stage_id=new_lead_stage.id, changed_by=created_by_id))

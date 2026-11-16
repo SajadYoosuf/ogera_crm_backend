@@ -10,7 +10,6 @@ HOW VERIFICATION WORKS:
 
 REQUIRED FIELDS BY TYPE:
     All types:    phone, name, district, address, lead_source
-    Field visit:  + latitude, longitude (GPS captured by mobile at creation)
     Consumer:     + house_stage
     Partner:      + profession_type, work_area
 
@@ -22,8 +21,8 @@ TWO IMPLEMENTATIONS:
     Keep both in sync: a rule changed in one must change in the other.
 """
 
-from sqlalchemy import and_, exists, func, or_, select
-from models import ConsumerProfile, Contact, LeadSource, PartnerProfile
+from sqlalchemy import and_, exists, func, or_
+from models import ConsumerProfile, Contact, PartnerProfile
 
 
 def missing_fields(contact: Contact) -> list[str]:
@@ -35,11 +34,6 @@ def missing_fields(contact: Contact) -> list[str]:
     ]
     if contact.lead_source_id is None:
         missing.append("lead_source")
-
-    # Field visit contacts need a GPS pin captured by the mobile app at creation.
-    if contact.lead_source is not None and contact.lead_source.slug == "field_visit":
-        if contact.latitude is None or contact.longitude is None:
-            missing.append("location")
 
     if contact.contact_type == "consumer":
         if contact.consumer_profile is None or not contact.consumer_profile.house_stage:
@@ -64,16 +58,6 @@ def verified_clause():
 
     Keep in sync with `missing_fields()` above: any rule changed in one must change in the other.
     """
-    field_visit_ids = select(LeadSource.id).where(LeadSource.slug == "field_visit")
-
-    # Field visit contacts must have a GPS pin.
-    # IS NULL in the outer expression keeps non-field-visit contacts always passing this check.
-    location_ok = or_(
-        Contact.lead_source_id.is_(None),
-        Contact.lead_source_id.not_in(field_visit_ids),
-        and_(Contact.latitude.is_not(None), Contact.longitude.is_not(None)),
-    )
-
     consumer_ok = or_(
         Contact.contact_type != "consumer",
         exists().where(
@@ -96,7 +80,6 @@ def verified_clause():
         _filled(Contact.district),
         _filled(Contact.address),
         Contact.lead_source_id.is_not(None),
-        location_ok,
         consumer_ok,
         partner_ok,
     )
