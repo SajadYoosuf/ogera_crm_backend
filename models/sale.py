@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import BigInteger, Date, DateTime, Enum as SAEnum, ForeignKey, String, Text, func
+from sqlalchemy import BigInteger, Date, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
@@ -19,6 +19,9 @@ class Sale(Base):
     address: Mapped[str | None] = mapped_column(Text)
     # Free text: the product name as typed, e.g. "1000L plastic tank".
     purchased_product: Mapped[str | None] = mapped_column(String(150))
+    # FK to the product catalogue entry. Kept alongside the name snapshot so
+    # reporting can join to products without relying on the string matching.
+    product_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("products.id"), nullable=True, index=True)
     # Which branch office this sale belongs to.
     branch: Mapped[str | None] = mapped_column(
         SAEnum("malappuram", "kottakkal", "perinthalmanna", name="sale_branch_enum"),
@@ -28,6 +31,7 @@ class Sale(Base):
 
     contact: Mapped["Contact | None"] = relationship("Contact")
     created_by_employee: Mapped["Employee | None"] = relationship("Employee")
+    product: Mapped["Product | None"] = relationship("Product")
 
     @property
     def created_by(self):

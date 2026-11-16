@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session, joinedload
 
 from auth import get_current_user, HEAD_OFFICE_ROLES
@@ -57,6 +57,14 @@ class ExpenseCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     category: ExpenseCategory
     amount: Decimal = Field(..., gt=0, decimal_places=2, description="Amount in INR; immutable after creation")
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("title cannot be blank")
+        return v
 
 
 class RejectBody(BaseModel):
@@ -154,9 +162,6 @@ def create_expense(
     )
     db.add(expense)
     db.commit()
-    db.refresh(expense)
-    # Load relationships for the response
-    db.refresh(expense)
     expense = (
         db.query(Expense)
         .options(joinedload(Expense.employee), joinedload(Expense.reviewer))
@@ -381,9 +386,12 @@ async def upload_bill(
         raise HTTPException(status_code=422, detail="Bill photo must be a JPEG or PNG image")
 
     folder = Path(UPLOAD_DIR)
-    folder.mkdir(parents=True, exist_ok=True)
     name = f"bill-{uuid.uuid4().hex[:16]}.{extension}"
-    (folder / name).write_bytes(content)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(content)
+    except OSError:
+        raise HTTPException(status_code=500, detail="Could not save bill photo")
 
     # Remove the old bill file if one existed
     old_url = expense.bill_photo_url

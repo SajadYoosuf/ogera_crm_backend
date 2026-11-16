@@ -18,7 +18,7 @@ WHO CAN USE IT:
 import datetime
 import math
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from auth import get_current_user, require_roles
 from database import get_db
@@ -33,14 +33,19 @@ THROTTLE_SECONDS = 30
 
 
 class LocationBody(BaseModel):
-    latitude: float
-    longitude: float
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
 
 
 class LocationResponse(BaseModel):
     latitude: float
     longitude: float
     recorded_at: datetime.datetime
+
+
+class LocationUpdateResponse(BaseModel):
+    ok: bool
+    throttled: bool
 
 
 @router.get(
@@ -73,6 +78,7 @@ def get_my_location(
 
 @router.post(
     "/location",
+    response_model=LocationUpdateResponse,
     summary="Update my live GPS position",
 )
 def update_location(
@@ -99,7 +105,7 @@ def update_location(
     if existing is not None:
         elapsed = (now - existing.recorded_at).total_seconds()
         if elapsed < THROTTLE_SECONDS:
-            return {"ok": True, "throttled": True}
+            return LocationUpdateResponse(ok=True, throttled=True)
         existing.latitude = body.latitude
         existing.longitude = body.longitude
         existing.recorded_at = now
@@ -111,7 +117,8 @@ def update_location(
             recorded_at=now,
         ))
 
-    db.commit()
+    # Both the live-position upsert and the history point go into one commit so
+    # a DB failure can't leave the live dot updated but the history row missing.
     db.add(StaffLocationHistory(
         employee_id=current_user.id,
         latitude=body.latitude,
@@ -119,7 +126,7 @@ def update_location(
         recorded_at=now,
     ))
     db.commit()
-    return {"ok": True, "throttled": False}
+    return LocationUpdateResponse(ok=True, throttled=False)
 
 
 class LiveStaffResponse(BaseModel):
@@ -223,6 +230,8 @@ def get_staff_history(userId: int, date: str, db: Session = Depends(get_db)):
         day = datetime.date.fromisoformat(date)
     except ValueError as error:
         raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD") from error
+    if not db.query(Employee).filter(Employee.id == userId, Employee.deleted_at.is_(None)).first():
+        raise HTTPException(status_code=404, detail="Employee not found")
     start = datetime.datetime.combine(day, datetime.time.min)
     end = start + datetime.timedelta(days=1)
     rows = (

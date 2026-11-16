@@ -175,13 +175,10 @@ class ContactCreate(ContactBase):
         - *_profile       → type-specific details created in the same transaction
         - interested_product_ids → list of product ids this contact is interested in
     """
-    # Overrides ContactBase.lead_source_id to make it required on create
+    # Required on create; overrides ContactBase.lead_source_id which allows None
     lead_source_id: int
     # Omit to create an unassigned contact; manager assigns after reviewing the new lead
     assigned_to: int | None = None
-    # Required for Offline (field visit) leads, not allowed for other sources
-    latitude: Latitude | None = None
-    longitude: Longitude | None = None
     # Type details, created in the same transaction. Each one is only allowed for its own contact type.
     consumer_profile: ConsumerProfileBase | None = None
     partner_profile: PartnerProfileBase | None = None
@@ -216,8 +213,6 @@ class ContactUpdate(BaseModel):
     phone_alt: Annotated[str, Field(max_length=20)] | None = None
     district: Annotated[str, Field(min_length=1, max_length=80)] | None = None
     address: Annotated[str, Field(min_length=1, max_length=255)] | None = None
-    latitude: Latitude | None = None
-    longitude: Longitude | None = None
     assigned_to: int | None = None
     referred_by_id: int | None = None
     lead_source_id: int | None = None
@@ -354,8 +349,57 @@ class PipelineStageItem(BaseModel):
     id: int        # pipeline_stages.id — use this as stage_id when moving a contact
     slug: str
     label: str
-    order_index: int
+    order_index: int   # column position (matches pipeline_stages.order from DB)
     contact_type: str
+
+
+# --- Pipeline stage CRUD schemas (used by /pipeline/stages admin endpoints) ---
+
+class PipelineStageCreate(BaseModel):
+    """
+    Body for POST /pipeline/stages.
+    The slug is auto-generated from the name. The stage is placed at the end of
+    the chosen pipeline's column order.
+    """
+    name: Annotated[str, Field(min_length=1, max_length=60)]
+    contact_type: ContactType       # which pipeline: consumer or partner
+    description: Annotated[str, Field(max_length=255)] | None = None
+
+
+class PipelineStageUpdate(BaseModel):
+    """Body for PATCH /pipeline/stages/{id}. All fields are optional (patch semantics)."""
+    name: Annotated[str, Field(min_length=1, max_length=60)] | None = None
+    description: Annotated[str, Field(max_length=255)] | None = None
+    order: Annotated[int, Field(ge=1)] | None = None    # column position (1 = leftmost)
+    is_active: bool | None = None
+
+
+class PipelineStageReorder(BaseModel):
+    """
+    Body for POST /pipeline/stages/reorder.
+    Send every stage id for one pipeline in the new left-to-right order.
+    The backend assigns order=1,2,3… based on each id's position in the list.
+    """
+    contact_type: ContactType
+    ordered_ids: Annotated[list[int], Field(min_length=1, max_length=100)]
+
+
+class PipelineStageAdminResponse(BaseModel):
+    """
+    Full admin view of a pipeline stage.
+    Returned by all CRUD endpoints so the settings page has everything it needs:
+    is_active to show toggles, locked to disable the toggle for protected stages,
+    and usage_count to block or warn before deletion.
+    """
+    id: int
+    name: str
+    slug: str
+    contact_type: str
+    description: str | None = None
+    order: int
+    is_active: bool
+    locked: bool = False    # True for new_lead, won, lost — cannot be turned off
+    usage_count: int = 0    # number of contacts that have ever passed through this stage
 
 
 class ContactListResponse(BaseModel):

@@ -1,4 +1,5 @@
 import datetime
+import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from auth import get_current_user
@@ -24,6 +25,8 @@ from services.lead_access import (
 )
 
 # Kept for the other modules that import it. Access rules now live in services/lead_access.py.
+logger = logging.getLogger(__name__)
+
 MONITORING_ROLES = {"admin", "manager"}
 
 router = APIRouter(
@@ -142,8 +145,8 @@ def create_followup(
             create_notification(db, fs.assigned_to, "followup_created", title, msg, "followup", fs.id, background_tasks)
         notify_roles(db, ["admin", "manager"], "followup_created", title, msg, "followup", fs.id, background_tasks)
         db.commit()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Followup creation notification failed for contact %s: %s", contact_id, exc)
 
     return _followup_response(fs)
 
@@ -251,6 +254,6 @@ def update_followup(
             from services.notification_service import notify_task_completed
             notify_task_completed(db, fs, current_user, background_tasks)
             db.commit()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Followup completion notification failed for followup %s: %s", followup_id, exc)
     return _followup_response(fs)

@@ -2,7 +2,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .enums import profession_key
 
-# Checked against the Partner types list (settings_catalog, PROFESSIONAL_TYPE) in the route, not here.
+# Checked against the Partner types list (settings_catalog, PARTNER_TYPE) in the route, not here.
 Profession = Annotated[str, Field(min_length=1, max_length=80)]
 
 

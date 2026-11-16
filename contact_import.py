@@ -227,7 +227,7 @@ class Options:
 
 
 def analyze(db: Session, rows: list[list[str]], header_row: int, mapping: dict[int, str], options: Options) -> list[RowResult]:
-    professions = catalog.active_values(db, catalog.PROFESSIONAL_TYPE)
+    professions = catalog.active_values(db, catalog.PARTNER_TYPE)
     house_stages = _house_stage_options(db)
     sources = {}
     for s in db.query(LeadSource).filter(LeadSource.is_active == 1):

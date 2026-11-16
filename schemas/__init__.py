@@ -12,6 +12,9 @@ from .lead_source import (
     LeadSourceUpdate,
     LeadSourceSummary,
     LeadSourceResponse,
+    LeadSourceCreateRequest,
+    LeadSourceUpdateRequest,
+    LeadSourceAdminResponse,
 )
 from .consumer_profile import (
     ConsumerProfileBase,
@@ -29,6 +32,12 @@ from .lead_stage import LeadStageCreate, LeadStageResponse
 from .contact import ContactSummary, ContactBase, ContactCreate, ContactUpdate, ContactResponse
 from .contact import ContactListItem, ContactListResponse, LeadStageSummary, NameRef
 from .contact import PipelineStageItem
+from .contact import (
+    PipelineStageCreate,
+    PipelineStageUpdate,
+    PipelineStageReorder,
+    PipelineStageAdminResponse,
+)
 
 __all__ = [
     # Enums
@@ -39,6 +48,7 @@ __all__ = [
     "EmployeeBase", "EmployeeCreate", "EmployeeUpdate", "EmployeeSummary", "EmployeeResponse", "EmployeeListResponse", "EmployeeCreateResponse", "CredentialsEmailStatus",
     # LeadSource
     "LeadSourceBase", "LeadSourceCreate", "LeadSourceUpdate", "LeadSourceSummary", "LeadSourceResponse",
+    "LeadSourceCreateRequest", "LeadSourceUpdateRequest", "LeadSourceAdminResponse",
     # ConsumerProfile
     "ConsumerProfileBase", "ConsumerProfileCreate", "ConsumerProfileUpdate", "ConsumerProfileResponse",
     # PartnerProfile
@@ -49,4 +59,5 @@ __all__ = [
     "ContactSummary", "ContactBase", "ContactCreate", "ContactUpdate", "ContactResponse",
     "ContactListItem", "ContactListResponse", "LeadStageSummary", "NameRef",
     "PipelineStageItem",
+    "PipelineStageCreate", "PipelineStageUpdate", "PipelineStageReorder", "PipelineStageAdminResponse",
 ]

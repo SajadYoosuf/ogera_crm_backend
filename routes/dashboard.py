@@ -18,6 +18,7 @@ from business_time import ist_day_bounds, ist_day_start_utc, today_ist
 from database import get_db
 from models import Contact, Employee, FollowupSchedule, LeadStage, PipelineStage
 from routes.contacts import contact_query
+from services.lead_access import is_head
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"], dependencies=[Depends(get_current_user)])
 
@@ -184,6 +185,11 @@ def _open_followups(db: Session, user: Employee, today: datetime.date):
             FollowupSchedule.due_at < next_day,
         )
     )
+    # `user` was accepted but never applied — every employee's dashboard showed
+    # the whole company's open follow-ups instead of just their own, contradicting
+    # this file's own docstring rule. Heads (admin/manager) still see everything.
+    if not is_head(user):
+        q = q.filter(FollowupSchedule.assigned_to == user.id)
     return q
 
 
