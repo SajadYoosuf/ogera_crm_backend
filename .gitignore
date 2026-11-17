@@ -40,5 +40,12 @@ __pycache__/
 contacts_*.json
 professionals_*.json
 
+# Customer / lead data files — contain personal data, never commit
+*.xlsx
+*.xls
+*.csv
+*.pdf
+*.exe
+
 # ---- Uploaded files (company logo) ----
 uploads/
