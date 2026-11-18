@@ -50,8 +50,7 @@ class CompanyResponse(BaseModel):
     id: int
     name: str
     logo_url: str | None = None
-    timezone: str
-    is_active: int
+    status: str
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
