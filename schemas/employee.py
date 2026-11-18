@@ -138,17 +138,28 @@ class EmployeeSummary(BaseModel):
     id: int
     name: str
     email: str
-    role: str
+    role_id: int
+    role_slug: str | None = None  # set by get_current_user as a transient attribute
     phone: str | None = None
-    branch: str | None = None
 
 
-class EmployeeResponse(EmployeeBase):
-    """Full employee data returned by GET / POST / PUT. Password is never included."""
+class EmployeeResponse(BaseModel):
+    """
+    Full employee data returned by login, GET /me, and employee management endpoints.
+    Password is never included.
+
+    role_slug is a transient attribute set by get_current_user() (and by the login
+    route which queries the role explicitly). It is None only if the role row is missing.
+    """
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    is_active: bool
+    name: str
+    email: str
+    phone: str | None = None
+    role_id: int
+    role_slug: str | None = None
+    is_active: int
     created_at: datetime.datetime
     updated_at: datetime.datetime
     deleted_at: datetime.datetime | None = None

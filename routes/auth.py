@@ -1,16 +1,28 @@
+"""
+Authentication routes — login, profile read/update, password change.
 
+Login flow (multi-tenant):
+  1. Query public.employee_tenant_map by email to find the tenant schema.
+  2. Open a session for that schema, verify password.
+  3. Return a JWT containing the employee ID, schema name, and password fingerprint.
+"""
 import logging
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, Field, field_validator
+
 from config import PASSWORD_MAX_LENGTH
-from database import get_db
-from models import Employee
-from auth import HEAD_OFFICE_ROLES, verify_password, create_access_token, get_current_user, get_password_hash
-from request_context import client_platform
+from database import get_public_db, get_session_for_schema
+from models import Employee, EmployeeLookup, Role
+from auth import (
+    verify_password,
+    create_access_token,
+    get_current_user,
+    get_password_hash,
+)
 from mailer import send_password_changed_notice
 from schemas import EmployeeResponse
 from schemas.employee import _validate_password
@@ -20,28 +32,23 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _mask_email(email: str) -> str:
-    """
-    Masks an email for safe production logging.
-    "admin@ogera.com" → "a***@ogera.com"
-
-    Why: logs may be stored or viewed by multiple people.
-    Showing a***@domain.com is enough to confirm whether the
-    right email was typed without exposing the full address.
-    """
+    """Returns "a***@domain.com" — safe for logging."""
     local, sep, domain = email.partition("@")
     if not sep:
         return "***"
     return f"{local[:1]}***@{domain}"
 
-DUPLICATE_EMAIL = "An employee with this email already exists"
+
+def _extract_tenant_from_employee(employee: Employee) -> str:
+    """Read the tenant schema that get_current_user() attached to the employee object."""
+    tenant = getattr(employee, "_tenant_schema", None)
+    if not tenant:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    return tenant
 
 
 class LoginRequest(BaseModel):
-    # EmailStr: Pydantic validates the format before the handler runs.
-    # A garbage string like "not-an-email" gets a 422 instead of wasting a DB query.
     email: EmailStr
-
-    # Cap matches the creation policy so login and signup are consistent.
     password: str = Field(max_length=PASSWORD_MAX_LENGTH)
 
 
@@ -50,153 +57,76 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     employee: EmployeeResponse
 
-
+# first checking the employee email id with public schema employee lookup table then matching with employee email
+#then check the tenant schema id and name then go to that tenant with search path then going to that tenant based employees
+#table then find the email and password check it and signin and the return access token jwt also contain tenant
+#schema name
 @router.post("/login", response_model=LoginResponse, summary="Log in")
 def login(
     request: Request,
     body: LoginRequest,
-    db: Session = Depends(get_db),
-    platform: str = Depends(client_platform),
+    db_public: Session = Depends(get_public_db),
 ):
-    
-    """Sign in with email and password. Returns a bearer token (valid 5 days by default) and the employee's profile.
-    Returns 401 for an unknown email or a wrong password, and 403 if the account is inactive or deleted.
-    Send the token as `Authorization: Bearer <token>` on every later request.
+    """
+    Sign in with email and password. Returns a bearer token and the employee's profile.
+
+    401 — wrong email or password
+    403 — account inactive or deleted
+    503 — database unavailable
     """
     client_ip = request.client.host if request.client else "unknown"
-
-    # Normalize email: lowercase + strip whitespace so "Admin@X.COM " matches "admin@x.com".
-    # EmailStr already validates format; we normalize before the DB query.
     email = body.email.strip().lower()
-
-    # Mask email for logs: "admin@ogera.com" → "a***@ogera.com"
-    # Full email is not needed in logs and is personal data.
     masked = _mask_email(email)
-    logger.info("LOGIN REQUEST: email=%s platform=%s ip=%s", masked, platform, client_ip)
+    logger.info("LOGIN REQUEST: email=%s ip=%s", masked, client_ip)
 
-    employee = db.query(Employee).filter(Employee.email == email).first()
-
-    if not employee:
-        logger.warning("LOGIN FAILED — email not found: email=%s platform=%s ip=%s", masked, platform, client_ip)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+    try:
+        lookup = db_public.scalar(
+            select(EmployeeLookup).where(EmployeeLookup.email == email)
         )
+    except OperationalError as exc:
+        logger.error("LOGIN — DB error on employee_tenant_map: %s", exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Server unavailable, please retry in a moment")
 
-    # Verify password BEFORE checking active/deleted status.
-    # This way a wrong password always returns 401 "Invalid email or password",
-    # even for deactivated accounts — the attacker learns nothing about account
-    # status unless they already know the correct password.
-    if not verify_password(body.password, employee.password_hash):
-        logger.warning("LOGIN FAILED — wrong password: email=%s employee_id=%d platform=%s ip=%s",
-                       masked, employee.id, platform, client_ip)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-        )
+    if not lookup:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
-    # Password is correct. Now safe to reveal why login is blocked.
-    if employee.is_active != 1 or employee.deleted_at is not None:
-        logger.warning("LOGIN BLOCKED — account inactive/deleted: email=%s employee_id=%d ip=%s",
-                       masked, employee.id, client_ip)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Employee account is inactive",
-        )
+    try:
+        with get_session_for_schema(lookup.schema_name) as db_tenant:
+            employee = db_tenant.scalar(
+                select(Employee).where(Employee.email == email)
+            )
 
-    # Pass password_hash so the token embeds a fingerprint.
-    # If the employee changes their password later, this fingerprint won't match
-    # and get_current_user() will reject the old token (forces re-login).
-    access_token = create_access_token(employee.id, employee.password_hash)
+            if not employee or not verify_password(body.password, employee.password_hash):
+                logger.warning("LOGIN FAILED — wrong password: email=%s ip=%s", masked, client_ip)
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                                    detail="Invalid email or password")
 
-    logger.info("LOGIN OK: employee_id=%d name=%r role=%s platform=%s ip=%s",
-                employee.id, employee.name, employee.role, platform, client_ip)
+            if not employee.is_active or employee.deleted_at is not None:
+                raise HTTPException(status.HTTP_403_FORBIDDEN,
+                                    detail="Employee account is inactive")
 
-    return LoginResponse(
-        access_token=access_token,
-        employee=EmployeeResponse.model_validate(employee, from_attributes=True),
-    )
+            role = db_tenant.scalar(select(Role).where(Role.id == employee.role_id))
+            object.__setattr__(employee, "role_slug", role.slug if role else None)
+
+            access_token = create_access_token(
+                employee.id, employee.password_hash, lookup.schema_name
+            )
+            logger.info("LOGIN OK: employee_id=%d ip=%s", employee.id, client_ip)
+            return LoginResponse(
+                access_token=access_token,
+                employee=EmployeeResponse.model_validate(employee, from_attributes=True),
+            )
+
+    except (OperationalError, ValueError) as exc:
+        logger.error("LOGIN — DB error on schema %s: %s", lookup.schema_name, exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Database unavailable, please retry in a moment")
 
 
 @router.get("/me", response_model=EmployeeResponse, summary="Get my profile")
 def get_profile(current_user: Employee = Depends(get_current_user)):
-    """Returns the profile of the signed-in employee. Use it to restore the session when the app starts.
-    Returns 401 if the token is missing or expired, or the employee has been deleted.
-    """
     return EmployeeResponse.model_validate(current_user, from_attributes=True)
-
-
-def _attached_me(db: Session, current_user: Employee) -> Employee:
-    # get_current_user returns an employee whose session is already closed, so load it again to change it.
-    me = db.query(Employee).filter(Employee.id == current_user.id, Employee.deleted_at.is_(None)).first()
-    if me is None:
-        raise HTTPException(status_code=401, detail="Your login has expired. Please sign in again to continue.")
-    return me
-
-
-class ProfileUpdate(BaseModel):
-    name: Annotated[str, Field(min_length=1, max_length=120)] | None = None
-    email: EmailStr | None = None
-    # Required only when the email changes.
-    current_password: str | None = Field(default=None, max_length=PASSWORD_MAX_LENGTH)
-
-    @field_validator("name", mode="after")
-    @classmethod
-    def strip_name(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
-        v = v.strip()
-        if not v:
-            raise ValueError("Name must not be blank")
-        return v
-
-    @field_validator("email", mode="after")
-    @classmethod
-    def lowercase_email(cls, v: str | None) -> str | None:
-        return v.lower() if v else v
-
-
-@router.patch("/me", response_model=EmployeeResponse, summary="Update my name or email")
-def update_profile(
-    body: ProfileUpdate,
-    db: Session = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
-):
-    """Changes the signed-in employee's name, and/or email. A new email needs `current_password`.
-    Returns 400 for a wrong password, 409 if the email belongs to someone else.
-    """
-    me = _attached_me(db, current_user)
-    data = body.model_dump(exclude_unset=True)
-
-    # Reject empty requests — PATCH with no fields is a client mistake, not a no-op.
-    if not data:
-        raise HTTPException(status_code=400, detail="Provide at least one field to update")
-
-    if data.get("name") is not None:
-        me.name = data["name"]
-
-    new_email = data.get("email")
-    if new_email:
-        if new_email == me.email:
-            # Sending the same email is a no-op. Tell the client explicitly rather
-            # than silently succeeding — this was previously allowing the request
-            # through without the current_password check.
-            raise HTTPException(status_code=400, detail="The email address is the same as your current one")
-        if not data.get("current_password"):
-            raise HTTPException(status_code=400, detail="Enter your current password to change your email")
-        if not verify_password(data["current_password"], me.password_hash):
-            raise HTTPException(status_code=400, detail="Incorrect password")
-        taken = db.query(Employee).filter(Employee.email == new_email, Employee.id != me.id).first()
-        if taken is not None:
-            raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
-        me.email = new_email
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
-    db.refresh(me)
-    return EmployeeResponse.model_validate(me, from_attributes=True)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -212,30 +142,57 @@ class ChangePasswordRequest(BaseModel):
 @router.post("/change-password", summary="Change my password")
 def change_password(
     body: ChangePasswordRequest,
-    db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Changes the signed-in employee's password. Needs the current one. The new one must be 6 to 15 characters
-    with a letter and a digit. A notice is emailed; a failed email does not undo the change.
     """
-    me = _attached_me(db, current_user)
-    if not verify_password(body.current_password, me.password_hash):
-        raise HTTPException(status_code=400, detail="The password you entered doesn't match your current one. Please try again.")
-    if body.new_password == body.current_password:
-        raise HTTPException(status_code=400, detail="New password must be different from the current one")
-    me.password_hash = get_password_hash(body.new_password)
+    Change password. Requires the current password.
+    Returns a fresh token so the employee stays signed in.
+
+    400 — wrong current password, or same as new
+    503 — database unavailable
+    """
+    tenant_schema = _extract_tenant_from_employee(current_user)
+
     try:
-        db.commit()
-        db.refresh(me)
-    except SQLAlchemyError:
-        db.rollback()
-        raise HTTPException(
-            status_code=503,
-            detail="Could not save your new password. Please try again in a moment.",
-        )
-    send_password_changed_notice(me.name, me.email)
-    # Issue a fresh token with the new password fingerprint so the employee
-    # stays logged in after the change. Without this, their next request would
-    # fail with 401 because the old token's phf no longer matches.
-    new_token = create_access_token(me.id, me.password_hash)
-    return {"message": "Password changed", "access_token": new_token, "token_type": "bearer"}
+        with get_session_for_schema(tenant_schema) as db:
+            me = db.scalar(
+                select(Employee).where(
+                    Employee.id == current_user.id,
+                    Employee.deleted_at.is_(None),
+                )
+            )
+            if me is None:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                                    detail="Your login has expired. Please sign in again to continue.")
+
+            if not verify_password(body.current_password, me.password_hash):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                    detail="The password you entered doesn't match your current one.")
+            if body.new_password == body.current_password:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                    detail="New password must be different from the current one")
+
+            me.password_hash = get_password_hash(body.new_password)
+
+            try:
+                db.commit()
+            except SQLAlchemyError as exc:
+                db.rollback()
+                logger.error("CHANGE PASSWORD — commit failed: %s", exc)
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                                    detail="Could not save your new password. Please try again in a moment.")
+
+            db.refresh(me)
+            send_password_changed_notice(me.name, me.email)
+
+            new_token = create_access_token(me.id, me.password_hash, tenant_schema)
+            return {
+                "message": "Password changed",
+                "access_token": new_token,
+                "token_type": "bearer",
+            }
+
+    except (OperationalError, ValueError) as exc:
+        logger.error("CHANGE PASSWORD — DB error: %s", exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Database unavailable, please retry in a moment")

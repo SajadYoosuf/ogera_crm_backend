@@ -1,5 +1,6 @@
-from .role import Role, SYSTEM_ROLES, seed_system_roles
+from .role import Role
 from .employee import Employee
+from .employee_lookup import EmployeeLookup
 from .lead_source import LeadSource
 from .pipeline_stage import PipelineStage
 from .enum_value import EnumValue
@@ -26,9 +27,8 @@ from .expense import Expense, EXPENSE_CATEGORIES, EXPENSE_STATUSES
 
 __all__ = [
     "Role",
-    "SYSTEM_ROLES",
-    "seed_system_roles",
     "Employee",
+    "EmployeeLookup",
     "LeadSource",
     "PipelineStage",
     "EnumValue",

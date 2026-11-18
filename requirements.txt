@@ -2,7 +2,7 @@ fastapi
 sqlmodel
 uvicorn[standard]
 sqlalchemy
-pymysql
+psycopg2-binary
 python-dotenv
 pydantic[email]
 passlib[argon2]

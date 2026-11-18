@@ -34,11 +34,33 @@ def email_of(key: str) -> str:
 
 
 def seed(db) -> None:
-    """Built-in roles, one employee per key in STAFF, and the lead sources."""
-    models.seed_system_roles(db)
+    """Roles, one employee per key in STAFF, and the lead sources."""
+    from models import Role
+    from sqlmodel import select
+
+    # Create roles if they don't exist, then map slug → id.
+    role_slugs = {slug for _, _, slug, _ in STAFF}
+    for slug in role_slugs:
+        existing = db.scalar(select(Role).where(Role.slug == slug))
+        if not existing:
+            db.add(Role(slug=slug, name=slug.replace("_", " ").title()))
+    db.flush()
+
+    # Build slug → id map.
+    role_id_map = {
+        r.slug: r.id
+        for r in db.scalars(select(Role)).all()
+    }
+
     digest = get_password_hash(PASSWORD)
-    for key, name, role, phone in STAFF:
-        db.add(Employee(name=name, email=email_of(key), password_hash=digest, role=role, phone=phone))
+    for key, name, role_slug, phone in STAFF:
+        db.add(Employee(
+            name=name,
+            email=email_of(key),
+            password_hash=digest,
+            role_id=role_id_map[role_slug],
+            phone=phone,
+        ))
     for name, slug in LEAD_SOURCES:
         db.add(LeadSource(name=name, slug=slug))
     db.commit()
