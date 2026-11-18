@@ -147,9 +147,14 @@ def get_profile(
     db_public: Session = Depends(get_public_db),
 ):
     tenant_schema = _extract_tenant_from_employee(current_user)
-    tenant = db_public.scalar(
-        select(Tenant).where(Tenant.schema_name == tenant_schema)
-    )
+    try:
+        tenant = db_public.scalar(
+            select(Tenant).where(Tenant.schema_name == tenant_schema)
+        )
+    except OperationalError as exc:
+        logger.error("GET PROFILE — public DB error: %s", exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Server unavailable, please retry in a moment")
     if not tenant:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
                             detail="Server unavailable, please retry in a moment")

@@ -15,6 +15,7 @@ The reset JWT embeds the tenant schema name so /reset does not need a public loo
 import datetime
 import hashlib
 import hmac
+import logging
 import secrets
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -31,12 +32,13 @@ from config import (
     RESET_TOKEN_TTL_MINUTES,
     SECRET_KEY,
 )
-from database import get_public_db, get_session_for_schema
+from database import get_public_db, get_session_for_schema, _validate_schema_name
 from mailer import send_password_changed_notice, send_password_reset_code
 from models import Employee, EmployeeLookup, PasswordResetCode, Tenant
 from schemas.employee import _validate_password
 
 router = APIRouter(prefix="/auth/password-reset", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 CODE_TTL = datetime.timedelta(minutes=RESET_CODE_TTL_MINUTES)
 RESET_TOKEN_TTL = datetime.timedelta(minutes=RESET_TOKEN_TTL_MINUTES)
@@ -195,41 +197,56 @@ def request_code(
     """
     schema = _resolve_schema(db_public, body.email)
 
-    with get_session_for_schema(schema) as db:
-        account = _account_for_email(db, body.email)
-        now = _now()
+    try:
+        with get_session_for_schema(schema) as db:
+            account = _account_for_email(db, body.email)
+            now = _now()
 
-        # Consume all existing active codes so only the new one is valid.
-        db.query(PasswordResetCode).filter(
-            PasswordResetCode.employee_id == account.id,
-            PasswordResetCode.consumed_at.is_(None),
-        ).update({PasswordResetCode.consumed_at: now}, synchronize_session=False)
+            # Consume all existing active codes so only the new one is valid.
+            db.query(PasswordResetCode).filter(
+                PasswordResetCode.employee_id == account.id,
+                PasswordResetCode.consumed_at.is_(None),
+            ).update({PasswordResetCode.consumed_at: now}, synchronize_session=False)
 
-        code = f"{secrets.randbelow(10**6):06d}"
-        db.add(
-            PasswordResetCode(
-                employee_id=account.id,
-                code_hash=_code_hash(account.id, code),
-                expires_at=now + CODE_TTL,
-                created_at=now,
-            )
-        )
-
-        # Send email BEFORE committing — if it fails, rollback wipes the new code row.
-        result = send_password_reset_code(
-            account.name,
-            account.email,
-            code,
-            int(CODE_TTL.total_seconds() // 60),
-        )
-        if not result.get("sent"):
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=result.get("message", "Could not send reset code. Please try again."),
+            code = f"{secrets.randbelow(10**6):06d}"
+            db.add(
+                PasswordResetCode(
+                    employee_id=account.id,
+                    code_hash=_code_hash(account.id, code),
+                    expires_at=now + CODE_TTL,
+                    created_at=now,
+                )
             )
 
-        db.commit()
+            # Send email BEFORE committing — if it fails, rollback wipes the new code row.
+            result = send_password_reset_code(
+                account.name,
+                account.email,
+                code,
+                int(CODE_TTL.total_seconds() // 60),
+            )
+            if not result.get("sent"):
+                db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=result.get("message", "Could not send reset code. Please try again."),
+                )
+
+            try:
+                db.commit()
+            except SQLAlchemyError as exc:
+                db.rollback()
+                logger.error("REQUEST CODE — commit failed: %s", exc)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Could not save reset code. Please try again.",
+                )
+    except OperationalError as exc:
+        logger.error("REQUEST CODE — DB error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server unavailable, please retry in a moment.",
+        )
 
     return {
         "email_masked": _mask_email(body.email.strip().lower()),
@@ -258,41 +275,56 @@ def verify_code(
     """
     schema = _resolve_schema(db_public, body.email)
 
-    with get_session_for_schema(schema) as db:
-        account = _account_for_email(db, body.email)
-        row = _active_code(db, account.id)
-        now = _now()
+    try:
+        with get_session_for_schema(schema) as db:
+            account = _account_for_email(db, body.email)
+            row = _active_code(db, account.id)
+            now = _now()
 
-        if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No active code. Request a new code.",
+            if row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No active code. Request a new code.",
+                )
+            if row.expires_at <= now:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This code has expired. Request a new code.",
+                )
+
+            if not hmac.compare_digest(row.code_hash, _code_hash(account.id, body.code.strip())):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Incorrect code. Please check your email and try again.",
+                )
+
+            row.consumed_at = now
+            try:
+                db.commit()
+            except SQLAlchemyError as exc:
+                db.rollback()
+                logger.error("VERIFY CODE — commit failed: %s", exc)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Server unavailable, please retry in a moment.",
+                )
+
+            token = jwt.encode(
+                {
+                    "sub": str(account.id),
+                    "tenant": schema,
+                    "purpose": RESET_PURPOSE,
+                    "pw": _password_fingerprint(account.password_hash),
+                    "exp": now + RESET_TOKEN_TTL,
+                },
+                SECRET_KEY,
+                algorithm=ALGORITHM,
             )
-        if row.expires_at <= now:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="This code has expired. Request a new code.",
-            )
-
-        if not hmac.compare_digest(row.code_hash, _code_hash(account.id, body.code.strip())):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Incorrect code. Please check your email and try again.",
-            )
-
-        row.consumed_at = now
-        db.commit()
-
-        token = jwt.encode(
-            {
-                "sub": str(account.id),
-                "tenant": schema,
-                "purpose": RESET_PURPOSE,
-                "pw": _password_fingerprint(account.password_hash),
-                "exp": now + RESET_TOKEN_TTL,
-            },
-            SECRET_KEY,
-            algorithm=ALGORITHM,
+    except OperationalError as exc:
+        logger.error("VERIFY CODE — DB error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server unavailable, please retry in a moment.",
         )
 
     return {"reset_token": token, "expires_in_seconds": int(RESET_TOKEN_TTL.total_seconds())}
@@ -329,6 +361,10 @@ def reset_password(body: ResetRequest, background_tasks: BackgroundTasks):
     tenant_schema = claims.get("tenant", "")
     if not tenant_schema:
         raise invalid
+    try:
+        _validate_schema_name(tenant_schema)
+    except ValueError:
+        raise invalid
 
     try:
         with get_session_for_schema(tenant_schema) as db:
@@ -361,6 +397,12 @@ def reset_password(body: ResetRequest, background_tasks: BackgroundTasks):
 
             background_tasks.add_task(send_password_changed_notice, employee.name, employee.email)
 
+    except OperationalError as exc:
+        logger.error("RESET PASSWORD — DB error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server unavailable, please retry in a moment.",
+        )
     except ValueError:
         raise invalid
 
