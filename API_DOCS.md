@@ -40,7 +40,7 @@ Sign in with email and password. Returns a JWT and the employee's profile.
     "id": 1,
     "name": "Ventino Homes",
     "logo_url": "https://example.com/logo.png",
-    "timezone": "Asia/Kolkata"
+    "status": "active"
   },
   "employee": {
     "id": 1,
@@ -95,7 +95,7 @@ Authorization: Bearer <access_token>
     "id": 1,
     "name": "Ventino Homes",
     "logo_url": "https://example.com/logo.png",
-    "timezone": "Asia/Kolkata"
+    "status": "active"
   },
   "employee": {
     "id": 1,
@@ -178,6 +178,111 @@ Password rules for `new_password`:
 { "detail": "New password must be different from the current one" }
 { "detail": "must contain at least one letter and one digit" }
 ```
+
+---
+
+### 4. Forgot Password — Step 1: Request a code
+
+**`POST /auth/password-reset/request`**
+
+Emails a 6-digit OTP to the employee's registered address.  
+Any previously active code for that account is cancelled.  
+No auth token required.
+
+**Request body**
+```json
+{ "email": "employee@example.com" }
+```
+
+**Success response — `200 OK`**
+```json
+{
+  "email_masked": "e***e@example.com",
+  "expires_in_seconds": 600
+}
+```
+
+**Error responses**
+
+| Status | `detail` | When |
+|---|---|---|
+| `422` | Validation message | Missing or malformed email |
+| `404` | `"No active account uses this email."` | Unknown email, or account inactive/deleted |
+| `503` | `"Could not send reset code. Please try again."` | Mail server unreachable |
+
+---
+
+### 5. Forgot Password — Step 2: Verify the code
+
+**`POST /auth/password-reset/verify`**
+
+Checks the 6-digit code from the email. Returns a short-lived reset token on success.  
+The code is single-use and expires after 10 minutes.  
+No auth token required.
+
+**Request body**
+```json
+{
+  "email": "employee@example.com",
+  "code": "483921"
+}
+```
+
+`code` must be exactly 6 digits (`0–9`), no letters or spaces.
+
+**Success response — `200 OK`**
+```json
+{
+  "reset_token": "eyJhbGci...",
+  "expires_in_seconds": 600
+}
+```
+
+**Error responses**
+
+| Status | `detail` | When |
+|---|---|---|
+| `422` | Validation message | Bad email, code wrong length, or code has non-digits |
+| `404` | `"No active account uses this email."` | Account not found or deactivated |
+| `400` | `"No active code. Request a new code."` | No code requested yet, or already used |
+| `400` | `"This code has expired. Request a new code."` | Code older than 10 minutes |
+| `400` | `"Incorrect code. Please check your email and try again."` | Wrong code |
+
+---
+
+### 6. Forgot Password — Step 3: Set new password
+
+**`POST /auth/password-reset/reset`**
+
+Sets a new password using the `reset_token` from Step 2.  
+The token is single-use — the password fingerprint inside it becomes stale after the change.  
+No auth token required.
+
+**Request body**
+```json
+{
+  "reset_token": "eyJhbGci...",
+  "new_password": "NewPass1"
+}
+```
+
+Password rules: 6–15 characters, at least one letter and one digit.
+
+**Success response — `200 OK`**
+```json
+{ "message": "Password updated. You can now log in with your new password." }
+```
+
+Navigate to the login screen after success. No token is returned.
+
+**Error responses**
+
+| Status | `detail` | When |
+|---|---|---|
+| `422` | Validation message | Missing token, weak password |
+| `400` | `"This reset link has expired or was already used. Start again."` | Token expired, used, or tampered |
+| `400` | `"Your new password must be different from your current password."` | Same as current password |
+| `503` | `"Could not save your new password. Please try again in a moment."` | DB error |
 
 ---
 
