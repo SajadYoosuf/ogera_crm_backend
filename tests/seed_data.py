@@ -2,7 +2,7 @@
 import models
 import settings_catalog
 from auth import get_password_hash
-from models import Employee, LeadSource
+from models import Employee, LeadSource, EmployeeLookup, Tenant
 
 PASSWORD = "Passw0rd!"
 
@@ -34,9 +34,15 @@ def email_of(key: str) -> str:
 
 
 def seed(db) -> None:
-    """Roles, one employee per key in STAFF, and the lead sources."""
+    """Roles, one employee per key in STAFF, lead sources, and multi-tenant lookup tables."""
     from models import Role
     from sqlmodel import select
+
+    # Create a single test tenant. The schema_name must pass _validate_schema_name
+    # (lowercase letters/digits/underscores, starts with a letter).
+    tenant = Tenant(id=1, name="Test Company", schema_name="test", status="active")
+    db.add(tenant)
+    db.flush()
 
     # Create roles if they don't exist, then map slug → id.
     role_slugs = {slug for _, _, slug, _ in STAFF}
@@ -61,6 +67,8 @@ def seed(db) -> None:
             role_id=role_id_map[role_slug],
             phone=phone,
         ))
+        # employee_tenant_map lets login and password-reset look up the right tenant schema.
+        db.add(EmployeeLookup(email=email_of(key), tenant_id=1))
     for name, slug in LEAD_SOURCES:
         db.add(LeadSource(name=name, slug=slug))
     db.commit()

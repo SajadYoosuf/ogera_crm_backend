@@ -22,4 +22,6 @@ class EmployeeLookup(SQLModel, table=True):
     __table_args__ = {"schema": "public"}
 
     email: str = Field(max_length=180, primary_key=True)
-    tenant_id: int = Field(foreign_key="public.tenants.id")
+    # FK to public.tenants.id is enforced by the database; not declared here so
+    # SQLite-based tests (which have no "public" schema) can create this table.
+    tenant_id: int

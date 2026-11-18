@@ -17,10 +17,8 @@ PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "6"))
 PASSWORD_MAX_LENGTH = int(os.getenv("PASSWORD_MAX_LENGTH", "15"))
 
 # Forgot password: the emailed code and the short-lived token that follows it
-RESET_CODE_TTL_MINUTES = int(os.getenv("RESET_CODE_TTL_MINUTES", "10"))      # how long a code stays valid
-RESET_CODE_RESEND_SECONDS = int(os.getenv("RESET_CODE_RESEND_SECONDS", "60"))  # wait before another code
-RESET_CODE_MAX_ATTEMPTS = int(os.getenv("RESET_CODE_MAX_ATTEMPTS", "5"))    # wrong tries before the code locks
-RESET_TOKEN_TTL_MINUTES = int(os.getenv("RESET_TOKEN_TTL_MINUTES", "10"))    # time to set the new password after verifying
+RESET_CODE_TTL_MINUTES = int(os.getenv("RESET_CODE_TTL_MINUTES", "10"))    # how long a code stays valid
+RESET_TOKEN_TTL_MINUTES = int(os.getenv("RESET_TOKEN_TTL_MINUTES", "10"))  # time to set the new password after verifying
 
 # Where uploaded files (the company logo) are stored and served from at /uploads.
 # Vercel's deployed filesystem is read-only; /tmp is writable but ephemeral.

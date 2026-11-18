@@ -23,9 +23,14 @@ def _bigint_as_integer(type_, compiler, **kw):
     return "INTEGER"
 
 
-from database import Base, SessionLocal, engine  # noqa: E402
+from database import Base, SessionLocal, engine, DATABASE_URL  # noqa: E402
 from models import LeadSource, PipelineStage  # noqa: E402
 from seed_data import MOBILE_APP, PASSWORD, email_of, seed  # noqa: E402
+
+# SQLite doesn't support PostgreSQL schemas. Map "public" → None so that
+# public.tenants and public.employee_tenant_map are created as plain tables.
+if DATABASE_URL.startswith("sqlite"):
+    engine.update_execution_options(schema_translate_map={"public": None})
 
 
 @pytest.fixture()

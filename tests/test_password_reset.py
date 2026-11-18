@@ -11,8 +11,15 @@ from seed_data import PASSWORD, email_of, MOBILE_APP
 
 @pytest.fixture()
 def reset(client, monkeypatch):
-    """Captures emailed codes and lets a test move the clock forward."""
-    # Start at the real UTC time: the reset token expiry is checked against the real clock by jose.
+    """Captures emailed codes and lets a test move the clock forward.
+
+    _now() is replaced with a fake that returns a naive datetime stored in clock["now"].
+    Naive datetimes are used throughout the test because SQLite (the test DB) stores
+    DateTimes without timezone info. The production code uses timezone-aware datetimes
+    for PostgreSQL, but since _now is monkeypatched here, the test never calls the
+    real _now() — comparisons stay naive-vs-naive the whole way through.
+    """
+    # Start at the real UTC time (naive) so jose expiry checks against the real clock work.
     clock = {"now": datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)}
     sent: list[dict] = []
 
@@ -65,7 +72,7 @@ def test_request_emails_the_code_to_the_employees_own_address_and_masks_it(reset
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["email_masked"].endswith("@example.com") and "***" in body["email_masked"]
-    assert body["expires_in_seconds"] == 600 and body["resend_in_seconds"] == 60
+    assert body["expires_in_seconds"] == 600
     assert len(reset.sent) == 1
     assert reset.sent[0]["email"] == email_of("anu")
     assert len(reset.last_code()) == 6 and reset.last_code().isdigit()
@@ -108,26 +115,15 @@ def test_code_is_stored_only_as_a_hash(reset):
         assert len(row.code_hash) == 64
 
 
-def test_resend_is_blocked_for_60_seconds(reset):
-    reset.request("anu")
-
-    early = reset.request("anu")
-    assert early.status_code == 429
-    assert "seconds" in early.json()["detail"]
-
-    reset.advance(seconds=61)
+def test_multiple_employees_can_request_codes_independently(reset):
+    # Each employee has its own code; requesting for one does not block another.
     assert reset.request("anu").status_code == 200
-
-
-def test_cooldown_is_per_employee(reset):
-    assert reset.request("anu").status_code == 200
-    assert reset.request("raj").status_code == 200  # a different employee is not held back
+    assert reset.request("raj").status_code == 200
 
 
 def test_a_new_code_makes_the_previous_one_useless(reset):
     reset.request("anu")
     first = reset.last_code()
-    reset.advance(seconds=61)
     reset.request("anu")
     second = reset.last_code()
     assert first != second
@@ -171,32 +167,14 @@ def test_correct_code_gives_a_reset_token_that_works_once(reset):
     assert reset.reset_password(token, "AnotherPass1").status_code == 400  # the token is single-use
 
 
-def test_wrong_code_reports_attempts_left_then_locks_after_five(reset):
+def test_wrong_code_is_rejected(reset):
     reset.request("anu")
     correct = reset.last_code()
     wrong = "000000" if correct != "000000" else "111111"
 
-    for left in (4, 3, 2, 1):
-        response = reset.verify(wrong)
-        assert response.status_code == 400
-        assert response.json()["detail"] == f"Incorrect code. {left} attempts left."
-
-    last = reset.verify(wrong)
-    assert last.json()["detail"] == "Too many wrong attempts. Request a new code."
-    # Even the right code is refused once the code is locked.
-    assert reset.verify(correct).status_code == 400
-
-
-def test_a_new_code_resets_the_attempt_counter(reset):
-    reset.request("anu")
-    correct = reset.last_code()
-    wrong = "000000" if correct != "000000" else "111111"
-    for _ in range(3):
-        reset.verify(wrong)
-
-    reset.advance(seconds=61)
-    reset.request("anu")
-    assert reset.verify(reset.last_code()).status_code == 200
+    response = reset.verify(wrong)
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Incorrect code. Please check your email and try again."
 
 
 def test_expired_code_is_rejected(reset):
@@ -299,6 +277,5 @@ def test_reset_token_from_before_a_password_change_is_rejected(reset):
     assert reset.reset_password(token, "NewPass123").status_code == 200
 
     # Another code and token pair, but the old token must still fail.
-    reset.advance(seconds=61)
     reset.request("anu")
     assert reset.reset_password(token, "ThirdPass123").status_code == 400

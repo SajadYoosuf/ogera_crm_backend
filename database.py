@@ -171,6 +171,12 @@ def get_session_for_schema(schema: str):
     """
     _validate_schema_name(schema)   # raises ValueError if name is unsafe
     with engine.connect() as conn:
-        conn.execute(text(f"SET search_path TO {schema}"))
+        # SET search_path is PostgreSQL-only; SQLite (used by the test suite) has no schemas.
+        if not DATABASE_URL.startswith("sqlite"):
+            conn.execute(text(f"SET search_path TO {schema}"))
         with Session(bind=conn, expire_on_commit=False) as db:
             yield db
+        # db.commit() inside the route flushes changes to the connection but does NOT
+        # commit the connection's own transaction. conn.commit() here does that.
+        # On any exception the with engine.connect() block rolls back automatically.
+        conn.commit()
