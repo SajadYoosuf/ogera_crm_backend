@@ -15,7 +15,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from config import PASSWORD_MAX_LENGTH
+from config import PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH
 from database import get_public_db, get_session_for_schema
 from models import Employee, EmployeeLookup, Role, Tenant
 from auth import (
@@ -165,7 +165,7 @@ def get_profile(
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str = Field(min_length=6, max_length=PASSWORD_MAX_LENGTH)
+    current_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
     new_password: str = Field(max_length=PASSWORD_MAX_LENGTH)
 
     @field_validator("new_password", mode="after")
@@ -200,6 +200,8 @@ def change_password(
             if not verify_password(body.current_password, me.password_hash):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                     detail="The password you entered doesn't match your current one.")
+            # Same-password check intentionally runs only after current_password is verified,
+            # so a wrong current_password always gets the "doesn't match" error first.
             if body.new_password == body.current_password:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                     detail="New password must be different from the current one")
@@ -214,8 +216,10 @@ def change_password(
                 raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
                                     detail="Could not save your new password. Please try again in a moment.")
 
-            db.refresh(me)
-            send_password_changed_notice(me.name, me.email)
+            try:
+                send_password_changed_notice(me.name, me.email)
+            except Exception:
+                logger.warning("CHANGE PASSWORD — notice email failed for employee_id=%d", me.id)
 
             new_token = create_access_token(me.id, me.password_hash, tenant_schema)
             return {
