@@ -1,3 +1,4 @@
+from .tenant import Tenant
 from .role import Role
 from .employee import Employee
 from .employee_lookup import EmployeeLookup
@@ -26,6 +27,7 @@ from .staff_location_history import StaffLocationHistory
 from .expense import Expense, EXPENSE_CATEGORIES, EXPENSE_STATUSES
 
 __all__ = [
+    "Tenant",
     "Role",
     "Employee",
     "EmployeeLookup",

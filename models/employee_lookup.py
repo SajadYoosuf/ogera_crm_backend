@@ -19,8 +19,7 @@ from sqlmodel import SQLModel, Field
 
 class EmployeeLookup(SQLModel, table=True):
     __tablename__ = "employee_tenant_map"
-    __table_args__ = {"schema": "public"}  # always in public, never in a tenant schema
+    __table_args__ = {"schema": "public"}
 
     email: str = Field(max_length=180, primary_key=True)
-    tenant_id: int
-    schema_name: str = Field(max_length=63)  # routing key: e.g. "ventino"
+    tenant_id: int = Field(foreign_key="public.tenants.id")
