@@ -32,6 +32,7 @@ import logging
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Path
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session
 
 from database import get_public_db_ctx, get_session_for_schema
@@ -139,8 +140,12 @@ def inbound_website(
         Any extra fields you send (utm_source, page_url, form_name, etc.) are stored
         in the lead's raw_data column so nothing is lost.
     """
-    with get_public_db_ctx() as db_public:
-        schema = _get_schema_for_slug(tenant_slug, x_api_key, db_public)
+    try:
+        with get_public_db_ctx() as db_public:
+            schema = _get_schema_for_slug(tenant_slug, x_api_key, db_public)
+    except OperationalError as exc:
+        logger.error("inbound_website — public DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
     # Build raw_payload from any extra fields the form included
     raw_payload = {
@@ -149,20 +154,24 @@ def inbound_website(
         **body.model_extra,
     }
 
-    with get_session_for_schema(schema) as db:
-        lead = lead_svc.create_lead(
-            db=db,
-            schema=schema,
-            first_name=body.first_name,
-            source_id=4,  # Website
-            last_name=body.last_name,
-            phone=body.phone,
-            email=body.email,
-            notes=body.notes,
-            raw_payload=raw_payload,
-            background_tasks=background_tasks,
-        )
-        return InboundLeadResponse(id=lead.id, status="created")
+    try:
+        with get_session_for_schema(schema) as db:
+            lead = lead_svc.create_lead(
+                db=db,
+                schema=schema,
+                first_name=body.first_name,
+                source_id=4,  # Website
+                last_name=body.last_name,
+                phone=body.phone,
+                email=body.email,
+                notes=body.notes,
+                raw_payload=raw_payload,
+                background_tasks=background_tasks,
+            )
+            return InboundLeadResponse(id=lead.id, status="created")
+    except OperationalError as exc:
+        logger.error("inbound_website — tenant DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
 
 # ── Google Sheet / Meta Ads endpoint ─────────────────────────────────────────
@@ -207,8 +216,12 @@ def inbound_sheet(
         }
         ```
     """
-    with get_public_db_ctx() as db_public:
-        schema = _get_schema_for_slug(tenant_slug, x_api_key, db_public)
+    try:
+        with get_public_db_ctx() as db_public:
+            schema = _get_schema_for_slug(tenant_slug, x_api_key, db_public)
+    except OperationalError as exc:
+        logger.error("inbound_sheet — public DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
     raw_payload = {
         "source": "meta_ads_sheet",
@@ -225,17 +238,21 @@ def inbound_sheet(
     if not notes and body.ad_name:
         notes = f"Meta Ads: {body.ad_name}"
 
-    with get_session_for_schema(schema) as db:
-        lead = lead_svc.create_lead(
-            db=db,
-            schema=schema,
-            first_name=body.first_name,
-            source_id=3,  # Meta Ads
-            last_name=body.last_name,
-            phone=body.phone,
-            email=body.email,
-            notes=notes,
-            raw_payload=raw_payload,
-            background_tasks=background_tasks,
-        )
-        return InboundLeadResponse(id=lead.id, status="created")
+    try:
+        with get_session_for_schema(schema) as db:
+            lead = lead_svc.create_lead(
+                db=db,
+                schema=schema,
+                first_name=body.first_name,
+                source_id=3,  # Meta Ads
+                last_name=body.last_name,
+                phone=body.phone,
+                email=body.email,
+                notes=notes,
+                raw_payload=raw_payload,
+                background_tasks=background_tasks,
+            )
+            return InboundLeadResponse(id=lead.id, status="created")
+    except OperationalError as exc:
+        logger.error("inbound_sheet — tenant DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")

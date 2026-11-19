@@ -32,6 +32,7 @@ from datetime import timezone as _tz
 
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from models.contact import Contact
@@ -197,6 +198,7 @@ def create_lead(
     raw_payload: dict | None = None,
     allow_duplicate: bool = False,
     background_tasks: BackgroundTasks | None = None,
+    created_at: datetime.datetime | None = None,
 ) -> Lead:
     """
     Create a new lead.
@@ -258,11 +260,19 @@ def create_lead(
         raw_payload=raw_payload,
         assigned_to=assigned_to,
         score=0,  # placeholder; re-computed below
+        # created_at override: used when importing historical leads so the
+        # original lead date is preserved rather than defaulting to now()
+        **({"created_at": created_at} if created_at is not None else {}),
     )
     lead.score = compute_score(lead)
     db.add(lead)
-    db.commit()
-    db.refresh(lead)
+    try:
+        db.commit()
+        db.refresh(lead)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("create_lead — commit failed: %s", exc)
+        raise HTTPException(503, detail="Could not save. Please try again.")
 
     # Queue WhatsApp welcome (non-blocking background task)
     if phone and background_tasks is not None:
@@ -397,8 +407,13 @@ def update_lead(db: Session, lead_id: int, **fields) -> Lead:
         lead.phone_key = compute_phone_key(fields["phone"])
 
     lead.score = compute_score(lead)
-    db.commit()
-    db.refresh(lead)
+    try:
+        db.commit()
+        db.refresh(lead)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("update_lead — commit failed: %s", exc)
+        raise HTTPException(503, detail="Could not save. Please try again.")
     return lead
 
 
@@ -406,7 +421,12 @@ def soft_delete_lead(db: Session, lead_id: int) -> None:
     """Mark a lead as deleted without removing the row."""
     lead = get_lead(db, lead_id)
     lead.deleted_at = datetime.datetime.now(_tz.utc)
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("soft_delete_lead — commit failed: %s", exc)
+        raise HTTPException(503, detail="Could not save. Please try again.")
 
 
 # ── Convert to Contact ────────────────────────────────────────────────────────
@@ -438,12 +458,63 @@ def convert_lead(db: Session, lead_id: int, current_user_id: int) -> dict:
     if lead.status == "converted":
         raise HTTPException(status_code=409, detail="Lead has already been converted")
 
-    # Contacts table not yet built — mark lead as converted without creating a contact.
-    # Restore the full contact-creation logic once the contacts module is migrated.
+    # Check if a live contact with the same phone already exists.
+    # This avoids creating a duplicate when the same person was both a lead and an
+    # existing contact (e.g. they were manually added before the lead came in).
+    existing: Contact | None = None
+    if lead.phone_key:
+        existing = (
+            db.query(Contact)
+            .filter(
+                Contact.phone_key == lead.phone_key,
+                Contact.deleted_at.is_(None),
+            )
+            .first()
+        )
+
+    if existing:
+        # Link lead to the already-existing contact (no new row created).
+        contact_id = existing.id
+        created = False
+    else:
+        # Build the full name from first_name + last_name fields on the lead.
+        name_parts = [p for p in [getattr(lead, "first_name", None), getattr(lead, "last_name", None)] if p]
+        full_name = " ".join(name_parts).strip() or None
+
+        new_contact = Contact(
+            name=full_name,
+            phone=lead.phone or "",
+            phone_key=lead.phone_key or "",
+            contact_type="consumer",
+            notes=lead.notes,
+            address=getattr(lead, "address", None),
+            assigned_to=lead.assigned_to,
+            created_by=current_user_id,
+            lead_source_id=getattr(lead, "source_id", None),
+            lead_id=lead.id,
+        )
+        db.add(new_contact)
+        try:
+            db.flush()   # get new_contact.id before the commit
+        except SQLAlchemyError as exc:
+            db.rollback()
+            logger.error("convert_lead — flush failed: %s", exc)
+            raise HTTPException(503, detail="Could not save. Please try again.")
+        contact_id = new_contact.id
+        created = True
+
+    # Mark the lead as converted and store the contact link.
     lead.status = "converted"
     lead.converted_at = datetime.datetime.now(_tz.utc)
-    db.commit()
-    return {"lead_id": lead.id, "contact_id": None, "created": False}
+    if hasattr(lead, "contact_id"):
+        lead.contact_id = contact_id
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("convert_lead — commit failed: %s", exc)
+        raise HTTPException(503, detail="Could not save. Please try again.")
+    return {"lead_id": lead.id, "contact_id": contact_id, "created": created}
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
@@ -485,4 +556,77 @@ def get_lead_stats(db: Session) -> dict:
     by_source = {src_name_map.get(r.source_id, "Unknown"): r.cnt for r in source_rows}
     total = sum(by_status.values())
 
-    return {"by_status": by_status, "by_source": by_source, "total": total}
+    # Unassigned breakdown by source — used by the Bulk Assign modal.
+    unassigned_rows = db.execute(
+        select(Lead.source_id, func.count(Lead.id).label("cnt"))
+        .where(Lead.deleted_at.is_(None), Lead.assigned_to.is_(None))
+        .group_by(Lead.source_id)
+    ).all()
+    unassigned_by_source = {
+        src_name_map.get(r.source_id, "Unknown"): r.cnt for r in unassigned_rows
+    }
+
+    return {
+        "by_status": by_status,
+        "by_source": by_source,
+        "total": total,
+        "unassigned_by_source": unassigned_by_source,
+    }
+
+
+# ── Bulk assign ───────────────────────────────────────────────────────────────
+
+def bulk_assign_leads(db: Session, assignments: list[dict]) -> int:
+    """
+    Assign batches of unassigned leads to employees by source.
+
+    HOW IT WORKS:
+      For each rule {source_id, assigned_to, count}:
+        1. Find the N oldest unassigned leads from that source (or any source if
+           source_id is None), ordered by created_at ASC so the earliest enquiries
+           get picked up first.
+        2. UPDATE their assigned_to to the given employee id.
+
+    Returns total number of rows updated across all rules.
+
+    WHY ORDER BY created_at ASC?
+        Fairness — leads that have been waiting longest get assigned first.
+        This is consistent with how most CRMs prioritise assignment queues.
+    """
+    total_assigned = 0
+
+    for rule in assignments:
+        source_id = rule.get("source_id")
+        assigned_to = rule["assigned_to"]
+        count = rule["count"]
+
+        query = (
+            select(Lead.id)
+            .where(Lead.deleted_at.is_(None), Lead.assigned_to.is_(None))
+            .order_by(Lead.created_at.asc())
+            .limit(count)
+        )
+        if source_id is not None:
+            query = query.where(Lead.source_id == source_id)
+
+        lead_ids = [row[0] for row in db.execute(query).all()]
+        if not lead_ids:
+            continue
+
+        db.execute(
+            Lead.__table__.update()
+            .where(Lead.id.in_(lead_ids))
+            .values(
+                assigned_to=assigned_to,
+                updated_at=datetime.datetime.now(_tz.utc),
+            )
+        )
+        total_assigned += len(lead_ids)
+
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("bulk_assign_leads — commit failed: %s", exc)
+        raise HTTPException(503, detail="Could not save. Please try again.")
+    return total_assigned

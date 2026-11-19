@@ -1,4 +1,6 @@
-# Ogera CRM — Auth API Reference
+# Ogera CRM — Authentication API Reference
+
+> **Note:** This file is kept at the repo root for quick access. The full module documentation lives in [`modules/authentication.md`](modules/authentication.md). For the Leads module API see [`modules/leads.md`](modules/leads.md).
 
 Base URL: `https://<your-vercel-domain>/`
 

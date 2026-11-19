@@ -17,26 +17,33 @@ AUTH:
 """
 
 import datetime
+import logging
 from datetime import timezone as _tz
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from database import get_db, get_session_for_schema
 from models.employee import Employee
 from schemas.lead import (
+    BulkAssignRequest,
+    BulkAssignResponse,
     ConvertLeadResponse,
     LeadCreate,
     LeadListResponse,
     LeadResponse,
     LeadStatsResponse,
     LeadUpdate,
+    WhatsAppSendResponse,
 )
 import services.lead_service as lead_svc
 from services.lead_access import is_head
 from services.whatsapp_service import send_whatsapp_template
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/leads",
@@ -63,18 +70,22 @@ def list_leads(
     The list is sorted newest-first. Use `skip` and `limit` for pagination.
     """
     schema = current_user._tenant_schema
-    with get_session_for_schema(schema) as db:
-        return lead_svc.list_leads(
-            db,
-            status=status,
-            source_id=source_id,
-            assigned_to=assigned_to,
-            date_from=date_from,
-            date_to=date_to,
-            search=search,
-            skip=skip,
-            limit=limit,
-        )
+    try:
+        with get_session_for_schema(schema) as db:
+            return lead_svc.list_leads(
+                db,
+                status=status,
+                source_id=source_id,
+                assigned_to=assigned_to,
+                date_from=date_from,
+                date_to=date_to,
+                search=search,
+                skip=skip,
+                limit=limit,
+            )
+    except OperationalError as exc:
+        logger.error("list_leads — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
 
 @router.get("/stats", response_model=LeadStatsResponse, summary="Lead counts by status and source")
@@ -84,16 +95,24 @@ def lead_stats(current_user: Employee = Depends(get_current_user)):
     Used by the dashboard to show a mini lead summary widget.
     """
     schema = current_user._tenant_schema
-    with get_session_for_schema(schema) as db:
-        return lead_svc.get_lead_stats(db)
+    try:
+        with get_session_for_schema(schema) as db:
+            return lead_svc.get_lead_stats(db)
+    except OperationalError as exc:
+        logger.error("lead_stats — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
 
 @router.get("/{lead_id}", response_model=LeadResponse, summary="Get one lead")
 def get_lead(lead_id: int, current_user: Employee = Depends(get_current_user)):
     """Return full detail for a single lead (includes source_name)."""
     schema = current_user._tenant_schema
-    with get_session_for_schema(schema) as db:
-        return lead_svc.get_lead_detail(db, lead_id)
+    try:
+        with get_session_for_schema(schema) as db:
+            return lead_svc.get_lead_detail(db, lead_id)
+    except OperationalError as exc:
+        logger.error("get_lead — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
 
 @router.post("", response_model=LeadResponse, status_code=201, summary="Create a lead manually")
@@ -113,23 +132,30 @@ def create_lead(
     """
     if allow_duplicate and not is_head(current_user):
         raise HTTPException(status_code=403, detail="Only admin or manager can bypass duplicate check")
+    if body.created_at is not None and not is_head(current_user):
+        raise HTTPException(status_code=403, detail="Only admin or manager can backdate leads")
     schema = current_user._tenant_schema
-    with get_session_for_schema(schema) as db:
-        return lead_svc.create_lead(
-            db=db,
-            schema=schema,
-            first_name=body.first_name,
-            source_id=body.source_id,
-            last_name=body.last_name,
-            phone=body.phone,
-            email=body.email,
-            notes=body.notes,
-            address=body.address,
-            tags=body.tags,
-            assigned_to=body.assigned_to,
-            allow_duplicate=allow_duplicate,
-            background_tasks=background_tasks,
-        )
+    try:
+        with get_session_for_schema(schema) as db:
+            return lead_svc.create_lead(
+                db=db,
+                schema=schema,
+                first_name=body.first_name,
+                source_id=body.source_id,
+                last_name=body.last_name,
+                phone=body.phone,
+                email=body.email,
+                notes=body.notes,
+                address=body.address,
+                tags=body.tags,
+                assigned_to=body.assigned_to,
+                allow_duplicate=allow_duplicate,
+                background_tasks=background_tasks,
+                created_at=body.created_at,
+            )
+    except OperationalError as exc:
+        logger.error("create_lead — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
 
 @router.put("/{lead_id}", response_model=LeadResponse, summary="Update a lead")
@@ -145,9 +171,13 @@ def update_lead(
     without touching any other fields.
     """
     schema = current_user._tenant_schema
-    with get_session_for_schema(schema) as db:
-        updates = body.model_dump(exclude_none=True)
-        return lead_svc.update_lead(db, lead_id, **updates)
+    try:
+        with get_session_for_schema(schema) as db:
+            updates = body.model_dump(exclude_none=True)
+            return lead_svc.update_lead(db, lead_id, **updates)
+    except OperationalError as exc:
+        logger.error("update_lead — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
 
 @router.delete("/{lead_id}", status_code=204, summary="Soft-delete a lead")
@@ -157,8 +187,12 @@ def delete_lead(lead_id: int, current_user: Employee = Depends(get_current_user)
     The lead is no longer shown in any list but its data is preserved.
     """
     schema = current_user._tenant_schema
-    with get_session_for_schema(schema) as db:
-        lead_svc.soft_delete_lead(db, lead_id)
+    try:
+        with get_session_for_schema(schema) as db:
+            lead_svc.soft_delete_lead(db, lead_id)
+    except OperationalError as exc:
+        logger.error("delete_lead — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
 
 @router.post("/{lead_id}/convert", response_model=ConvertLeadResponse, summary="Convert lead to Contact")
@@ -172,12 +206,16 @@ def convert_lead(lead_id: int, current_user: Employee = Depends(get_current_user
     After conversion, navigate the user to /contacts/{contact_id}.
     """
     schema = current_user._tenant_schema
-    with get_session_for_schema(schema) as db:
-        result = lead_svc.convert_lead(db, lead_id, current_user.id)
-        return result
+    try:
+        with get_session_for_schema(schema) as db:
+            result = lead_svc.convert_lead(db, lead_id, current_user.id)
+            return result
+    except OperationalError as exc:
+        logger.error("convert_lead — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
 
-@router.post("/{lead_id}/send-whatsapp", response_model=dict, summary="Manually send WhatsApp message")
+@router.post("/{lead_id}/send-whatsapp", response_model=WhatsAppSendResponse, summary="Manually send WhatsApp message")
 def send_whatsapp(lead_id: int, current_user: Employee = Depends(get_current_user)):
     """
     Manually trigger the WhatsApp welcome template for a lead.
@@ -186,13 +224,54 @@ def send_whatsapp(lead_id: int, current_user: Employee = Depends(get_current_use
     or when a staff member wants to re-send after updating the phone number.
     """
     schema = current_user._tenant_schema
-    with get_session_for_schema(schema) as db:
-        lead = lead_svc.get_lead(db, lead_id)
-        if not lead.phone:
-            return {"success": False, "detail": "Lead has no phone number"}
-        sent = send_whatsapp_template(lead.phone, "welcome_lead", [lead.first_name])
-        if sent:
-            lead.whatsapp_sent = True
-            lead.whatsapp_sent_at = datetime.datetime.now(_tz.utc)
-            db.commit()
-        return {"success": sent}
+    try:
+        with get_session_for_schema(schema) as db:
+            lead = lead_svc.get_lead(db, lead_id)
+            if not lead.phone:
+                raise HTTPException(status_code=400, detail="Lead has no phone number")
+            sent = send_whatsapp_template(lead.phone, "welcome_lead", [lead.first_name])
+            if sent:
+                lead.whatsapp_sent = True
+                lead.whatsapp_sent_at = datetime.datetime.now(_tz.utc)
+                try:
+                    db.commit()
+                except SQLAlchemyError as exc:
+                    db.rollback()
+                    logger.error("send_whatsapp — commit failed: %s", exc)
+                    raise HTTPException(503, detail="Could not save. Please try again.")
+            return {"success": sent}
+    except OperationalError as exc:
+        logger.error("send_whatsapp — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
+
+
+@router.post("/bulk-assign", response_model=BulkAssignResponse, summary="Bulk assign unassigned leads by source")
+def bulk_assign_leads(
+    body: BulkAssignRequest,
+    current_user: Employee = Depends(get_current_user),
+):
+    """
+    Assign batches of unassigned leads to employees.
+
+    BODY EXAMPLE:
+        {
+          "assignments": [
+            { "source_id": 3, "assigned_to": 5, "count": 15 },
+            { "source_id": 3, "assigned_to": 7, "count": 15 },
+            { "source_id": 5, "assigned_to": 5, "count": 20 }
+          ]
+        }
+
+    Each rule picks the N oldest unassigned leads from that source and assigns
+    them to the given employee. source_id=null means "any source".
+    Returns the total number of leads actually assigned (may be less than
+    requested if fewer unassigned leads exist for that source).
+    """
+    schema = current_user._tenant_schema
+    try:
+        with get_session_for_schema(schema) as db:
+            assigned = lead_svc.bulk_assign_leads(db, [r.model_dump() for r in body.assignments])
+    except OperationalError as exc:
+        logger.error("bulk_assign_leads — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
+    return BulkAssignResponse(assigned=assigned)

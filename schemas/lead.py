@@ -14,19 +14,31 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from phone_utils import clean_phone
 
 
+def _normalise_email(v: str | None) -> str | None:
+    """Strip, lowercase, and basic-validate an email. Raises ValueError for clearly invalid input."""
+    if v is None or str(v).strip() == "":
+        return None
+    v = str(v).strip().lower()
+    if "@" not in v or "." not in v.split("@", 1)[-1]:
+        raise ValueError("Enter a valid email address")
+    return v
+
+
 # ── Authenticated lead schemas ────────────────────────────────────────────────
 
 class LeadCreate(BaseModel):
     first_name: str = Field(min_length=1, max_length=200)
     last_name: str | None = Field(default=None, max_length=100)
-    phone: str | None = Field(default=None)
-    email: str | None = Field(default=None)
+    phone: str | None = Field(default=None, max_length=30)
+    email: str | None = Field(default=None, max_length=254)
     # source_id → FK to lead_sources.id; default Walk-in (1) if staff doesn't specify
     source_id: int | None = None
-    notes: str | None = None
-    address: str | None = None
+    notes: str | None = Field(default=None, max_length=5000)
+    address: str | None = Field(default=None, max_length=500)
     tags: list[str] | None = None
     assigned_to: int | None = None
+    # created_at: optional override for imports (historical leads from sheets / Meta Ads)
+    created_at: datetime.datetime | None = None
 
     @field_validator("phone", mode="before")
     @classmethod
@@ -34,17 +46,22 @@ class LeadCreate(BaseModel):
         if v is None or str(v).strip() == "":
             return None
         return clean_phone(str(v))
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _validate_email(cls, v: str | None) -> str | None:
+        return _normalise_email(v)
 
 
 class LeadUpdate(BaseModel):
     first_name: str | None = Field(default=None, min_length=1, max_length=200)
     last_name: str | None = Field(default=None, max_length=100)
-    phone: str | None = None
-    email: str | None = None
+    phone: str | None = Field(default=None, max_length=30)
+    email: str | None = Field(default=None, max_length=254)
     status: Literal["new", "contacted", "qualified", "converted", "lost"] | None = None
     source_id: int | None = None
-    notes: str | None = None
-    address: str | None = None
+    notes: str | None = Field(default=None, max_length=5000)
+    address: str | None = Field(default=None, max_length=500)
     tags: list[str] | None = None
     assigned_to: int | None = None
 
@@ -54,6 +71,11 @@ class LeadUpdate(BaseModel):
         if v is None or str(v).strip() == "":
             return None
         return clean_phone(str(v))
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _validate_email(cls, v: str | None) -> str | None:
+        return _normalise_email(v)
 
 
 class LeadResponse(BaseModel):
@@ -94,6 +116,7 @@ class LeadListItem(BaseModel):
     source_name: str | None = None
     status: str
     score: int
+    tags: list[str] | None = None
     whatsapp_sent: bool
     assigned_to: int | None
     assigned_name: str | None = None
@@ -119,6 +142,28 @@ class LeadStatsResponse(BaseModel):
     by_status: dict[str, int]
     by_source: dict[str, int]
     total: int
+    # unassigned_by_source: source_name → count of unassigned leads for that source
+    unassigned_by_source: dict[str, int] = Field(default_factory=dict)
+
+
+# ── Bulk-assign schemas ───────────────────────────────────────────────────────
+
+class BulkAssignRule(BaseModel):
+    """
+    One assignment rule: assign `count` unassigned leads from `source_id`
+    to employee `assigned_to`.  source_id=None means "any source".
+    """
+    source_id: int | None = None
+    assigned_to: int
+    count: int = Field(gt=0, le=500)
+
+
+class BulkAssignRequest(BaseModel):
+    assignments: list[BulkAssignRule] = Field(min_length=1, max_length=50)
+
+
+class BulkAssignResponse(BaseModel):
+    assigned: int
 
 
 # ── Public inbound schemas (no JWT, only API key) ─────────────────────────────
@@ -128,9 +173,9 @@ class WebsiteLeadCreate(BaseModel):
 
     first_name: str = Field(min_length=1, max_length=200)
     last_name: str | None = Field(default=None, max_length=100)
-    phone: str | None = None
-    email: str | None = None
-    notes: str | None = None
+    phone: str | None = Field(default=None, max_length=30)
+    email: str | None = Field(default=None, max_length=254)
+    notes: str | None = Field(default=None, max_length=5000)
 
     @field_validator("phone", mode="before")
     @classmethod
@@ -139,19 +184,24 @@ class WebsiteLeadCreate(BaseModel):
             return None
         return clean_phone(str(v))
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def _validate_email(cls, v: str | None) -> str | None:
+        return _normalise_email(v)
+
 
 class SheetLeadCreate(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     first_name: str = Field(min_length=1, max_length=200)
     last_name: str | None = Field(default=None, max_length=100)
-    phone: str | None = None
-    email: str | None = None
-    ad_name: str | None = None
-    form_name: str | None = None
-    campaign_id: str | None = None
-    ad_set_id: str | None = None
-    notes: str | None = None
+    phone: str | None = Field(default=None, max_length=30)
+    email: str | None = Field(default=None, max_length=254)
+    ad_name: str | None = Field(default=None, max_length=500)
+    form_name: str | None = Field(default=None, max_length=200)
+    campaign_id: str | None = Field(default=None, max_length=100)
+    ad_set_id: str | None = Field(default=None, max_length=100)
+    notes: str | None = Field(default=None, max_length=5000)
 
     @field_validator("phone", mode="before")
     @classmethod
@@ -163,10 +213,19 @@ class SheetLeadCreate(BaseModel):
         except ValueError:
             return None
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def _validate_email(cls, v: str | None) -> str | None:
+        return _normalise_email(v)
+
 
 class InboundLeadResponse(BaseModel):
     id: int
     status: str = "created"
+
+
+class WhatsAppSendResponse(BaseModel):
+    success: bool
 
 
 # ── Tenant API key management schemas ─────────────────────────────────────────
