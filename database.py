@@ -148,6 +148,23 @@ def get_public_db():
 
 
 @contextmanager
+def get_public_db_ctx():
+    """
+    Context manager version of get_public_db — for use outside of FastAPI Depends.
+
+    Use this when you need a public-schema session in regular code (not a route),
+    for example in the lead_inbound router's auth helper which runs before the
+    tenant schema is known.
+
+    How to use:
+        with get_public_db_ctx() as db:
+            tenant = db.scalar(select(Tenant).where(...))
+    """
+    with Session(engine, expire_on_commit=False) as db:
+        yield db
+
+
+@contextmanager
 def get_session_for_schema(schema: str):
     """
     Context manager — yields a Session scoped to the given tenant schema.
