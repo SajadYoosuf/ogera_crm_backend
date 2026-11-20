@@ -1,8 +1,11 @@
+from .lead import Lead
+from .tenant_api_key import TenantApiKey
 from .tenant import Tenant
 from .role import Role
 from .employee import Employee
 from .employee_lookup import EmployeeLookup
 from .lead_source import LeadSource
+from .lead_status import LeadStatus
 from .pipeline_stage import PipelineStage
 from .enum_value import EnumValue
 from .company_setting import CompanySetting
@@ -15,6 +18,8 @@ from .activity_log import ActivityLog
 from .contact_assignment import ContactAssignment
 from .consumer_profile import ConsumerProfile
 from .partner_profile import PartnerProfile
+from .branch import Branch
+from .contact_field_definition import ContactFieldDefinition
 from .password_reset import PasswordResetCode
 from .sale import Sale
 from .product import Product, ProductOption
@@ -27,11 +32,14 @@ from .staff_location_history import StaffLocationHistory
 from .expense import Expense, EXPENSE_CATEGORIES, EXPENSE_STATUSES
 
 __all__ = [
+    "Lead",
+    "TenantApiKey",
     "Tenant",
     "Role",
     "Employee",
     "EmployeeLookup",
     "LeadSource",
+    "LeadStatus",
     "PipelineStage",
     "EnumValue",
     "CompanySetting",
@@ -44,6 +52,8 @@ __all__ = [
     "ContactAssignment",
     "ConsumerProfile",
     "PartnerProfile",
+    "Branch",
+    "ContactFieldDefinition",
     "PasswordResetCode",
     "Sale",
     "Product",

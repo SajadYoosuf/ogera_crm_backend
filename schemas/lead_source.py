@@ -54,7 +54,7 @@ class LeadSourceSummary(BaseModel):
 
     id: int
     name: str
-    slug: str
+    slug: str | None = None
 
 
 class LeadSourceResponse(LeadSourceBase):

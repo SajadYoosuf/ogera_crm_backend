@@ -2,84 +2,55 @@
 Contact verification — defines what "verified" means for each contact type.
 
 HOW VERIFICATION WORKS:
-    A contact starts as "unverified" (new_lead stage) when created with only
-    phone + lead_source. As the team fills in more details, `missing_fields()`
-    returns an empty list and `is_verified` becomes True.
+    A contact starts as "unverified" when created with only phone + lead_source.
+    Once name, phone, and address are all filled in the contact is considered
+    verified and can advance past the new_lead pipeline stage.
 
-    A verified contact can advance past the new_lead pipeline stage.
+REQUIRED FIELDS (all contact types):
+    - phone
+    - name
+    - address
 
-REQUIRED FIELDS BY TYPE:
-    All types:    phone, name, district, address, lead_source
-    Consumer:     + house_stage
-    Partner:      + profession_type, work_area
+    district, lead_source, and profile fields (house_stage, tank_type, etc.)
+    are collected gradually and are NOT required for verification — the rep
+    should be able to move the contact forward once they have basic contact info.
 
-TWO IMPLEMENTATIONS:
-    `missing_fields(contact)` — Python function, runs on an already-loaded ORM object.
+TWO IMPLEMENTATIONS (kept in sync):
+    `missing_fields(contact)` — Python, runs on a loaded ORM object.
                                 Used in single-contact reads and stage transitions.
-    `verified_clause()`       — SQLAlchemy expression, runs inside the DB query.
-                                Used for the verified=true/false list filter and pagination.
-    Keep both in sync: a rule changed in one must change in the other.
+    `verified_clause()`       — SQLAlchemy expression, runs inside DB queries.
+                                Used for the verified=true/false list filter.
 """
 
-from sqlalchemy import and_, exists, func, or_
-from models import ConsumerProfile, Contact, PartnerProfile
+from sqlalchemy import and_, func
+from models import Contact
+
+
+def _filled_str(value: str | None) -> bool:
+    return bool((value or "").strip())
 
 
 def missing_fields(contact: Contact) -> list[str]:
-    """Names of the details still pending on a contact. Empty list means verified."""
-    missing = [
+    """Names of the basic details still missing. Empty list → verified."""
+    return [
         field
-        for field in ("phone", "name", "district", "address")
-        if not (getattr(contact, field) or "").strip()
+        for field in ("phone", "name", "address")
+        if not _filled_str(getattr(contact, field))
     ]
-    if contact.lead_source_id is None:
-        missing.append("lead_source")
-
-    if contact.contact_type == "consumer":
-        if contact.consumer_profile is None or not contact.consumer_profile.house_stage:
-            missing.append("house_stage")
-
-    if contact.contact_type == "partner":
-        if contact.partner_profile is None or not (contact.partner_profile.profession_type or "").strip():
-            missing.append("profession_type")
-        if contact.partner_profile is None or not (contact.partner_profile.work_area or "").strip():
-            missing.append("work_area")
-
-    return missing
 
 
-def _filled(column):
+def _filled_col(column):
     """True in SQL when a column is not null, not empty, and not whitespace-only."""
     return func.length(func.trim(func.coalesce(column, ""))) > 0
 
 
 def verified_clause():
-    """SQL twin of `missing_fields() == []`, so the list can filter and paginate in the database.
+    """SQL twin of `missing_fields(contact) == []`.
 
-    Keep in sync with `missing_fields()` above: any rule changed in one must change in the other.
+    Keep in sync with `missing_fields()` above.
     """
-    consumer_ok = or_(
-        Contact.contact_type != "consumer",
-        exists().where(
-            ConsumerProfile.contact_id == Contact.id, _filled(ConsumerProfile.house_stage)
-        ),
-    )
-
-    partner_ok = or_(
-        Contact.contact_type != "partner",
-        exists().where(
-            PartnerProfile.contact_id == Contact.id,
-            _filled(PartnerProfile.profession_type),
-            _filled(PartnerProfile.work_area),
-        ),
-    )
-
     return and_(
-        _filled(Contact.phone),
-        _filled(Contact.name),
-        _filled(Contact.district),
-        _filled(Contact.address),
-        Contact.lead_source_id.is_not(None),
-        consumer_ok,
-        partner_ok,
+        _filled_col(Contact.phone),
+        _filled_col(Contact.name),
+        _filled_col(Contact.address),
     )

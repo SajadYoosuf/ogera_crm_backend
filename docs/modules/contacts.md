@@ -2,7 +2,9 @@
 
 ## What this module does
 
-The Contacts module manages every person or business tracked in the CRM — consumers (home owners, buyers) and partners (dealers, installers, professionals). It handles listing, filtering, creating, editing, importing from CSV/Excel, exporting to Excel, bulk-assigning to sales staff, and viewing stats.
+The Contacts module manages every person or business tracked in the CRM — consumers (home owners, buyers) and partners (installers, professionals, dealers). It handles listing, filtering, creating, editing, importing from CSV/Excel, exporting to Excel, bulk-assigning to sales staff, and viewing stats.
+
+> **Note on "dealer" type:** An older version had a `dealer` contact type as a third enum value. It was removed in commit `7516458`. The `ContactType` enum now only has `consumer` and `partner`. If you see `contact_type = 'dealer'` rows in the database they are legacy data — `scripts/remove_dealer_stages.py` can clean up leftover pipeline stages.
 
 ---
 
@@ -17,7 +19,7 @@ The Contacts module manages every person or business tracked in the CRM — cons
 | `phone` | String | Required, unique per tenant |
 | `district` | String | Optional |
 | `address` | String | Optional |
-| `contact_type` | Enum | `consumer` / `partner` / `dealer` |
+| `contact_type` | Enum | `consumer` / `partner` |
 | `lead_source_id` | FK → `lead_sources` | Where the contact came from |
 | `assigned_to` | FK → `employees` | Sales person; NULL = unassigned |
 | `is_verified` | Boolean | Verification gate flag |
@@ -78,7 +80,7 @@ List contacts with filtering, sorting, and pagination.
 | `page` | int | Page number (default 1) |
 | `page_size` | int | Items per page (default 20, max 100) |
 | `search` | string | Search name or phone |
-| `contact_type` | string | `consumer` / `partner` / `dealer` |
+| `contact_type` | string | `consumer` / `partner` |
 | `lead_source_id` | int | Filter by source |
 | `assigned_to` | int | Filter by assigned employee |
 | `is_verified` | bool | Filter verified/unverified |
@@ -243,7 +245,7 @@ Returns the list of valid partner type values. Reads from `contact_field_definit
 
 Returns the count of contacts per `contact_type`.
 
-**Returns:** `{ "consumer": 450, "partner": 120, "dealer": 30 }`
+**Returns:** `{ "consumer": 450, "partner": 120 }`
 
 ---
 

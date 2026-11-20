@@ -127,7 +127,7 @@ def _get_expense(db: Session, expense_id: int, current_user: Employee) -> Expens
     if expense is None:
         raise HTTPException(status_code=404, detail="Expense not found")
     # Staff only see their own expenses.
-    if current_user.role not in HEAD_OFFICE_ROLES and expense.employee_id != current_user.id:
+    if getattr(current_user, "_role_slug", None) not in HEAD_OFFICE_ROLES and expense.employee_id != current_user.id:
         raise HTTPException(status_code=404, detail="Expense not found")
     return expense
 
@@ -149,7 +149,7 @@ def create_expense(
     Creates a new expense claim with status = pending.
     Admin and manager cannot submit expenses — they approve them instead.
     """
-    if current_user.role in HEAD_OFFICE_ROLES:
+    if getattr(current_user, "_role_slug", None) in HEAD_OFFICE_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Managers and admins review expenses; they do not submit them",
@@ -202,7 +202,7 @@ def list_expenses(
     )
 
     # Scope: staff see only their own records
-    if current_user.role not in HEAD_OFFICE_ROLES:
+    if getattr(current_user, "_role_slug", None) not in HEAD_OFFICE_ROLES:
         base_q = base_q.filter(Expense.employee_id == current_user.id)
     elif employee_id is not None:
         base_q = base_q.filter(Expense.employee_id == employee_id)
@@ -224,7 +224,7 @@ def list_expenses(
         db.query(Expense)
         .filter(Expense.deleted_at.is_(None), Expense.status == "pending")
     )
-    if current_user.role not in HEAD_OFFICE_ROLES:
+    if getattr(current_user, "_role_slug", None) not in HEAD_OFFICE_ROLES:
         pending_q = pending_q.filter(Expense.employee_id == current_user.id)
     pending_count = pending_q.count()
 
@@ -293,7 +293,7 @@ def approve_expense(
     Approves the expense. Manager and admin only.
     Returns 409 when the expense is not pending.
     """
-    if current_user.role not in HEAD_OFFICE_ROLES:
+    if getattr(current_user, "_role_slug", None) not in HEAD_OFFICE_ROLES:
         raise HTTPException(status_code=403, detail="Only managers and admins may approve expenses")
     expense = _get_expense(db, expense_id, current_user)
     if expense.status != "pending":
@@ -326,7 +326,7 @@ def reject_expense(
     The submitter gets an in-app notification and an FCM push that carries the
     rejection note, so they know why the claim was refused.
     """
-    if current_user.role not in HEAD_OFFICE_ROLES:
+    if getattr(current_user, "_role_slug", None) not in HEAD_OFFICE_ROLES:
         raise HTTPException(status_code=403, detail="Only managers and admins may reject expenses")
     # min_length=1 lets "   " through, so check again after trimming.
     reason = body.rejection_reason.strip()

@@ -18,7 +18,7 @@ Role row and attaches employee._role_slug as a transient attribute for permissio
 import datetime
 from typing import Optional, List, TYPE_CHECKING
 
-from sqlalchemy import Column, SmallInteger, DateTime, String, func
+from sqlalchemy import BigInteger, Column, ForeignKey, SmallInteger, DateTime, String, func
 from sqlmodel import SQLModel, Field, Relationship
 
 if TYPE_CHECKING:
@@ -70,6 +70,13 @@ class Employee(SQLModel, table=True):
         sa_column=Column("deleted_at", DateTime, nullable=True),
     )
 
+    # FK to branches table (ventino schema). Tells which branch office this employee belongs to.
+    # Used in contacts list to show "which branch created this lead".
+    branch_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column("branch_id", BigInteger, ForeignKey("branches.id"), nullable=True),
+    )
+
     # --- Relationships (Python only — no extra columns) ---
 
     assigned_contacts: List["Contact"] = Relationship(
@@ -85,3 +92,8 @@ class Employee(SQLModel, table=True):
     lead_stage_changes: List["LeadStage"] = Relationship(
         back_populates="changed_by_employee",
     )
+
+    # branch_id FK is defined above. The Branch relationship is NOT declared here
+    # because Branch uses SQLAlchemy Base (not SQLModel) and SQLModel's metaclass
+    # cannot handle the type annotation correctly. If branch details are needed for
+    # an employee, query Branch directly by branch_id.

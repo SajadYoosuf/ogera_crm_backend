@@ -1,41 +1,47 @@
-from typing import Annotated
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+"""
+ConsumerProfile schemas — request and response shapes for the consumer profile.
 
-# House stage and tank type are option values from Settings > Lists & Options (house_stage, tank_type).
-# The route checks them against the active options; the schema only cleans the text.
-OptionValue = Annotated[str, Field(min_length=1, max_length=50)]
+WHAT IS A CONSUMER PROFILE?
+    Extra questions answered for consumer-type contacts. For ventino: house stage, tank type,
+    tank age. For another tenant: completely different fields.
+
+    Answers are stored as a JSONB dict in consumer_profiles.data:
+        {"house_stage": "occupied", "tank_type": "plastic", "tank_age": 3}
+
+HOW VALIDATION WORKS:
+    The schema itself only checks that `data` is a dict (any keys allowed).
+    Field-level validation (required fields, dropdown options, type checking) happens
+    at the service layer by reading contact_field_definitions from the DB.
+    See services/contact_field_service.py for that logic.
+
+WHY NOT TYPED FIELDS IN THE SCHEMA?
+    If we defined `house_stage: str | None`, `tank_type: str | None` etc., these schemas
+    would only work for ventino. The JSONB/dict approach works for every tenant.
+"""
+
+from typing import Any
+from pydantic import BaseModel, ConfigDict
 
 
 class ConsumerProfileBase(BaseModel):
-    house_stage: OptionValue | None = None
-    current_tank_type: OptionValue | None = None
-    current_tank_capacity: Annotated[int, Field(ge=0)] | None = None  # litres
-    current_tank_age: Annotated[int, Field(ge=0)] | None = None       # years
-
-    @field_validator("house_stage", "current_tank_type", mode="before")
-    @classmethod
-    def blank_is_none(cls, v):
-        if isinstance(v, str):
-            v = v.strip()
-            return v or None
-        return v
+    # All profile answers as a free-form dict.
+    # Keys and values depend on the tenant's contact_field_definitions.
+    # Ventino example: {"house_stage": "occupied", "tank_type": "plastic", "tank_age": 3}
+    data: dict[str, Any] = {}
 
 
 class ConsumerProfileCreate(ConsumerProfileBase):
     contact_id: int
 
 
-class ConsumerProfileUpdate(ConsumerProfileBase):
-    pass
+class ConsumerProfileUpdate(BaseModel):
+    # None means "don't touch profile"; {} means "clear all answers"
+    data: dict[str, Any] | None = None
 
 
 class ConsumerProfileResponse(BaseModel):
-    """Responses read as text: rows written before the option lists may still hold old values until migrated."""
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     contact_id: int
-    house_stage: str | None = None
-    current_tank_type: str | None = None
-    current_tank_capacity: int | None = None
-    current_tank_age: int | None = None
+    data: dict[str, Any] = {}

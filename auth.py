@@ -126,6 +126,27 @@ def get_current_user(credentials=Depends(security)) -> Employee:
     return employee
 
 
+def get_tenant_db(current_user: Employee = Depends(get_current_user)):
+    """
+    FastAPI dependency — yields a DB Session scoped to the authenticated employee's tenant schema.
+
+    Usage in a route:
+        db: Session = Depends(get_tenant_db)
+
+    How it works:
+        1. get_current_user (above) decodes the JWT, reads tenant from the "tenant" claim
+           (e.g. "ventino"), and attaches _tenant_schema to the returned Employee object.
+        2. This dependency opens a connection and runs SET search_path TO ventino so every
+           SQL query in the request automatically hits ventino.contacts, ventino.branches, etc.
+
+    Why not get_db():
+        get_db() opens a plain session with NO search_path override — it queries the DB
+        user's default schema (usually public), which does NOT have contacts or branches.
+    """
+    with get_session_for_schema(current_user._tenant_schema) as db:
+        yield db
+
+
 # Roles that can manage employees, settings, and other admin tasks.
 HEAD_OFFICE_ROLES = ("admin", "manager")
 

@@ -1,20 +1,17 @@
-from typing import Annotated
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from .enums import profession_key
+"""
+PartnerProfile schemas — request and response shapes for the partner profile.
 
-# Checked against the Partner types list (settings_catalog, PARTNER_TYPE) in the route, not here.
-Profession = Annotated[str, Field(min_length=1, max_length=80)]
+Same JSONB pattern as ConsumerProfile. See schemas/consumer_profile.py for full explanation.
+
+For ventino: data = {"partner_type": "plumber", "work_area": "malappuram"}
+"""
+
+from typing import Any
+from pydantic import BaseModel, ConfigDict
 
 
 class PartnerProfileBase(BaseModel):
-    profession_type: Profession
-
-    @field_validator("profession_type", mode="before")
-    @classmethod
-    def _key(cls, value):
-        return profession_key(value) if isinstance(value, str) else value
-    work_area: Annotated[str, Field(max_length=120)] | None = None
-    # referrals_sent is intentionally absent — derived at query time
+    data: dict[str, Any] = {}
 
 
 class PartnerProfileCreate(PartnerProfileBase):
@@ -22,13 +19,7 @@ class PartnerProfileCreate(PartnerProfileBase):
 
 
 class PartnerProfileUpdate(BaseModel):
-    profession_type: Profession | None = None
-
-    @field_validator("profession_type", mode="before")
-    @classmethod
-    def _key(cls, value):
-        return profession_key(value) if isinstance(value, str) else value
-    work_area: Annotated[str, Field(max_length=120)] | None = None
+    data: dict[str, Any] | None = None
 
 
 class PartnerProfileResponse(BaseModel):
@@ -36,13 +27,4 @@ class PartnerProfileResponse(BaseModel):
 
     id: int
     contact_id: int
-    profession_type: str
-    work_area: str | None = None
-
-    @field_validator("profession_type", mode="before")
-    @classmethod
-    def _normalise_legacy(cls, value):
-        # Rows written before the fixed list hold free text such as "Plumber" or "Interior Designer"
-        if isinstance(value, str):
-            return profession_key(value)
-        return value
+    data: dict[str, Any] = {}

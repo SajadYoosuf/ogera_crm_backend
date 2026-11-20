@@ -128,7 +128,7 @@ def _contact_filter(start: datetime.date | None, end: datetime.date | None) -> d
 
 
 def _count_contacts(db: Session, user: Employee, f: dict) -> int:
-    return contact_query(db, f, lambda cur: (func.count(Contact.id),), user).scalar() or 0
+    return contact_query(db, f, user).count()
 
 
 def _count_won(db: Session, user: Employee, start: datetime.date | None, end: datetime.date | None) -> int:
@@ -211,7 +211,7 @@ def _followup_item(fs: FollowupSchedule, today: datetime.date) -> FollowupItem:
 
 def _recent_leads(db: Session, user: Employee) -> list[RecentLead]:
     rows = (
-        contact_query(db, {}, lambda cur: (Contact, cur), user)
+        contact_query(db, {}, user)
         .options(joinedload(Contact.assigned_employee))
         .order_by(Contact.created_at.desc(), Contact.id.desc())
         .limit(RECENT_LIMIT)

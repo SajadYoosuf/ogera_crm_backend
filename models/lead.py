@@ -19,6 +19,13 @@ COLUMN NOTES:
   deleted_at      — soft-delete timestamp
   contact_id      — set when lead is converted to a Contact
   converted_at    — timestamp of conversion
+  branch_id       — FK -> branches.id. Defaults to the acting employee's own
+                    branch (reselectable) whenever created_by is set — that
+                    covers manual creation AND an employee-run import.
+                    Always NULL for the webhook/inbound channels (website,
+                    Meta Ads sheet, WhatsApp) — those have no logged-in
+                    employee, so created_by is None and there is no branch
+                    to default from.
 """
 
 import datetime
@@ -85,6 +92,23 @@ class Lead(Base):
     converted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime)
     contact_id: Mapped[int | None] = mapped_column(BigInteger)
 
+    # ── Branch ────────────────────────────────────────────────────────────────
+    # NULL for the webhook/inbound channels (website, Meta Ads sheet, WhatsApp) —
+    # they have no logged-in employee to default a branch from.
+    branch_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("branches.id", ondelete="SET NULL"))
+    branch: Mapped["Branch | None"] = relationship("Branch", foreign_keys=[branch_id])
+
+    # ── Display-only helpers ─────────────────────────────────────────────────
+    # Not real columns — read off the relationships above so LeadResponse can
+    # return a name directly instead of making the frontend look up an id.
+    @property
+    def created_by_name(self) -> str | None:
+        return self.creator.name if self.creator else None
+
+    @property
+    def branch_name(self) -> str | None:
+        return self.branch.name if self.branch else None
+
     # ── Timestamps ────────────────────────────────────────────────────────────
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -95,4 +119,5 @@ class Lead(Base):
         Index("idx_leads_status", "status"),
         Index("idx_leads_assigned", "assigned_to"),
         Index("idx_leads_created", "created_at"),
+        Index("idx_leads_branch", "branch_id"),
     )

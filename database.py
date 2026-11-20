@@ -197,3 +197,5 @@ def get_session_for_schema(schema: str):
         # commit the connection's own transaction. conn.commit() here does that.
         # On any exception the with engine.connect() block rolls back automatically.
         conn.commit()
+
+

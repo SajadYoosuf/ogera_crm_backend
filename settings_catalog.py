@@ -209,17 +209,19 @@ def usage_counts(db: Session, category: str) -> dict[str, int]:
             .filter(LeadStage.loss_reason.isnot(None)).group_by(LeadStage.loss_reason).all()
         )
     elif category == PARTNER_TYPE:
+        col = PartnerProfile.data["partner_type"].as_string()
         rows = (
-            db.query(PartnerProfile.profession_type, func.count(PartnerProfile.id))
+            db.query(col, func.count(PartnerProfile.id))
             .join(Contact, Contact.id == PartnerProfile.contact_id)
-            .filter(Contact.deleted_at.is_(None)).group_by(PartnerProfile.profession_type).all()
+            .filter(Contact.deleted_at.is_(None)).group_by(col).all()
         )
     elif category in (HOUSE_STAGE, TANK_TYPE):
-        column = ConsumerProfile.house_stage if category == HOUSE_STAGE else ConsumerProfile.current_tank_type
+        field = "house_stage" if category == HOUSE_STAGE else "tank_type"
+        col = ConsumerProfile.data[field].as_string()
         rows = (
-            db.query(column, func.count(ConsumerProfile.id))
+            db.query(col, func.count(ConsumerProfile.id))
             .join(Contact, Contact.id == ConsumerProfile.contact_id)
-            .filter(Contact.deleted_at.is_(None), column.isnot(None)).group_by(column).all()
+            .filter(Contact.deleted_at.is_(None), col.isnot(None)).group_by(col).all()
         )
     else:  # district is free text on the contact
         rows = (

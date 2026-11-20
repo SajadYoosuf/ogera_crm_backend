@@ -61,7 +61,7 @@ def create_activity(
 
     done_by = current_user.id
     if body.done_by is not None and body.done_by != current_user.id:
-        if current_user.role not in _CAN_LOG_AS_OTHER:
+        if getattr(current_user, "_role_slug", None) not in _CAN_LOG_AS_OTHER:
             raise HTTPException(status_code=403, detail="Only admin or manager can log on behalf of another employee")
         emp = db.query(Employee).filter(Employee.id == body.done_by, Employee.deleted_at.is_(None)).first()
         if not emp:

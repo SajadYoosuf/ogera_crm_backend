@@ -24,6 +24,8 @@ FUNCTIONS IN THIS FILE:
     soft_delete_lead(db, id)    — sets deleted_at (never hard-deletes)
     convert_lead(db, ...)       — creates a Contact from the lead data
     get_lead_stats(db)          — counts by status and source
+    list_lead_statuses(db)      — active rows of the lead_statuses table
+    ensure_valid_status(db, s)  — 400s unless s is an active status slug or "converted"
 """
 
 import datetime
@@ -38,9 +40,29 @@ from sqlalchemy.orm import Session
 from models.contact import Contact
 from models.employee import Employee
 from models.lead import Lead
+from business_time import ist_day_start_utc
+from models.lead_status import LeadStatus
 from phone_utils import phone_key as compute_phone_key
 
 logger = logging.getLogger(__name__)
+
+
+def _preload_display_relations(lead: Lead) -> None:
+    """
+    Touch lead.creator and lead.branch once while the session is still open.
+
+    WHY THIS IS NEEDED:
+        LeadResponse includes created_by_name/branch_name, which read these two
+        relationships lazily (see the @property on the Lead model). create_lead
+        and update_lead return the raw Lead object from inside a
+        `with get_session_for_schema(...)` block; by the time FastAPI serializes
+        the response, that block has already exited and closed the session, so
+        any NOT-yet-loaded relationship raises DetachedInstanceError. Accessing
+        them here, before the session closes, caches the values on the object
+        so they're safe to read after detachment.
+    """
+    _ = lead.creator
+    _ = lead.branch
 
 
 # ── Lead scoring ──────────────────────────────────────────────────────────────
@@ -200,6 +222,7 @@ def create_lead(
     background_tasks: BackgroundTasks | None = None,
     created_at: datetime.datetime | None = None,
     created_by: int | None = None,
+    branch_id: int | None = None,
 ) -> Lead:
     """
     Create a new lead.
@@ -208,17 +231,28 @@ def create_lead(
       1. Compute phone_key from phone
       2. Dedup check (unless allow_duplicate=True)
       3. Auto-assign if assigned_to not provided
-      4. Compute initial score
-      5. INSERT lead row (created_by = the employee who entered it, or None)
-      6. Queue WhatsApp welcome message (background task, best-effort)
+      4. Default branch_id to the creating employee's own branch, if any
+      5. Compute initial score
+      6. INSERT lead row (created_by = the employee who entered it, or None)
+      7. Queue WhatsApp welcome message (background task, best-effort)
 
-    created_by: employee.id of the staff member creating the lead. Pass None for
-    leads from webhooks or imports that have no logged-in employee.
+    created_by: employee.id of the staff member creating the lead (manual entry
+    or an employee-run import). Pass None for the webhook/inbound channels
+    (website form, Meta Ads sheet, WhatsApp) — they have no logged-in employee.
+
+    branch_id: pass an explicit id to pick a branch, or omit it to default to
+    the creating employee's own branch. Only looked up when created_by is set —
+    webhook/inbound leads have no employee, so they stay branch-less.
 
     Raises:
       HTTPException(409) — duplicate lead or contact found (unless allow_duplicate=True)
     """
     pk = compute_phone_key(phone) if phone else None
+
+    if branch_id is None and created_by is not None:
+        creator = db.scalar(select(Employee).where(Employee.id == created_by))
+        if creator is not None:
+            branch_id = creator.branch_id
 
     # Duplicate check
     if not allow_duplicate:
@@ -264,6 +298,7 @@ def create_lead(
         raw_payload=raw_payload,
         assigned_to=assigned_to,
         created_by=created_by,
+        branch_id=branch_id,
         score=0,  # placeholder; re-computed below
         # created_at override: used when importing historical leads so the
         # original lead date is preserved rather than defaulting to now()
@@ -274,6 +309,7 @@ def create_lead(
     try:
         db.commit()
         db.refresh(lead)
+        _preload_display_relations(lead)
     except SQLAlchemyError as exc:
         db.rollback()
         logger.error("create_lead — commit failed: %s", exc)
@@ -321,9 +357,9 @@ def list_leads(
     if assigned_to:
         q = q.where(Lead.assigned_to == assigned_to)
     if date_from:
-        q = q.where(Lead.created_at >= datetime.datetime.combine(date_from, datetime.time.min))
+        q = q.where(Lead.created_at >= ist_day_start_utc(date_from))
     if date_to:
-        q = q.where(Lead.created_at <= datetime.datetime.combine(date_to, datetime.time.max))
+        q = q.where(Lead.created_at < ist_day_start_utc(date_to + datetime.timedelta(days=1)))
     if search:
         term = f"%{search}%"
         q = q.where(
@@ -338,8 +374,9 @@ def list_leads(
     total = db.scalar(select(func.count()).select_from(q.subquery()))
     leads = db.scalars(q.order_by(Lead.created_at.desc()).offset(skip).limit(limit)).all()
 
-    # Denormalise assigned_name (employees table is small — no JOIN needed)
-    emp_ids = {l.assigned_to for l in leads if l.assigned_to}
+    # Denormalise assigned_name and created_by_name — both are employees.id,
+    # and the employees table is small enough that one combined lookup beats a JOIN.
+    emp_ids = {l.assigned_to for l in leads if l.assigned_to} | {l.created_by for l in leads if l.created_by}
     emp_map: dict[int, str] = {}
     if emp_ids:
         rows = db.execute(
@@ -357,11 +394,23 @@ def list_leads(
         ).all()
         src_map = {r.id: r.name for r in src_rows}
 
+    # Denormalise branch_name
+    from models.branch import Branch
+    branch_ids = {l.branch_id for l in leads if l.branch_id}
+    branch_map: dict[int, str] = {}
+    if branch_ids:
+        branch_rows = db.execute(
+            select(Branch.id, Branch.name).where(Branch.id.in_(branch_ids))
+        ).all()
+        branch_map = {r.id: r.name for r in branch_rows}
+
     items = []
     for lead in leads:
         item = {k: v for k, v in lead.__dict__.items() if not k.startswith("_")}
         item["assigned_name"] = emp_map.get(lead.assigned_to) if lead.assigned_to else None
+        item["created_by_name"] = emp_map.get(lead.created_by) if lead.created_by else None
         item["source_name"] = src_map.get(lead.source_id) if lead.source_id else None
+        item["branch_name"] = branch_map.get(lead.branch_id) if lead.branch_id else None
         items.append(item)
 
     return {"items": items, "total": total or 0, "skip": skip, "limit": limit}
@@ -369,26 +418,47 @@ def list_leads(
 
 def get_lead(db: Session, lead_id: int) -> Lead:
     """Fetch one lead by id. Raises 404 if not found or soft-deleted."""
-    lead = db.scalar(
-        select(Lead)
-        .where(Lead.id == lead_id)
-        .where(Lead.deleted_at.is_(None))
-    )
+    try:
+        lead = db.scalar(
+            select(Lead)
+            .where(Lead.id == lead_id)
+            .where(Lead.deleted_at.is_(None))
+        )
+    except SQLAlchemyError as exc:
+        logger.error("get_lead — query failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Server unavailable, please retry in a moment.")
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     return lead
 
 
 def get_lead_detail(db: Session, lead_id: int) -> dict:
-    """Fetch a lead and enrich it with source_name for the detail response."""
+    """Fetch a lead and enrich it with source_name, created_by_name and branch_name."""
     lead = get_lead(db, lead_id)
     result = {k: v for k, v in lead.__dict__.items() if not k.startswith("_")}
-    if lead.source_id:
-        from models.lead_source import LeadSource as LeadSourceModel
-        src = db.scalar(select(LeadSourceModel).where(LeadSourceModel.id == lead.source_id))
-        result["source_name"] = src.name if src else None
-    else:
-        result["source_name"] = None
+    try:
+        if lead.source_id:
+            from models.lead_source import LeadSource as LeadSourceModel
+            src = db.scalar(select(LeadSourceModel).where(LeadSourceModel.id == lead.source_id))
+            result["source_name"] = src.name if src else None
+        else:
+            result["source_name"] = None
+
+        if lead.created_by:
+            creator = db.scalar(select(Employee).where(Employee.id == lead.created_by))
+            result["created_by_name"] = creator.name if creator else None
+        else:
+            result["created_by_name"] = None
+
+        if lead.branch_id:
+            from models.branch import Branch
+            branch = db.scalar(select(Branch).where(Branch.id == lead.branch_id))
+            result["branch_name"] = branch.name if branch else None
+        else:
+            result["branch_name"] = None
+    except SQLAlchemyError as exc:
+        logger.error("get_lead_detail — enrichment query failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Server unavailable, please retry in a moment.")
     return result
 
 
@@ -415,6 +485,7 @@ def update_lead(db: Session, lead_id: int, **fields) -> Lead:
     try:
         db.commit()
         db.refresh(lead)
+        _preload_display_relations(lead)
     except SQLAlchemyError as exc:
         db.rollback()
         logger.error("update_lead — commit failed: %s", exc)
@@ -520,6 +591,34 @@ def convert_lead(db: Session, lead_id: int, current_user_id: int) -> dict:
         logger.error("convert_lead — commit failed: %s", exc)
         raise HTTPException(503, detail="Could not save. Please try again.")
     return {"lead_id": lead.id, "contact_id": contact_id, "created": created}
+
+
+# ── Statuses ──────────────────────────────────────────────────────────────────
+
+def list_lead_statuses(db: Session) -> list[LeadStatus]:
+    """Active rows of the lead_statuses table, in dropdown order."""
+    return db.scalars(
+        select(LeadStatus)
+        .where(LeadStatus.is_active.is_(True))
+        .order_by(LeadStatus.sort_order, LeadStatus.id)
+    ).all()
+
+
+def ensure_valid_status(db: Session, status: str) -> None:
+    """
+    Raise 400 unless `status` is an active lead_statuses slug or "converted".
+
+    "converted" is accepted even though it is not a row in lead_statuses — it is
+    the terminal value POST /leads/{id}/convert sets, and this lets that be
+    undone by hand (PUT status back to converted) if it was set in error.
+    """
+    if status == "converted":
+        return
+    exists = db.scalar(
+        select(LeadStatus.id).where(LeadStatus.slug == status, LeadStatus.is_active.is_(True))
+    )
+    if not exists:
+        raise HTTPException(status_code=400, detail=f"'{status}' is not a valid lead status")
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────

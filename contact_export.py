@@ -5,7 +5,9 @@ import datetime
 import io
 import os
 
+from sqlalchemy.orm import Session
 from models import Contact
+from models.contact_field_definition import ContactFieldDefinition
 
 MAX_ROWS = {"csv": 20000, "xlsx": 20000, "pdf": 2000}
 MEDIA_TYPES = {
@@ -14,35 +16,99 @@ MEDIA_TYPES = {
     "pdf": "application/pdf",
 }
 
-# Column order matches the import template, so an export can be edited and imported back.
-HEADERS = [
-    "ID", "Type", "Name", "Phone", "Alternate phone", "District", "Address", "Lead source",
-    "Stage", "Assigned to", "Created by", "Created at", "Verified",
-    "Profession", "Work area", "House stage", "Current tank", "Notes",
+# Fixed columns that appear in every export regardless of tenant profile fields.
+_FIXED_HEADERS = [
+    "ID", "Type", "Name", "Phone", "Alternate phone", "District", "Address",
+    "Lead source", "Stage", "Assigned to", "Created by", "Created at", "Verified",
 ]
+# PDF shows only the overview columns — profile data is omitted to keep it readable.
 PDF_COLUMNS = ["Name", "Phone", "Type", "District", "Lead source", "Stage", "Assigned to", "Created at"]
+
+
+def get_export_config(db: Session) -> tuple[list[str], list[str], list[str]]:
+    """
+    Returns (headers, consumer_field_names, partner_field_names).
+
+    headers           — full column list for CSV / XLSX:
+                        [fixed columns] + [consumer profile fields] + [partner profile fields] + ["Notes"]
+    consumer_field_names — JSONB data keys to extract for each consumer row, in sort_order
+    partner_field_names  — same for partner rows
+
+    Why dynamic:
+        Each tenant schema defines its own contact_field_definitions.
+        ventino has tank_type, tank_age, house_stage (consumer) and partner_type, work_area (partner).
+        A future electrical tenant would have different fields — no code change needed here.
+        The export automatically includes whatever fields are active in the tenant's schema.
+    """
+    defs = (
+        db.query(ContactFieldDefinition)
+        .filter(ContactFieldDefinition.is_active == True)  # noqa: E712
+        .order_by(ContactFieldDefinition.entity_type, ContactFieldDefinition.sort_order)
+        .all()
+    )
+    consumer_pairs = [
+        (d.field_name, d.field_label or d.field_name.replace("_", " ").title())
+        for d in defs if d.entity_type == "consumer"
+    ]
+    partner_pairs = [
+        (d.field_name, d.field_label or d.field_name.replace("_", " ").title())
+        for d in defs if d.entity_type == "partner"
+    ]
+
+    headers = (
+        _FIXED_HEADERS
+        + [label for _, label in consumer_pairs]
+        + [label for _, label in partner_pairs]
+        + ["Notes"]
+    )
+    return headers, [name for name, _ in consumer_pairs], [name for name, _ in partner_pairs]
 
 
 def _label(value: str | None) -> str:
     return (value or "").replace("_", " ").title()
 
 
-def build_rows(items: list[tuple[Contact, object, bool]]) -> list[list[str]]:
-    """items: (contact, current lead stage or None, is_verified)."""
+def build_rows(
+    items: list[tuple[Contact, object, bool]],
+    consumer_fields: list[str],
+    partner_fields: list[str],
+) -> list[list[str]]:
+    """
+    items           — (contact, current lead stage or None, is_verified)
+    consumer_fields — JSONB data keys to extract from consumer_profile.data
+    partner_fields  — JSONB data keys to extract from partner_profile.data
+
+    Call get_export_config(db) first to get consumer_fields and partner_fields.
+    Column order matches the headers returned by get_export_config().
+    """
     rows = []
     for c, stage, verified in items:
-        consumer, partner = c.consumer_profile, c.partner_profile
-        tank = ""
-        if consumer and (consumer.current_tank_type or consumer.current_tank_capacity):
-            tank = " ".join(str(x) for x in (consumer.current_tank_type, f"{consumer.current_tank_capacity} L" if consumer.current_tank_capacity else None) if x)
-        rows.append([
-            str(c.id), _label(c.contact_type), c.name, c.phone, c.phone_alt or "", c.district or "", c.address or "",
-            c.lead_source.name if c.lead_source else "", _label(stage) if stage else "",
-            c.assigned_employee.name if c.assigned_employee else "", c.creator.name if c.creator else "",
-            c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "", "Yes" if verified else "No",
-            _label(partner.profession_type) if partner else "", partner.work_area or "" if partner else "",
-            consumer.house_stage or "" if consumer else "", tank, c.notes or "",
-        ])
+        consumer_data = (c.consumer_profile.data or {}) if c.consumer_profile else {}
+        partner_data  = (c.partner_profile.data  or {}) if c.partner_profile  else {}
+
+        profile_values = (
+            [str(consumer_data.get(f) or "") for f in consumer_fields]
+            + [str(partner_data.get(f) or "") for f in partner_fields]
+        )
+        rows.append(
+            [
+                str(c.id),
+                _label(c.contact_type),
+                c.name or "",
+                c.phone or "",
+                c.phone_alt or "",
+                c.district or "",
+                c.address or "",
+                c.lead_source.name if c.lead_source else "",
+                _label(stage) if stage else "",
+                c.assigned_employee.name if c.assigned_employee else "",
+                c.creator.name if c.creator else "",
+                c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "",
+                "Yes" if verified else "No",
+            ]
+            + profile_values
+            + [c.notes or ""]
+        )
     return rows
 
 
@@ -51,15 +117,15 @@ def _safe(cell: str) -> str:
     return "'" + cell if cell[:1] in ("=", "+", "-", "@") and not cell[1:].replace(" ", "").isdigit() else cell
 
 
-def to_csv(rows: list[list[str]]) -> bytes:
+def to_csv(rows: list[list[str]], headers: list[str]) -> bytes:
     out = io.StringIO()
     writer = csv.writer(out, quoting=csv.QUOTE_ALL)
-    writer.writerow(HEADERS)
+    writer.writerow(headers)
     writer.writerows([[_safe(x) for x in row] for row in rows])
     return ("\ufeff" + out.getvalue()).encode("utf-8")  # BOM keeps Excel from mangling Malayalam names
 
 
-def to_xlsx(rows: list[list[str]]) -> bytes:
+def to_xlsx(rows: list[list[str]], headers: list[str]) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -67,7 +133,7 @@ def to_xlsx(rows: list[list[str]]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Contacts"
-    ws.append(HEADERS)
+    ws.append(headers)
     for row in rows:
         ws.append([_safe(x) for x in row])  # strings only, so phones stay "+919876543210"
     for cell in ws[1]:
@@ -76,7 +142,7 @@ def to_xlsx(rows: list[list[str]]) -> bytes:
         cell.alignment = Alignment(vertical="center")
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    for i, header in enumerate(HEADERS, start=1):
+    for i, header in enumerate(headers, start=1):
         longest = max([len(header)] + [len(r[i - 1]) for r in rows[:500]])
         ws.column_dimensions[get_column_letter(i)].width = min(max(longest + 2, 8), 45)
     buf = io.BytesIO()
@@ -107,7 +173,7 @@ def _pdf_font() -> str:
     return "Helvetica"
 
 
-def to_pdf(rows: list[list[str]], filter_summary: str) -> bytes:
+def to_pdf(rows: list[list[str]], headers: list[str], filter_summary: str) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import ParagraphStyle
@@ -120,7 +186,8 @@ def to_pdf(rows: list[list[str]], filter_summary: str) -> bytes:
     title = ParagraphStyle("title", fontName=font, fontSize=14, leading=18)
     meta = ParagraphStyle("meta", fontName=font, fontSize=8, leading=11, textColor=colors.HexColor("#64748b"))
 
-    picks = [HEADERS.index(name) for name in PDF_COLUMNS]
+    # PDF uses only the fixed overview columns — profile data makes the table too wide.
+    picks = [headers.index(name) for name in PDF_COLUMNS]
     data = [[Paragraph(escape(name), head) for name in PDF_COLUMNS]]
     for row in rows:
         data.append([Paragraph(escape(row[i]), small) for i in picks])

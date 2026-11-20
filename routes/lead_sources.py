@@ -26,8 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import settings_catalog as catalog
-from auth import get_current_user, require_admin_or_manager
-from database import get_db
+from auth import get_current_user, get_tenant_db, require_admin_or_manager
 from models import Contact, Employee, LeadSource
 from schemas import LeadSourceSummary
 from schemas.lead_source import (
@@ -97,7 +96,7 @@ def _commit(db: Session) -> None:
 
 @router.get("", response_model=list[LeadSourceSummary], summary="Active lead sources (dropdown)")
 def list_lead_sources(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(get_current_user),
 ):
     """
@@ -116,7 +115,7 @@ def list_lead_sources(
 # NOTE: define /all before /{source_id} so the literal path is matched first.
 @router.get("/all", response_model=list[LeadSourceAdminResponse], summary="All lead sources (admin)")
 def list_all_lead_sources(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(require_admin_or_manager),
 ):
     """
@@ -136,7 +135,7 @@ def list_all_lead_sources(
 @router.post("", response_model=LeadSourceAdminResponse, status_code=201, summary="Create a lead source")
 def create_lead_source(
     body: LeadSourceCreateRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(require_admin_or_manager),
 ):
     """
@@ -170,7 +169,7 @@ def create_lead_source(
 def update_lead_source(
     source_id: int,
     body: LeadSourceUpdateRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(require_admin_or_manager),
 ):
     """
@@ -213,7 +212,7 @@ def update_lead_source(
 @router.delete("/{source_id}", response_model=LeadSourceAdminResponse, summary="Delete a lead source")
 def delete_lead_source(
     source_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(require_admin_or_manager),
 ):
     """

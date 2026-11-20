@@ -29,10 +29,9 @@ RELATIONSHIPS:
 """
 
 import datetime
-from sqlalchemy import BigInteger, Numeric, Integer, String, ForeignKey, Text, DateTime, Enum as SAEnum, func, Index
+from sqlalchemy import BigInteger, String, ForeignKey, Text, DateTime, func, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
-from models.contact_interested_product import contact_interested_products
 
 
 class Contact(Base):
@@ -58,23 +57,22 @@ class Contact(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     # --- Core identity fields ---
-    contact_type: Mapped[str] = mapped_column(
-        SAEnum("consumer", "partner"), default="consumer"
-    )
+    # String(10) instead of SAEnum — Pydantic ContactType validates the value at API level.
+    # Using SAEnum with a name would create a named PostgreSQL type that is hard to modify.
+    contact_type: Mapped[str] = mapped_column(String(10), default="consumer")
     name: Mapped[str | None] = mapped_column(String(150))
     # The phone number as entered (may include country code, spaces, dashes)
     phone: Mapped[str] = mapped_column(String(20))
-    # Last 10 digits of phone; unique across all contacts (enforced at DB level to prevent race conditions)
-    phone_key: Mapped[str] = mapped_column(String(10), unique=True)
+    # Last 10 digits of phone. Uniqueness enforced via a partial unique index in SQL
+    # (WHERE deleted_at IS NULL), not unique=True here, so soft-deleted contacts
+    # don't block re-registration with the same number.
+    phone_key: Mapped[str] = mapped_column(String(10), default="")
     phone_alt: Mapped[str | None] = mapped_column(String(20))
 
     # --- Location fields ---
     # Optional at creation; required for the contact to become verified
     district: Mapped[str | None] = mapped_column(String(80))
     address: Mapped[str | None] = mapped_column(String(255))
-    # Captured only for field_visit leads; GPS coordinates from the salesperson's mobile app
-    latitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
-    longitude: Mapped[float | None] = mapped_column(Numeric(9, 6))
 
     # --- Ownership & attribution ---
     # NULL = not yet assigned; manager assigns after reviewing the new lead
@@ -88,14 +86,14 @@ class Contact(Base):
     referred_by_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("contacts.id"))
 
     # --- Branch ---
-    # Which office this contact belongs to. One of: malappuram, kottakkal, perinthalmanna.
-    branch: Mapped[str | None] = mapped_column(
-        SAEnum("malappuram", "kottakkal", "perinthalmanna", name="contact_branch_enum"),
-        nullable=True,
-    )
+    # FK to the branches table (replaces the old VARCHAR enum column).
+    # Branches are tenant-specific and admin-managed, so they live in a table, not code.
+    branch_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("branches.id"), nullable=True)
 
     # --- Lead metadata ---
-    lead_source_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("lead_sources.id"))
+    # Set when this contact was created from a lead conversion
+    lead_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("leads.id"), nullable=True)
+    lead_source_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("lead_sources.id"))
     notes: Mapped[str | None] = mapped_column(Text)
 
     # --- Audit timestamps ---
@@ -132,6 +130,9 @@ class Contact(Base):
         "Contact", foreign_keys=[referred_by_id], back_populates="referred_by"
     )
 
+    # Branch relationship
+    branch: Mapped["Branch | None"] = relationship("Branch", foreign_keys=[branch_id])
+
     # The marketing channel / source that brought in this lead (e.g. "Facebook", "Offline")
     lead_source: Mapped["LeadSource | None"] = relationship("LeadSource", back_populates="contacts")
 
@@ -149,16 +150,6 @@ class Contact(Base):
     partner_profile: Mapped["PartnerProfile | None"] = relationship(
         "PartnerProfile", back_populates="contact", uselist=False
     )
-    # Products this contact has expressed interest in.
-    # `secondary` points at the join table; no extra columns are stored on the join.
-    # `lazy="select"` means the list is only fetched when the attribute is accessed
-    # (the list endpoint never reads it, so it only fires for the detail endpoint).
-    interested_products: Mapped[list["Product"]] = relationship(
-        "Product",
-        secondary=contact_interested_products,
-        lazy="select",
-    )
-
     # -------------------------------------------------------------------------
     # INDEXES
     # An index speeds up filtering/searching on a column.
@@ -170,4 +161,6 @@ class Contact(Base):
         Index("idx_contacts_assigned", "assigned_to"),  # "show my leads" query
         Index("idx_contacts_district", "district"),     # filter by district
         Index("idx_contacts_created_by", "created_by"), # filter by creator
+        Index("idx_contacts_branch", "branch_id"),      # filter by branch
+        Index("idx_contacts_phone_key", "phone_key"),   # dedup lookups
     )

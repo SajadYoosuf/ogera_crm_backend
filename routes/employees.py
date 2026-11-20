@@ -29,55 +29,89 @@ DUPLICATE_EMAIL = "An employee with this email already exists"
 DUPLICATE_PHONE = "An employee with this phone number already exists"
 
 
-def _hidden_roles(viewer: Employee) -> frozenset[str]:
-    """Role slugs invisible to this viewer in list and by-id responses.
+# ── Role helpers ──────────────────────────────────────────────────────────────
 
-    Admin accounts are excluded from the employee list for every viewer — they are
-    managed separately and should not appear in day-to-day staff management.
-    A manager viewer additionally cannot see other manager-role employees.
+def _viewer_slug(viewer: Employee) -> str | None:
     """
-    if viewer.role == "manager":
-        return frozenset({"admin", "manager"})
-    return frozenset({"admin"})
+    Return the role slug for the logged-in employee.
+
+    WHY NOT employee.role?
+      The Employee model stores role_id (int FK to roles.id), not a role string.
+      get_current_user() attaches the slug as the transient attribute _role_slug
+      so we don't have to hit the DB on every request.
+    """
+    return getattr(viewer, "_role_slug", None)
+
+
+def _load_slug(emp: Employee, db: Session) -> str | None:
+    """
+    Return the role slug for an employee fetched directly from the DB
+    (i.e. NOT through get_current_user, so _role_slug is not set yet).
+    """
+    slug = getattr(emp, "_role_slug", None)
+    if slug:
+        return slug
+    role = db.query(Role).filter(Role.id == emp.role_id).first()
+    return role.slug if role else None
+
+
+def _role_ids_for_slugs(db: Session, slugs: frozenset[str]) -> list[int]:
+    """Look up role IDs for a set of slug strings — used to build SQL filters."""
+    if not slugs:
+        return []
+    rows = db.query(Role.id).filter(Role.slug.in_(list(slugs))).all()
+    return [r.id for r in rows]
+
+
+def _hidden_role_ids(db: Session, viewer: Employee) -> list[int]:
+    """
+    Role IDs that this viewer should NOT see in list / detail responses.
+
+    Admin IDs are hidden from everyone. Manager IDs are hidden from managers.
+    Uses _viewer_slug(viewer) to decide the viewer's level.
+    """
+    slug = _viewer_slug(viewer)
+    if slug == "manager":
+        slugs = frozenset({"admin", "manager"})
+    else:
+        slugs = frozenset({"admin"})
+    return _role_ids_for_slugs(db, slugs)
 
 
 def _get_employee_or_404(db: Session, employee_id: int, viewer: Employee | None = None) -> Employee:
     employee = db.query(Employee).filter(Employee.id == employee_id).first()
     if not employee or employee.deleted_at:
         raise HTTPException(status_code=404, detail="Employee not found")
-    # Hidden-role accounts (e.g. admin for all viewers, manager for manager viewers) always
-    # return 404 — even when the viewer is fetching their own record.
-    if viewer and employee.role in _hidden_roles(viewer):
-        raise HTTPException(status_code=404, detail="Employee not found")
+    if viewer:
+        hidden_ids = _hidden_role_ids(db, viewer)
+        if employee.role_id in hidden_ids:
+            raise HTTPException(status_code=404, detail="Employee not found")
     return employee
 
 
-def _ensure_role_assignable(db: Session, slug: str, actor: Employee | None = None) -> None:
-    """The role must exist (created via /roles) and be active.
-    A manager cannot assign the admin or manager role — only an admin may do that.
+def _ensure_role_assignable(db: Session, slug: str, actor: Employee | None = None) -> Role:
+    """
+    The role must exist and be active. Returns the Role row.
+    A manager cannot assign admin or manager — only an admin may do that.
     """
     role = db.query(Role).filter(Role.slug == slug).first()
     if role is None:
         raise HTTPException(status_code=422, detail=f"Role '{slug}' does not exist")
     if not role.is_active:
         raise HTTPException(status_code=422, detail=f"Role '{slug}' is inactive")
-    if actor and actor.role == "manager" and slug in ("admin", "manager"):
+    if actor and _viewer_slug(actor) == "manager" and slug in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Managers cannot assign the admin or manager role")
+    return role
 
 
 def _email_taken(db: Session, email: str, exclude_id: int | None = None) -> bool:
-    # Soft-deleted rows still hold the unique email, so they are included here.
     q = db.query(Employee.id).filter(func.lower(Employee.email) == email.lower())
     if exclude_id is not None:
         q = q.filter(Employee.id != exclude_id)
     return q.first() is not None
 
 
-
 def _phone_taken(db: Session, phone: str, exclude_id: int | None = None) -> bool:
-    # Phones are stored as last 10 digits (normalized by the schema validator), so a
-    # direct equality check is enough — no Python iteration over all rows needed.
-    # Soft-deleted rows are excluded: a deleted employee's number can be reused.
     q = db.query(Employee.id).filter(
         Employee.phone == phone,
         Employee.deleted_at.is_(None),
@@ -87,24 +121,26 @@ def _phone_taken(db: Session, phone: str, exclude_id: int | None = None) -> bool
     return q.first() is not None
 
 
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
 @router.get("/directory", summary="Staff directory")
 def employee_directory(db: Session = Depends(get_db), viewer: Employee = Depends(get_current_user)):
-    """Active staff with id, name, role and phone, for assignee pickers and the staff directory.
-    Open to every signed-in employee. Deleted, deactivated, and hidden-role staff are left out.
+    """Active staff with id, name, role slug and phone, for assignee pickers and the staff directory.
     Admin accounts are hidden from all viewers; manager accounts are hidden from manager viewers.
     """
-    hidden = _hidden_roles(viewer)
+    hidden_ids = _hidden_role_ids(db, viewer)
     rows = (
-        db.query(Employee)
+        db.query(Employee, Role.slug.label("role_slug"))
+        .join(Role, Employee.role_id == Role.id)
         .filter(
             Employee.deleted_at.is_(None),
             Employee.is_active == 1,
-            Employee.role.not_in(list(hidden)),
+            Employee.role_id.not_in(hidden_ids) if hidden_ids else True,
         )
         .order_by(func.lower(Employee.name))
         .all()
     )
-    return [{"id": e.id, "name": e.name, "role": e.role, "phone": e.phone} for e in rows]
+    return [{"id": e.id, "name": e.name, "role": slug, "phone": e.phone} for e, slug in rows]
 
 
 @router.get("", response_model=EmployeeListResponse, summary="List employees")
@@ -118,20 +154,27 @@ def list_employees(
     viewer: Employee = Depends(get_current_user),
     platform: str = Depends(client_platform),
 ):
-    """Paged list of employees with optional filters for role, active status and search (name, email or phone).
-    Admin and manager can list from any client. Sales executives and other roles may only list from the
-    mobile app (x-client-type: mobile). Role-based visibility hides admin accounts from all viewers
-    and manager accounts from manager viewers.
+    """Paged list of employees with optional filters for role, active status and search.
+    Admin and manager can list from any client. Other roles may only list from the mobile app.
     """
-    if viewer.role not in ("admin", "manager") and platform != "mobile":
+    viewer_slug = _viewer_slug(viewer)
+    if viewer_slug not in ("admin", "manager") and platform != "mobile":
         raise HTTPException(status_code=403, detail="You do not have permission to perform this action")
-    hidden = _hidden_roles(viewer)
-    q = db.query(Employee).filter(
-        Employee.deleted_at.is_(None),
-        Employee.role.not_in(list(hidden)),
-    )
+
+    hidden_ids = _hidden_role_ids(db, viewer)
+    q = db.query(Employee).filter(Employee.deleted_at.is_(None))
+    if hidden_ids:
+        q = q.filter(Employee.role_id.not_in(hidden_ids))
+
     if role:
-        q = q.filter(Employee.role == role)
+        # Filter by role slug — look up the role_id first
+        role_row = db.query(Role.id).filter(Role.slug == role).first()
+        if role_row:
+            q = q.filter(Employee.role_id == role_row.id)
+        else:
+            # Unknown slug → empty result
+            return EmployeeListResponse(items=[], total=0, skip=skip, limit=limit)
+
     if is_active is not None:
         q = q.filter(Employee.is_active == int(is_active))
     if search:
@@ -147,12 +190,18 @@ def list_employees(
         .limit(limit)
         .all()
     )
-    return EmployeeListResponse(
-        items=[EmployeeResponse.model_validate(e, from_attributes=True) for e in rows],
-        total=total,
-        skip=skip,
-        limit=limit,
-    )
+    # Attach role slugs for the response (EmployeeResponse expects role_slug)
+    slug_map: dict[int, str] = {
+        r.id: r.slug
+        for r in db.query(Role).all()
+    }
+    items = []
+    for emp in rows:
+        resp = EmployeeResponse.model_validate(emp, from_attributes=True)
+        resp.role_slug = slug_map.get(emp.role_id)
+        items.append(resp)
+
+    return EmployeeListResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{employee_id}", response_model=EmployeeResponse, summary="Get an employee")
@@ -161,16 +210,14 @@ def get_employee(
     db: Session = Depends(get_db),
     viewer: Employee = Depends(get_current_user),
 ):
-    """One employee by id. Hidden-role accounts (admin for all; manager for manager viewers) return
-    404 before any access check. Sales executives may only fetch their own record (403 otherwise).
-    Admin and manager may fetch any visible record.
-    """
+    """One employee by id. Sales executives may only fetch their own record."""
     employee = _get_employee_or_404(db, employee_id, viewer=viewer)
-    # After confirming the employee exists and is visible, check that the viewer is allowed to
-    # read someone else's full profile. Sales executives can only look up themselves.
-    if viewer.id != employee_id and viewer.role not in ("admin", "manager"):
+    viewer_slug = _viewer_slug(viewer)
+    if viewer.id != employee_id and viewer_slug not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="You do not have permission to view this employee")
-    return EmployeeResponse.model_validate(employee, from_attributes=True)
+    resp = EmployeeResponse.model_validate(employee, from_attributes=True)
+    resp.role_slug = _load_slug(employee, db)
+    return resp
 
 
 @router.post("", response_model=EmployeeCreateResponse, status_code=201, summary="Create an employee")
@@ -179,26 +226,24 @@ def create_employee(
     db: Session = Depends(get_db),
     actor: Employee = Depends(manage_employees),
 ):
-    """Admin or manager creates an employee. Only an admin can assign the admin or manager role. The role must exist and be active.
-    Email must be unique, ignoring case, and a deleted employee's email still counts. Phone must be unique by its last 10 digits, and a deleted employee's phone can be reused.
-    The employee is committed before the credentials email is queued, so SMTP
-    latency never holds an open database transaction.
-    Returns 409 for a duplicate email or phone, and 422 for an unknown role.
+    """Admin or manager creates an employee. The role must exist and be active.
+    Returns 409 for duplicate email/phone, 422 for unknown role.
     """
-    _ensure_role_assignable(db, body.role, actor=actor)
+    role_row = _ensure_role_assignable(db, body.role, actor=actor)
+
     if _email_taken(db, body.email):
         raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
     if body.phone and _phone_taken(db, body.phone):
         raise HTTPException(status_code=409, detail=DUPLICATE_PHONE)
 
-    data = body.model_dump(exclude={"password"})
-    employee = Employee(**data, password_hash=get_password_hash(body.password))
+    # body.role is a slug string; Employee needs role_id (integer FK)
+    data = body.model_dump(exclude={"password", "role"})
+    employee = Employee(**data, role_id=role_row.id, password_hash=get_password_hash(body.password))
     db.add(employee)
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        # Both email and phone have DB unique indexes — inspect which one fired.
         detail = DUPLICATE_PHONE if "phone" in str(exc.orig).lower() else DUPLICATE_EMAIL
         raise HTTPException(status_code=409, detail=detail)
 
@@ -208,11 +253,13 @@ def create_employee(
         employee.name,
         employee.email,
         body.password,
-        employee.role,
+        body.role,  # slug string for the email template
     )
 
+    resp = EmployeeResponse.model_validate(employee, from_attributes=True)
+    resp.role_slug = body.role
     return EmployeeCreateResponse(
-        **EmployeeResponse.model_validate(employee, from_attributes=True).model_dump(),
+        **resp.model_dump(),
         credentials_email=mail_result,
     )
 
@@ -224,22 +271,25 @@ def update_employee(
     db: Session = Depends(get_db),
     actor: Employee = Depends(manage_employees),
 ):
-    """Admin or manager edits an employee. Only the fields sent are changed. Sending `password` resets it.
-    Nobody can deactivate or change the role of their own account.
-    Required fields cannot be null. Returns 409 for a duplicate email or phone.
-    """
+    """Admin or manager edits an employee. Only the sent fields are changed."""
     employee = _get_employee_or_404(db, employee_id, viewer=actor)
     data = body.model_dump(exclude_unset=True)
 
-    # Null is not a valid value for these required columns.
     for field in ("name", "email", "role", "is_active", "password"):
         if field in data and data[field] is None:
             raise HTTPException(status_code=422, detail=f"{field} cannot be null")
 
-    if "role" in data and data["role"] != employee.role:
-        _ensure_role_assignable(db, data["role"], actor=actor)
+    # If role is being changed, validate the new slug and get its ID
+    new_role_id: int | None = None
+    if "role" in data:
+        current_slug = _load_slug(employee, db)
+        if data["role"] != current_slug:
+            role_row = _ensure_role_assignable(db, data["role"], actor=actor)
+            new_role_id = role_row.id
+
+    actor_slug = _viewer_slug(actor)
     if actor.id == employee.id and (
-        data.get("is_active") is False or ("role" in data and data["role"] != employee.role)
+        data.get("is_active") is False or new_role_id is not None
     ):
         raise HTTPException(
             status_code=400, detail="You cannot deactivate or change the role of your own account"
@@ -253,12 +303,18 @@ def update_employee(
     password_changed = "password" in data
     if password_changed:
         employee.password_hash = get_password_hash(data.pop("password"))
+
+    # Apply all fields except role (which needs special handling)
+    role_slug_sent = data.pop("role", None)
     for field, value in data.items():
         setattr(employee, field, value)
 
+    # Apply the new role_id if role was changed
+    if new_role_id is not None:
+        employee.role_id = new_role_id
+
     if data.get("is_active") is False:
         db.query(FcmDevice).filter(FcmDevice.employee_id == employee.id).delete(synchronize_session=False)
-        employee.fcm_token = None
 
     try:
         db.commit()
@@ -266,6 +322,7 @@ def update_employee(
         db.rollback()
         detail = DUPLICATE_PHONE if "phone" in str(exc.orig).lower() else DUPLICATE_EMAIL
         raise HTTPException(status_code=409, detail=detail)
+
     db.refresh(employee)
     if password_changed:
         mail_result = send_password_changed_notice(employee.name, employee.email)
@@ -275,7 +332,10 @@ def update_employee(
                 employee.email,
                 mail_result["message"],
             )
-    return EmployeeResponse.model_validate(employee, from_attributes=True)
+
+    resp = EmployeeResponse.model_validate(employee, from_attributes=True)
+    resp.role_slug = role_slug_sent if new_role_id is not None else _load_slug(employee, db)
+    return resp
 
 
 @router.delete("/{employee_id}", status_code=204, summary="Delete an employee")
@@ -293,14 +353,7 @@ def delete_employee(
 
     employee.deleted_at = datetime.now(timezone.utc).replace(tzinfo=None)
     employee.is_active = 0
-    employee.fcm_token = None
-    # Free the phone so another employee can be assigned the same number.
-    # The DB unique index on phone allows multiple NULLs, so clearing it here
-    # is the correct way to release the slot for a soft-deleted row.
     employee.phone = None
-    # Remove all push-notification device registrations so the deleted account
-    # stops receiving notifications. The FK has ON DELETE CASCADE for hard deletes,
-    # but soft deletes don't fire the cascade, so we clear them manually.
     db.query(FcmDevice).filter(FcmDevice.employee_id == employee.id).delete(synchronize_session=False)
     db.commit()
 
@@ -325,14 +378,8 @@ def register_fcm_token(
     db: Session = Depends(get_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """
-    POST /employees/me/fcm-token — store the caller's FCM push token.
-
-    Called by the web app and mobile app after login. The token is used by the backend to
-    send push notifications to this employee's browsers and phones.
-    The same token is updated idempotently when the client starts again.
-    """
-    token = body.token  # already stripped and validated by _FcmTokenBody
+    """Store the caller's FCM push token. Called by web and mobile after login."""
+    token = body.token
     existing = db.query(FcmDevice).filter(FcmDevice.token == token).first()
     if existing:
         existing.employee_id = current_user.id
@@ -350,7 +397,6 @@ def register_fcm_token(
     try:
         db.commit()
     except IntegrityError:
-        # Concurrent request already registered this token — not an error.
         db.rollback()
     return {"ok": True}
 
@@ -362,7 +408,7 @@ def unregister_fcm_token(
     current_user: Employee = Depends(get_current_user),
 ):
     """Remove one browser/phone registration, normally called on logout."""
-    token = body.token  # already stripped and validated by _FcmTokenBody
+    token = body.token
     db.query(FcmDevice).filter(
         FcmDevice.employee_id == current_user.id,
         FcmDevice.token == token,

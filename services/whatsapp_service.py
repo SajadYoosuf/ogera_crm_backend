@@ -40,6 +40,8 @@ from database import get_session_for_schema
 
 logger = logging.getLogger(__name__)
 
+WHATSAPP_TEMPLATE_SENDING_ENABLED = os.getenv("WHATSAPP_TEMPLATE_SENDING_ENABLED", "0") == "1"
+
 WHATSAPP_API_VERSION = "v18.0"
 WHATSAPP_API_URL = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}"
 WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
@@ -79,6 +81,9 @@ def send_lead_welcome(lead_id: int, schema: str) -> None:
         lead_id — the ID of the Lead row (in the tenant's schema)
         schema  — the tenant's PostgreSQL schema name
     """
+    if not WHATSAPP_TEMPLATE_SENDING_ENABLED:
+        return
+
     if not WHATSAPP_ACCESS_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
         logger.warning(
             "WhatsApp not configured (WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID missing). "
@@ -162,6 +167,10 @@ def send_whatsapp_template(phone: str, template_name: str, params: list[str]) ->
     Returns True on success, False on failure.
     Used by the manual "Send WhatsApp" button in the lead detail view.
     """
+    if not WHATSAPP_TEMPLATE_SENDING_ENABLED:
+        logger.info("WhatsApp template sending is disabled; not sending %s", template_name)
+        return False
+
     if not WHATSAPP_ACCESS_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
         logger.warning("WhatsApp not configured — cannot send template %s", template_name)
         return False

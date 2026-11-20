@@ -28,7 +28,7 @@ HEAD_ROLES = frozenset({"admin", "manager"})
 
 def is_head(employee: Employee) -> bool:
     """True for admin and manager, who may work on any lead."""
-    return employee.role in HEAD_ROLES
+    return getattr(employee, "_role_slug", None) in HEAD_ROLES
 
 
 def ensure_can_work_contact(employee: Employee, contact: Contact) -> None:

@@ -7,7 +7,6 @@ source_name is denormalised from lead_sources.name for display only.
 """
 
 import datetime
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -29,28 +28,25 @@ def _normalise_email(v: str | None) -> str | None:
 class LeadCreate(BaseModel):
     first_name: str = Field(min_length=1, max_length=200)
     last_name: str | None = Field(default=None, max_length=100)
-    phone: str | None = Field(default=None, max_length=30)
-    email: str | None = Field(default=None, max_length=254)
+    # Required — a lead with no phone number cannot be followed up or WhatsApp'd.
+    # Send the full number with country code, e.g. "+919876543210".
+    phone: str = Field(min_length=1, max_length=30)
     # source_id → FK to lead_sources.id; default Walk-in (1) if staff doesn't specify
     source_id: int | None = None
     notes: str | None = Field(default=None, max_length=5000)
     address: str | None = Field(default=None, max_length=500)
     tags: list[str] | None = None
     assigned_to: int | None = None
+    # branch_id → FK to branches.id. Omit to default to the creating employee's own
+    # branch (set by the route); send a different id to pick another branch.
+    branch_id: int | None = None
     # created_at: optional override for imports (historical leads from sheets / Meta Ads)
     created_at: datetime.datetime | None = None
 
     @field_validator("phone", mode="before")
     @classmethod
-    def _clean(cls, v: str | None) -> str | None:
-        if v is None or str(v).strip() == "":
-            return None
+    def _clean(cls, v: str) -> str:
         return clean_phone(str(v))
-
-    @field_validator("email", mode="before")
-    @classmethod
-    def _validate_email(cls, v: str | None) -> str | None:
-        return _normalise_email(v)
 
 
 class LeadUpdate(BaseModel):
@@ -58,12 +54,16 @@ class LeadUpdate(BaseModel):
     last_name: str | None = Field(default=None, max_length=100)
     phone: str | None = Field(default=None, max_length=30)
     email: str | None = Field(default=None, max_length=254)
-    status: Literal["new", "contacted", "qualified", "converted", "lost"] | None = None
+    # Validated against the active lead_statuses table (see services.lead_service
+    # .update_lead), not hardcoded here — "converted" is also accepted since it's
+    # the terminal value POST /leads/{id}/convert sets.
+    status: str | None = Field(default=None, max_length=30)
     source_id: int | None = None
     notes: str | None = Field(default=None, max_length=5000)
     address: str | None = Field(default=None, max_length=500)
     tags: list[str] | None = None
     assigned_to: int | None = None
+    branch_id: int | None = None
 
     @field_validator("phone", mode="before")
     @classmethod
@@ -98,6 +98,9 @@ class LeadResponse(BaseModel):
     whatsapp_sent_at: datetime.datetime | None
     assigned_to: int | None
     created_by: int | None
+    created_by_name: str | None = None
+    branch_id: int | None = None
+    branch_name: str | None = None
     converted_at: datetime.datetime | None
     contact_id: int | None
     created_at: datetime.datetime
@@ -120,6 +123,10 @@ class LeadListItem(BaseModel):
     whatsapp_sent: bool
     assigned_to: int | None
     assigned_name: str | None = None
+    created_by: int | None = None
+    created_by_name: str | None = None
+    branch_id: int | None = None
+    branch_name: str | None = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
@@ -129,6 +136,19 @@ class LeadListResponse(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+class LeadStatusOption(BaseModel):
+    """One row from the lead_statuses table, as returned by GET /leads/statuses.
+
+    The frontend status dropdown (table + detail modal) fetches this list instead
+    of hardcoding it, so adding/renaming/reordering a status is a DB change only —
+    no frontend deploy needed.
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    value: str = Field(validation_alias="slug", serialization_alias="value")
+    label: str = Field(validation_alias="name", serialization_alias="label")
 
 
 class ConvertLeadResponse(BaseModel):
