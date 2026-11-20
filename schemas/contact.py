@@ -30,10 +30,10 @@ VALIDATION:
 import datetime
 from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
-from .enums import BranchEnum, ContactType
+from .enums import ContactType
+from .branch import BranchResponse
 from .employee import EmployeeSummary
 from .lead_source import LeadSourceSummary
-from .lead_stage import LeadStageResponse
 from .consumer_profile import (
     ConsumerProfileBase,
     ConsumerProfileResponse,
@@ -42,24 +42,6 @@ from .consumer_profile import (
 from .partner_profile import PartnerProfileBase, PartnerProfileResponse, PartnerProfileUpdate
 from phone_utils import clean_phone
 from pydantic import field_validator
-
-
-class ProductRef(BaseModel):
-    """
-    Minimal product snapshot embedded inside a contact's response.
-
-    WHY A SEPARATE CLASS?
-        ContactResponse embeds the products a contact is interested in.
-        We only need id and name here — returning full pricing and specs would
-        make the contact detail payload unnecessarily large.
-
-    from_attributes=True lets Pydantic read directly from a SQLAlchemy Product
-    ORM object (contact.interested_products is a list of Product rows).
-    """
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    name: str
 
 
 class ContactSummary(BaseModel):
@@ -94,24 +76,6 @@ class NameRef(BaseModel):
     branch: str | None = None
 
 
-class LeadStageSummary(BaseModel):
-    """
-    The contact's current pipeline stage, embedded inside each list row.
-
-    WHY A SUMMARY AND NOT THE FULL LeadStageResponse?
-        The list endpoint returns many rows at once. Including every stage field
-        for every row would send far more data than the UI needs. This slim version
-        carries only what the Kanban board / list card requires: stage id, slug,
-        name, and when it was last changed.
-    """
-    model_config = ConfigDict(from_attributes=True)
-
-    stage_id: int
-    stage_slug: str = ""
-    stage_name: str = ""
-    changed_at: datetime.datetime
-
-
 class ContactBase(BaseModel):
     """
     Fields shared between ContactCreate and ContactResponse.
@@ -124,10 +88,14 @@ class ContactBase(BaseModel):
         phone value. It calls `clean_phone()` (see phone_utils.py), which strips
         formatting and normalises the number. This means callers can send
         "+91 98765-43210" and the DB will always store "9876543210".
+
+    BRANCH:
+        branch_id is the FK to the branches table (admin-managed list).
+        Use GET /branches to look up branch ids.
     """
     contact_type: ContactType = ContactType.consumer
-    # Which branch office this contact belongs to (malappuram / kottakkal / perinthalmanna).
-    branch: BranchEnum | None = None
+    # FK to branches table. Use GET /branches to get ids.
+    branch_id: int | None = None
     # Optional — phone is used as display name when absent.
     name: Annotated[str, Field(min_length=1, max_length=150)] | None = None
     phone: Annotated[str, Field(min_length=1, max_length=20)]
@@ -158,12 +126,6 @@ class ContactBase(BaseModel):
             raise ValueError(str(exc))
 
 
-# Reusable type aliases with built-in range validation.
-# Annotated[float, Field(...)] means: a float, plus Pydantic constraints.
-Latitude = Annotated[float, Field(ge=-90, le=90)]
-Longitude = Annotated[float, Field(ge=-180, le=180)]
-
-
 class ContactCreate(ContactBase):
     """
     Request body for POST /contacts.
@@ -171,26 +133,18 @@ class ContactCreate(ContactBase):
     Inherits all ContactBase fields, then adds create-only fields:
         - lead_source_id  → required (overrides the optional base version)
         - assigned_to     → omit to leave unassigned; manager picks it up later
-        - latitude/longitude → required from mobile for field_visit leads, forbidden for all others
         - *_profile       → type-specific details created in the same transaction
-        - interested_product_ids → list of product ids this contact is interested in
+        - lead_id         → set when this contact is created by converting a lead
     """
     # Required on create; overrides ContactBase.lead_source_id which allows None
     lead_source_id: int
     # Omit to create an unassigned contact; manager assigns after reviewing the new lead
     assigned_to: int | None = None
+    # Set when creating a contact via lead conversion (normally leave None for manual creation)
+    lead_id: int | None = None
     # Type details, created in the same transaction. Each one is only allowed for its own contact type.
     consumer_profile: ConsumerProfileBase | None = None
     partner_profile: PartnerProfileBase | None = None
-    # Products this contact is interested in. Empty list = no products linked.
-    interested_product_ids: list[int] = []
-
-    @field_validator("interested_product_ids")
-    @classmethod
-    def one_interested_product(cls, value: list[int]) -> list[int]:
-        if len(set(value)) > 1:
-            raise ValueError("Select only one interested product")
-        return value
 
 
 class ContactUpdate(BaseModel):
@@ -207,7 +161,7 @@ class ContactUpdate(BaseModel):
         (only the sent fields are updated).
     """
     contact_type: ContactType | None = None
-    branch: BranchEnum | None = None
+    branch_id: int | None = None
     name: Annotated[str, Field(min_length=1, max_length=150)] | None = None
     phone: Annotated[str, Field(min_length=1, max_length=20)] | None = None
     phone_alt: Annotated[str, Field(max_length=20)] | None = None
@@ -220,9 +174,6 @@ class ContactUpdate(BaseModel):
     # Creates the profile if the contact has none, otherwise merges the given fields
     consumer_profile: ConsumerProfileUpdate | None = None
     partner_profile: PartnerProfileUpdate | None = None
-    # Replaces the interested product when provided.
-    # Omit → keep existing. Send [] → clear it. Send [id] → select one product.
-    interested_product_ids: list[int] | None = None
     # Free-text note. Omit → keep existing. Send null → clear. Send string → replace.
     notes: str | None = None
 
@@ -237,13 +188,6 @@ class ContactUpdate(BaseModel):
         except ValueError as exc:
             raise ValueError(str(exc))
 
-    @field_validator("interested_product_ids")
-    @classmethod
-    def one_interested_product(cls, value: list[int] | None) -> list[int] | None:
-        if value is not None and len(set(value)) > 1:
-            raise ValueError("Select only one interested product")
-        return value
-
 
 class ContactResponse(ContactBase):
     """
@@ -257,22 +201,20 @@ class ContactResponse(ContactBase):
         ConfigDict(from_attributes=True) is set below.
 
     FIELDS THAT ARE NOT POPULATED AUTOMATICALLY:
-        `referrals_count` and `current_stage` require extra queries that Pydantic
-        cannot run on its own. The route handler must set them explicitly after
-        calling model_validate:
+        `referrals_count` requires an extra query that Pydantic cannot run on its own.
+        The route handler must set it explicitly after calling model_validate:
 
             response.referrals_count = db.query(func.count(Contact.id)) \\
                 .filter(Contact.referred_by_id == contact.id).scalar() or 0
-            response.current_stage = _stage_response(latest_stage)
     """
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    address: str | None = None  # legacy rows may have no address
+    address: str | None = None
     assigned_to: int | None = None
     created_by: int | None = None
-    latitude: float | None = None
-    longitude: float | None = None
+    # Set when this contact was created by converting a lead
+    lead_id: int | None = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
     deleted_at: datetime.datetime | None = None
@@ -281,12 +223,13 @@ class ContactResponse(ContactBase):
     assigned_employee: EmployeeSummary | None = None
     lead_source: LeadSourceSummary | None = None
     referred_by: ContactSummary | None = None
+    # Branch object (populated from the branch relationship)
+    branch: BranchResponse | None = None
 
     # Must be set by the route after model_validate (not auto-populated)
     referrals_count: int = 0
     is_verified: bool = False
     missing_fields: list[str] = []
-    current_stage: LeadStageResponse | None = None
 
     # Populated from the DB column (from_attributes=True handles this automatically)
     notes: str | None = None
@@ -294,9 +237,6 @@ class ContactResponse(ContactBase):
     # Only one of these will have data depending on contact_type
     consumer_profile: ConsumerProfileResponse | None = None
     partner_profile: PartnerProfileResponse | None = None
-
-    # Products this contact is interested in (populated from the M2M relationship)
-    interested_products: list[ProductRef] = []
 
     # True when the creator is admin/manager — signals the web to show the "Schedule first follow-up?" prompt
     auto_followup_needed: bool = False
@@ -322,21 +262,20 @@ class ContactListItem(BaseModel):
 
     id: int
     contact_type: ContactType
-    branch: BranchEnum | None = None
+    # Branch object; None if no branch assigned
+    branch: BranchResponse | None = None
     name: str | None = None
     phone: str
     address: str | None = None
     district: str | None = None
-    profession_type: str | None = None  # partners only
-    house_stage: str | None = None      # consumers only
-    work_area: str | None = None        # partners only
-    latitude: float | None = None
-    longitude: float | None = None
-    lead_stage: LeadStageSummary | None = None
+    # Type-specific headline fields pulled from the JSONB profile data dict
+    partner_type: str | None = None   # partners only (data["partner_type"])
+    house_stage: str | None = None    # consumers only (data["house_stage"])
+    work_area: str | None = None      # partners only (data["work_area"])
     lead_source: LeadSourceSummary | None = None
     assigned_to: NameRef | None = None
     created_by: NameRef | None = None
-    # Branch of the employee who created the contact (e.g. "malappuram"); None when unknown
+    # Branch code of the employee who created the contact; None when unknown
     created_by_branch: str | None = None
     created_at: datetime.datetime
     # Computed on read: True when all required fields for the contact type are filled
@@ -413,3 +352,29 @@ class ContactListResponse(BaseModel):
     total: int
     skip: int
     limit: int
+
+
+# ── Bulk-assign schemas ───────────────────────────────────────────────────────
+
+class ContactBulkAssignRule(BaseModel):
+    """
+    One assignment rule: assign `count` unassigned contacts from lead source
+    `source_id` to employee `assigned_to`. source_id=None means any source.
+    """
+    source_id: int | None = None
+    assigned_to: int = Field(gt=0)
+    count: int = Field(gt=0, le=500)
+
+
+class ContactBulkAssignRequest(BaseModel):
+    assignments: list[ContactBulkAssignRule] = Field(min_length=1, max_length=50)
+
+
+class ContactBulkAssignResponse(BaseModel):
+    assigned: int
+
+
+class ContactStatsResponse(BaseModel):
+    """Counts of unassigned contacts, total and broken down by lead source."""
+    total_unassigned: int
+    unassigned_by_source: dict[str, int] = Field(default_factory=dict)

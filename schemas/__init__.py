@@ -1,3 +1,9 @@
+from .lead import (
+    LeadCreate, LeadUpdate, LeadResponse, LeadListItem, LeadListResponse,
+    ConvertLeadResponse, LeadStatsResponse,
+    WebsiteLeadCreate, SheetLeadCreate, InboundLeadResponse,
+    TenantApiKeyCreate, TenantApiKeyResponse, TenantApiKeyCreatedResponse,
+)
 from .enums import (
     RoleEnum,
     ContactType,
@@ -16,6 +22,8 @@ from .lead_source import (
     LeadSourceUpdateRequest,
     LeadSourceAdminResponse,
 )
+from .branch import BranchResponse
+from .contact_field_definition import ContactFieldDefinitionResponse, ContactFieldDefinitionUpdate
 from .consumer_profile import (
     ConsumerProfileBase,
     ConsumerProfileCreate,
@@ -30,13 +38,19 @@ from .partner_profile import (
 )
 from .lead_stage import LeadStageCreate, LeadStageResponse
 from .contact import ContactSummary, ContactBase, ContactCreate, ContactUpdate, ContactResponse
-from .contact import ContactListItem, ContactListResponse, LeadStageSummary, NameRef
+from .contact import ContactListItem, ContactListResponse, NameRef
 from .contact import PipelineStageItem
 from .contact import (
     PipelineStageCreate,
     PipelineStageUpdate,
     PipelineStageReorder,
     PipelineStageAdminResponse,
+)
+from .contact import (
+    ContactBulkAssignRule,
+    ContactBulkAssignRequest,
+    ContactBulkAssignResponse,
+    ContactStatsResponse,
 )
 
 __all__ = [
@@ -49,6 +63,10 @@ __all__ = [
     # LeadSource
     "LeadSourceBase", "LeadSourceCreate", "LeadSourceUpdate", "LeadSourceSummary", "LeadSourceResponse",
     "LeadSourceCreateRequest", "LeadSourceUpdateRequest", "LeadSourceAdminResponse",
+    # Branch
+    "BranchResponse",
+    # ContactFieldDefinition
+    "ContactFieldDefinitionResponse", "ContactFieldDefinitionUpdate",
     # ConsumerProfile
     "ConsumerProfileBase", "ConsumerProfileCreate", "ConsumerProfileUpdate", "ConsumerProfileResponse",
     # PartnerProfile
@@ -57,7 +75,7 @@ __all__ = [
     "LeadStageCreate", "LeadStageResponse",
     # Contact
     "ContactSummary", "ContactBase", "ContactCreate", "ContactUpdate", "ContactResponse",
-    "ContactListItem", "ContactListResponse", "LeadStageSummary", "NameRef",
+    "ContactListItem", "ContactListResponse", "NameRef",
     "PipelineStageItem",
     "PipelineStageCreate", "PipelineStageUpdate", "PipelineStageReorder", "PipelineStageAdminResponse",
 ]

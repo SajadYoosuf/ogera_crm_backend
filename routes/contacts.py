@@ -9,59 +9,51 @@ registers them when the app starts.
 
 HOW FASTAPI ROUTES WORK (simple version):
     @router.get("/{contact_id}")   →   GET /contacts/42
-    def get_contact(contact_id: int, db = Depends(get_db)):
+    def get_contact(contact_id: int, db = Depends(get_tenant_db)):
         ...                            FastAPI injects `db` automatically via Depends()
 
     The `Depends(get_current_user)` on the router itself means EVERY endpoint in this
     file requires a valid JWT token. Anonymous requests get a 401 automatically.
 
 HELPER FUNCTIONS IN THIS FILE:
-    _stage_response()       — build a LeadStageResponse with stage slug/name filled in
-    _get_new_lead_stage()   — fetch the "new_lead" PipelineStage for a contact type
-    _pick_random_assignee() — choose a random eligible employee for auto-assignment
     _ensure_phone_free()    — raise 409 if the phone already belongs to another contact
     _ensure_referrer()      — validate that the referring contact exists and is not self
-    _check_location()       — enforce GPS rules for field_visit vs. other leads
     _check_type_profiles()  — ensure the profile block matches the contact type
-    _check_consumer_options()— validate house_stage / tank_type against Settings
+    _validate_*_profile_data() — validate profile JSONB data against contact_field_definitions
 
 ROUTE OVERVIEW:
     GET    /contacts                  — paged list with filters
     GET    /contacts/export           — download CSV / XLSX / PDF
     GET    /contacts/import/template  — download blank import CSV
-    POST   /contacts/import/analyze   — dry-run an upload (no writes)
-    POST   /contacts/import/commit    — write the upload to the DB
+    POST   /contacts/import/analyze   — dry-run a CSV/XLSX file, returns row-level preview
+    POST   /contacts/import/commit    — write validated rows to the database
     GET    /contacts/type-counts      — badge counts per type
     GET    /contacts/partner-types    — active partner profession options
     GET    /contacts/{id}             — single contact detail
     POST   /contacts                  — create a new contact
     PUT    /contacts/{id}             — update a contact
     DELETE /contacts/{id}             — soft-delete a contact
-    GET    /contacts/{id}/stages      — full pipeline history
-    POST   /contacts/{id}/stages      — move contact to a new stage
 """
 
-from datetime import date, datetime, timedelta
+import logging
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import func, or_, select
-import config
-from sqlalchemy.orm import Session, aliased, joinedload, selectinload
-import json
-
+from sqlalchemy import func, or_, select, update as sa_update
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 import contact_export
 import contact_import
-from business_time import ist_day_start_utc, ist_now
-from auth import get_current_user
+from business_time import ist_day_start_utc
+from auth import get_current_user, get_tenant_db
 from contact_lookup import get_live_contact
-from database import get_db
 from phone_utils import phone_key
 from request_context import client_platform
 from services.lead_access import is_head
 from verification import missing_fields, verified_clause
-from models import Contact, ConsumerProfile, ContactAssignment, Employee, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage, Product, Sale
+from models import Contact, ConsumerProfile, Employee, LeadSource, PartnerProfile
 from schemas import (
     ContactCreate,
     ContactListItem,
@@ -69,12 +61,11 @@ from schemas import (
     ContactResponse,
     ContactType,
     ContactUpdate,
-    LeadStageCreate,
-    LeadStageResponse,
-    PipelineStageItem,
+    ContactBulkAssignRequest,
+    ContactBulkAssignResponse,
+    ContactStatsResponse,
 )
-from schemas.enums import profession_key
-import settings_catalog as catalog
+from services.contact_field_service import validate_profile_data
 
 router = APIRouter(
     prefix="/contacts", tags=["contacts"], dependencies=[Depends(get_current_user)]
@@ -84,85 +75,24 @@ router = APIRouter(
 # Admins and managers oversee leads; they don't handle follow-ups themselves.
 NON_ASSIGNABLE_ROLES = ("admin", "manager")
 
+logger = logging.getLogger(__name__)
 
-def _stage_response(stage: LeadStage) -> LeadStageResponse:
+
+def _run_notification(db: Session, send) -> None:
     """
-    Convert a LeadStage DB row into a LeadStageResponse schema object.
+    Run a notification write without letting it break the request.
 
-    WHY NOT model_validate() ALONE?
-        LeadStage stores only `stage_id` (a foreign key integer). The slug and
-        human-readable name live in PipelineStage. This function reads the related
-        PipelineStage via `stage.stage_type` and copies slug/name/contact_type
-        onto the response object before returning it.
-
-    INPUT:  a LeadStage ORM object (with stage_type relationship loaded or lazy-loaded)
-    OUTPUT: a LeadStageResponse Pydantic object with slug and name filled in
+    The write goes in a SAVEPOINT. If it fails, only the savepoint is undone, so the
+    session stays usable for the response. The contact itself is already committed
+    by the caller and is never rolled back here.
     """
-    st = stage.stage_type
-    r = LeadStageResponse.model_validate(stage, from_attributes=True)
-    if st is not None:
-        r.stage_slug = st.slug
-        r.stage_name = st.name
-        r.contact_type = st.contact_type
-    if stage.changed_by_employee:
-        r.changed_by_name = stage.changed_by_employee.name
-    return r
-
-
-def _get_new_lead_stage(db: Session, contact_type: str) -> PipelineStage:
-    """
-    Fetch the 'new_lead' pipeline stage for the given contact type.
-
-    Every new contact starts at the 'new_lead' stage. This function looks it up
-    so the caller can attach a LeadStage row to the new contact.
-
-    Raises 500 if the pipeline has not been seeded (should never happen in production,
-    but a clear error is better than a confusing NoneType crash).
-
-    INPUT:  db session, contact_type string ("consumer" / "partner")
-    OUTPUT: PipelineStage ORM object for the 'new_lead' stage of that type
-    """
-    st = db.query(PipelineStage).filter(
-        PipelineStage.slug == "new_lead",
-        PipelineStage.contact_type == contact_type,
-        PipelineStage.is_active == 1,
-    ).first()
-    if not st:
-        raise HTTPException(status_code=500, detail="Pipeline not seeded: new_lead stage missing")
-    return st
-
-
-def _pick_random_assignee(db: Session) -> int:
-    """
-    Pick a random active, non-admin, non-manager employee to own a new lead.
-
-    Used when the caller does not specify an assignee. The random selection
-    distributes new leads across the team automatically.
-
-    SQL equivalent:
-        SELECT id FROM employees
-        WHERE deleted_at IS NULL AND is_active = 1 AND role NOT IN ('admin','manager')
-        ORDER BY RAND() LIMIT 1;
-
-    INPUT:  db session
-    OUTPUT: employee id (int)
-    RAISES: 409 if no eligible employee exists
-    """
-    employee = (
-        db.query(Employee)
-        .filter(
-            Employee.deleted_at.is_(None),
-            Employee.is_active == 1,
-            Employee.role.notin_(NON_ASSIGNABLE_ROLES),
-        )
-        .order_by(func.rand() if db.get_bind().dialect.name == "mysql" else func.random())
-        .first()
-    )
-    if employee is None:
-        raise HTTPException(
-            status_code=409, detail="No eligible employee available to assign this lead"
-        )
-    return employee.id
+    try:
+        with db.begin_nested():
+            send()
+        db.commit()
+    except Exception:
+        logger.exception("Notification failed; the contact change was kept")
+        db.rollback()
 
 
 def _ensure_phone_free(db: Session, phone: str, user: Employee, exclude_id: int | None = None) -> None:
@@ -212,38 +142,6 @@ def _ensure_referrer(db: Session, referred_by_id: int | None, contact_id: int | 
         raise HTTPException(status_code=400, detail="Referring contact not found")
 
 
-def _check_location(source: LeadSource | None, latitude, longitude, creating: bool = False, platform: str = "web") -> None:
-    """
-    Enforce GPS coordinate rules based on the lead source.
-
-    RULES:
-        - Field visit leads created from the mobile app MUST have latitude + longitude.
-        - All other lead sources MUST NOT have any coordinates.
-
-    WHY SEPARATE FOR CREATE VS UPDATE?
-        On update, the caller might only be changing the name — we shouldn't
-        suddenly demand GPS. The `creating=True` flag makes the "must have GPS"
-        check only run on new field visit contacts from mobile.
-
-    WHY MOBILE ONLY?
-        Field visit leads are always created by a sales rep in the field using the
-        mobile app. Web/admin users creating a field visit contact on behalf of
-        a rep are not expected to supply GPS coordinates.
-
-    INPUT:  the LeadSource ORM object (or None), latitude, longitude, creating flag, platform
-    RAISES: 400 if the rules are violated
-    """
-    if source is not None and source.slug == "field_visit":
-        if creating and platform == "mobile" and (latitude is None or longitude is None):
-            raise HTTPException(
-                status_code=400, detail="latitude and longitude are required for field visit leads"
-            )
-    elif latitude is not None or longitude is not None:
-        raise HTTPException(
-            status_code=400, detail="latitude and longitude are only allowed for field visit leads"
-        )
-
-
 def _check_type_profiles(contact_type: str, consumer_profile, partner_profile) -> None:
     """
     Ensure the caller isn't sending a profile block for the wrong contact type.
@@ -260,38 +158,45 @@ def _check_type_profiles(contact_type: str, consumer_profile, partner_profile) -
         raise HTTPException(status_code=400, detail="partner_profile is only allowed for partner contacts")
 
 
-def _check_consumer_options(db: Session, profile, current=None) -> None:
+def _validate_consumer_profile_data(db: Session, data: dict) -> None:
     """
-    Validate that consumer profile dropdown values exist in the Settings catalog.
+    Validate consumer profile JSONB data against the tenant's field definitions.
 
-    The admin can add or hide options in Settings > Lists & Options. This function
-    checks that `house_stage` and `current_tank_type` are currently active options.
+    Reads active ContactFieldDefinition rows for entity_type='consumer' and checks
+    required fields, dropdown values, and number types.
 
-    EXISTING VALUE GRACE:
-        If a record already has a value that was later hidden by the admin, editing
-        OTHER fields on that record should not suddenly fail. The `current` parameter
-        is the existing profile — its value is always allowed even if hidden.
-
-    INPUT:  db session, the incoming profile data, optional current profile from DB
-    RAISES: 400 if a value is not an active option in Settings
+    INPUT:  db session, the incoming data dict (e.g. {"house_stage": "occupied"})
+    RAISES: 422 on validation failure (required missing, bad dropdown value, non-numeric)
     """
-    if profile is None:
+    if not data:
         return
-    for field, category in (("house_stage", catalog.HOUSE_STAGE), ("current_tank_type", catalog.TANK_TYPE)):
-        value = getattr(profile, field)
-        if value is not None:
-            catalog.ensure_allowed(db, category, value, getattr(current, field, None))
+    validate_profile_data(db, "consumer", data)
+
+
+def _validate_partner_profile_data(db: Session, data: dict) -> None:
+    """
+    Validate partner profile JSONB data against the tenant's field definitions.
+
+    Reads active ContactFieldDefinition rows for entity_type='partner' and checks
+    required fields, dropdown values, and number types.
+
+    INPUT:  db session, the incoming data dict (e.g. {"partner_type": "plumber"})
+    RAISES: 422 on validation failure
+    """
+    if not data:
+        return
+    validate_profile_data(db, "partner", data)
 
 
 def contact_filters(
     contact_type: ContactType | None = None,
-    profession_type: str | None = Query(None, description="Partner profession, e.g. plumber"),
+    partner_type: str | None = Query(None, description="Partner type key, e.g. plumber"),
     district: str | None = None,
     search: str | None = Query(None, description="Matches name or phone"),
-    stage_id: int | None = Query(None, description="Filter by pipeline stage (stage_types.id)"),
     lead_source_id: int | None = None,
     assigned_to: int | None = None,
     created_by: int | None = None,
+    branch_id: int | None = Query(None, description="Filter by branch id"),
     unattributed: bool | None = Query(None, description="true = only contacts with no recorded creator"),
     verified: bool | None = Query(None, description="true = only verified, false = only unverified"),
     created_from: date | None = Query(None, description="Created on or after this date"),
@@ -316,61 +221,25 @@ def contact_filters(
     return {k: v for k, v in params.items() if v is not None}
 
 
-def contact_query(db: Session, f: dict, entities, user: Employee):
+def contact_query(db: Session, f: dict, user: Employee):
     """
     Build a SQLAlchemy query for contacts matching the given filters.
 
     This is the core query used by the list endpoint, the export, and the count.
     It is kept in one place so all three always return the same data.
 
-    HOW THE CURRENT STAGE JOIN WORKS:
-        LeadStage rows are append-only (we never update them, only add new ones).
-        To find the current stage, we:
-            1. Find the MAX(id) per contact_id in a subquery called `latest`.
-            2. Outer-join Contact → latest → LeadStage to get that one row.
-        Using max(id) instead of max(changed_at) is safe because ids are always
-        strictly increasing and avoids ambiguity if two stages share a timestamp.
-
     SQL equivalent (simplified):
-        SELECT contact.*, latest_stage.*
-        FROM contacts
-        LEFT JOIN (
-            SELECT contact_id, MAX(id) AS latest_row_id FROM lead_stages GROUP BY contact_id
-        ) AS latest ON latest.contact_id = contacts.id
-        LEFT JOIN lead_stages AS current ON current.id = latest.latest_row_id
-        WHERE contacts.deleted_at IS NULL
-          AND <all active filters>
+        SELECT contacts.* FROM contacts
+        WHERE contacts.deleted_at IS NULL AND <all active filters>
 
     INPUT:
-        db       — SQLAlchemy session
-        f        — filter dict from contact_filters()
-        entities — a lambda that receives the `current` stage alias and returns
-                   the list of columns/models to SELECT. This lets callers ask for
-                   (func.count(Contact.id),) for the count query, or
-                   (Contact, current) for the full list.
-        user     — the currently signed-in employee (for future row-level access control)
+        db   — SQLAlchemy session
+        f    — filter dict from contact_filters()
+        user — the currently signed-in employee (ownership scope)
 
-    OUTPUT: SQLAlchemy Query object (not yet executed; caller calls .all() or .scalar())
+    OUTPUT: SQLAlchemy Query object (not yet executed; caller calls .all() or .count())
     """
-    # Subquery: for each contact, find the id of its most recent LeadStage row.
-    latest = (
-        db.query(
-            LeadStage.contact_id.label("contact_id"),
-            func.max(LeadStage.id).label("latest_row_id"),
-        )
-        .group_by(LeadStage.contact_id)
-        .subquery()
-    )
-    # `aliased` creates a second reference to LeadStage so SQLAlchemy doesn't
-    # confuse it with other joins to the same table.
-    current = aliased(LeadStage)
-    q = (
-        db.query(*entities(current))
-        .select_from(Contact)
-        .outerjoin(latest, latest.c.contact_id == Contact.id)
-        .outerjoin(current, current.id == latest.c.latest_row_id)
-        .filter(Contact.deleted_at.is_(None))  # Exclude soft-deleted contacts
-    )
+    q = db.query(Contact).filter(Contact.deleted_at.is_(None))
 
     # Ownership scope: admin/manager ("heads") see every contact. Everyone else
     # only sees leads they currently own (assigned_to) or originally brought in
@@ -384,18 +253,17 @@ def contact_query(db: Session, f: dict, entities, user: Employee):
     # Apply each filter only if it was provided (avoids unnecessary WHERE clauses)
     if "contact_type" in f:
         q = q.filter(Contact.contact_type == f["contact_type"].value)
-    if "profession_type" in f:
+    if "partner_type" in f:
         q = q.join(PartnerProfile, PartnerProfile.contact_id == Contact.id).filter(
-            # Legacy rows hold free text ("Plumber", "Interior Designer"), so normalise before comparing
-            func.replace(func.lower(PartnerProfile.profession_type), " ", "_") == f["profession_type"]
+            PartnerProfile.data["partner_type"].as_string() == f["partner_type"]
         )
+    if "branch_id" in f:
+        q = q.filter(Contact.branch_id == f["branch_id"])
     if "district" in f:
         q = q.filter(Contact.district.ilike(f"%{f['district']}%"))
     if "search" in f:
         like = f"%{f['search'].strip()}%"
         q = q.filter(or_(Contact.name.ilike(like), Contact.phone.ilike(like)))
-    if "stage_id" in f:
-        q = q.filter(current.stage_id == f["stage_id"])
     if "lead_source_id" in f:
         q = q.filter(Contact.lead_source_id == f["lead_source_id"])
     if "assigned_to" in f:
@@ -436,7 +304,7 @@ def list_contacts(
     limit: int = Query(10, ge=1, le=100),
     sort: Literal["newest", "oldest", "name_asc", "name_desc"] = Query("newest"),
     f: dict = Depends(contact_filters),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """
@@ -456,23 +324,20 @@ def list_contacts(
         on every row (N+1 query problem). joinedload fetches related rows in one
         JOIN, which is much faster for a page of 10–100 contacts.
 
-    STAGE NAME BATCH LOAD:
-        The current stage for each contact stores only a `stage_id` integer.
-        We collect all unique stage ids on the page, fetch their names in ONE query,
-        then build a lookup dict — avoiding N extra queries for stage names.
     """
     # 1. Total count (ignores skip/limit so the UI knows the full result set size)
-    total = contact_query(db, f, lambda cur: (func.count(Contact.id),), current_user).scalar() or 0
+    total = contact_query(db, f, current_user).count()
 
-    # 2. Page data: fetch Contact + current LeadStage alias for each row
+    # 2. Page data
     rows = (
-        contact_query(db, f, lambda cur: (Contact, cur), current_user)
+        contact_query(db, f, current_user)
         .options(
             joinedload(Contact.lead_source),
             joinedload(Contact.assigned_employee),
             joinedload(Contact.creator),
             joinedload(Contact.partner_profile),
             joinedload(Contact.consumer_profile),
+            joinedload(Contact.branch),
         )
         .order_by(*CONTACT_ORDERINGS[sort])
         .offset(skip)
@@ -480,48 +345,30 @@ def list_contacts(
         .all()
     )
 
-    # 3. Batch-load stage names for all stage ids on this page (one query, not N)
-    stage_ids = {s.stage_id for _, s in rows if s is not None}
-    stage_meta: dict[int, tuple[str, str]] = {}
-    if stage_ids:
-        for st in db.query(PipelineStage).filter(PipelineStage.id.in_(stage_ids)).all():
-            stage_meta[st.id] = (st.slug, st.name)
-
-    # 4. Build the response list
+    # 3. Build the response list
     items = []
-    for contact, current_stage in rows:
+    for contact in rows:
         pending = missing_fields(contact)
-        lead_stage_val = None
-        if current_stage is not None:
-            slug, name = stage_meta.get(current_stage.stage_id, ("", ""))
-            lead_stage_val = {
-                "stage_id": current_stage.stage_id,
-                "stage_slug": slug,
-                "stage_name": name,
-                "changed_at": current_stage.changed_at,
-            }
         item = ContactListItem.model_validate(
             {
                 "id": contact.id,
                 "contact_type": contact.contact_type,
-                # Branch belongs to the contact record, not the employee who created it.
+                # Branch relationship object (id, name, code); None if unassigned
                 "branch": contact.branch,
                 "name": contact.name,
                 "phone": contact.phone,
                 "address": contact.address,
                 "district": contact.district,
-                # Type-specific headline fields — None when the type doesn't apply
-                "profession_type": profession_key(contact.partner_profile.profession_type) if contact.partner_profile else None,
-                "house_stage": contact.consumer_profile.house_stage if contact.consumer_profile else None,
-                "work_area": contact.partner_profile.work_area if contact.partner_profile else None,
-                "latitude": contact.latitude,
-                "longitude": contact.longitude,
-                "lead_stage": lead_stage_val,
+                # Type-specific headline fields pulled from JSONB profile data
+                "partner_type": (contact.partner_profile.data or {}).get("partner_type") if contact.partner_profile else None,
+                "house_stage": (contact.consumer_profile.data or {}).get("house_stage") if contact.consumer_profile else None,
+                "work_area": (contact.partner_profile.data or {}).get("work_area") if contact.partner_profile else None,
                 "lead_source": contact.lead_source,
                 "assigned_to": contact.assigned_employee,
                 "created_by": contact.creator,
-                # Creator's branch, so admins and managers can see where a lead came from at a glance
-                "created_by_branch": contact.creator.branch if contact.creator else None,
+                # Sourced from the contact's own branch_id (set at creation time), NOT the
+                # creator's current branch — an employee may move branches after creating this contact.
+                "created_by_branch": contact.branch.code if contact.branch else None,
                 "created_at": contact.created_at,
                 "is_verified": not pending,
                 "missing_fields": pending,
@@ -535,22 +382,30 @@ def list_contacts(
 
 
 @router.get("/partner-types", summary="List partner profession types")
-def list_profession_types(db: Session = Depends(get_db)):
-    """Active partner types from Settings > Lists & Options. The `value` is what the API stores."""
-    return [{"value": i.value, "label": i.label} for i in catalog.list_items(db, catalog.PROFESSIONAL_TYPE) if i.is_active]
+def list_profession_types(db: Session = Depends(get_tenant_db)):
+    """Active partner types from contact_field_definitions (entity_type='partner', field_name='partner_type')."""
+    from models.contact_field_definition import ContactFieldDefinition
+    defn = db.query(ContactFieldDefinition).filter(
+        ContactFieldDefinition.entity_type == "partner",
+        ContactFieldDefinition.field_name == "partner_type",
+        ContactFieldDefinition.is_active.is_(True),
+    ).first()
+    if defn and defn.options:
+        return [{"value": v, "label": v} for v in defn.options]
+    return []
 
 
 @router.get("/export", summary="Export contacts")
 def export_contacts(
     format: str = Query("csv", pattern="^(csv|xlsx|pdf)$"),
     f: dict = Depends(contact_filters),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """Downloads the contacts matching the list filters as CSV, Excel or PDF (`format`).
     It uses the same filters as the list, so the export matches what is on screen.
     """
-    total = contact_query(db, f, lambda cur: (func.count(Contact.id),), current_user).scalar() or 0
+    total = contact_query(db, f, current_user).count()
     limit = contact_export.MAX_ROWS[format]
     if total > limit:
         raise HTTPException(
@@ -558,7 +413,7 @@ def export_contacts(
             detail=f"{total} contacts match; a {format.upper()} export holds at most {limit}. Narrow the filters.",
         )
     rows = (
-        contact_query(db, f, lambda cur: (Contact, cur), current_user)
+        contact_query(db, f, current_user)
         .options(
             joinedload(Contact.lead_source),
             joinedload(Contact.assigned_employee),
@@ -569,21 +424,15 @@ def export_contacts(
         .order_by(Contact.created_at.desc(), Contact.id.desc())
         .all()
     )
-    export_stage_ids = {s.stage_id for _, s in rows if s is not None}
-    export_stage_slugs: dict[int, str] = {}
-    if export_stage_ids:
-        for st in db.query(PipelineStage).filter(PipelineStage.id.in_(export_stage_ids)).all():
-            export_stage_slugs[st.id] = st.slug
-    table = contact_export.build_rows(
-        [(c, export_stage_slugs.get(s.stage_id) if s else None, not missing_fields(c)) for c, s in rows]
-    )
+    export_headers, c_fields, p_fields = contact_export.get_export_config(db)
+    table = contact_export.build_rows([(c, None, not missing_fields(c)) for c in rows], c_fields, p_fields)
     if format == "csv":
-        body = contact_export.to_csv(table)
+        body = contact_export.to_csv(table, export_headers)
     elif format == "xlsx":
-        body = contact_export.to_xlsx(table)
+        body = contact_export.to_xlsx(table, export_headers)
     else:
         summary = ", ".join(f"{k.replace('_', ' ')}: {getattr(v, 'value', v)}" for k, v in f.items())
-        body = contact_export.to_pdf(table, summary)
+        body = contact_export.to_pdf(table, export_headers, summary)
     filename = f"contacts_{date.today():%Y%m%d}.{format}"
     return Response(
         body,
@@ -593,120 +442,237 @@ def export_contacts(
 
 
 @router.get("/import/template", summary="Download import template")
-def import_template():
-    """A blank CSV with the headers the importer recognises and one example row."""
+def import_template(
+    db: Session = Depends(get_tenant_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    """
+    A blank CSV with core headers plus the tenant's own profile field columns
+    (loaded from contact_field_definitions), so the user sees their exact field names.
+    """
+    field_defs = contact_import.load_field_defs(db)
     return Response(
-        contact_import.template_csv(),
+        contact_import.template_csv(field_defs),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="contacts_import_template.csv"'},
     )
 
 
-def _read_upload(file: UploadFile, mapping_json: str | None):
-    """Rows, header row and column mapping for an uploaded sheet (auto-detected unless given)."""
-    try:
-        rows = contact_import.read_rows(file.filename or "", file.file.read(contact_import.MAX_BYTES + 1))
-    except contact_import.ImportFileError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    header_row, detected = contact_import.detect_header(rows)
-    if mapping_json:
-        try:
-            chosen = {int(col): fld for col, fld in json.loads(mapping_json).items() if fld in contact_import.FIELDS}
-        except (ValueError, AttributeError):
-            raise HTTPException(status_code=400, detail="mapping must be a JSON object of column index to field")
-    else:
-        chosen = detected
-    return rows, header_row, chosen
+# ── Import analyze (dry run) ───────────────────────────────────────────────────
+# IMPORTANT: these /import/* routes MUST stay ABOVE /{contact_id} in this file.
+# FastAPI matches in registration order; without that, "import" would match the
+# int param and return 422 "Contact id must be a whole number".
 
-
-def _import_options(default_type: str, default_source_id: int | None, duplicates: str) -> contact_import.Options:
-    if default_type not in ("consumer", "partner"):
-        raise HTTPException(status_code=400, detail="default_type must be consumer or partner")
-    if duplicates not in ("skip", "update_blank"):
-        raise HTTPException(status_code=400, detail="duplicates must be skip or update_blank")
-    return contact_import.Options(default_type, default_source_id, duplicates)
-
-
-@router.post("/import/analyze", summary="Check an import file")
-def analyze_import(
+@router.post("/import/analyze", summary="Dry-run a contact import file")
+def import_analyze(
     file: UploadFile = File(...),
-    mapping: str | None = Form(None, description="JSON {column index: field}; auto-detected when omitted"),
     default_type: str = Form("consumer"),
     default_source_id: int | None = Form(None),
     duplicates: str = Form("skip"),
-    db: Session = Depends(get_db),
-    _: Employee = Depends(get_current_user),
+    mapping: str | None = Form(None),
+    db: Session = Depends(get_tenant_db),
+    current_user: Employee = Depends(get_current_user),
 ):
-    """Reads an uploaded sheet and reports the detected columns and every row that needs attention.
-    Nothing is written.
     """
-    rows, header_row, chosen = _read_upload(file, mapping)
-    options = _import_options(default_type, default_source_id, duplicates)
-    results = contact_import.analyze(db, rows, header_row, chosen, options)
-    headers = rows[header_row]
+    Read an uploaded CSV/XLSX, validate every row, and return a preview report
+    WITHOUT writing anything to the database.
+
+    HOW IT WORKS:
+        1. Read the file bytes and parse rows.
+        2. Auto-detect the header row unless `mapping` JSON is provided.
+        3. Run `contact_import.analyze()` — validates phones, names, sources,
+           house stages, partner types, and duplicate detection.
+        4. Return a summary + first 20 row-level results so the UI can show
+           the user what will happen before they commit.
+
+    FORM FIELDS:
+        file              — .csv or .xlsx upload
+        default_type      — "consumer" or "partner" (default: "consumer")
+        default_source_id — lead source id to apply when the sheet has none
+        duplicates        — "skip" or "update_blank"
+        mapping           — JSON object {"0": "name", "1": "phone", ...} (column index → field name)
+                            omit to auto-detect
+
+    RETURNS:
+        {
+          "summary": { "total": 50, "ready": 40, "warning": 5, "duplicate": 3, "error": 2 },
+          "header_row": 0,
+          "mapping": {"0": "name", "1": "phone"},
+          "rows": [ { "row": 2, "status": "ready", "issues": [], "data": {...} }, ... ]
+        }
+    """
+    content = file.file.read()
+    try:
+        rows = contact_import.read_rows(file.filename or "", content)
+    except contact_import.ImportFileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Load field defs once — reused for column detection, validation, and analysis
+    field_defs = contact_import.load_field_defs(db)
+
+    if mapping:
+        import json as _json
+        try:
+            raw_map = _json.loads(mapping)
+            col_map: dict[int, str] = {int(k): v for k, v in raw_map.items()}
+            header_row = 0
+        except Exception:
+            raise HTTPException(status_code=422, detail="mapping must be a JSON object like {\"0\": \"name\", \"1\": \"phone\"}")
+    else:
+        # detect_all_columns maps both core fields AND profile fields from contact_field_definitions
+        header_row, col_map = contact_import.detect_all_columns(rows, field_defs)
+
+    opts = contact_import.Options(
+        default_type=default_type,
+        default_source_id=default_source_id,
+        duplicates=duplicates,
+    )
+    results = contact_import.analyze(db, rows, header_row, col_map, opts, field_defs=field_defs)
+    summary = contact_import.summarize(results)
+
+    # ── Build the columns array the frontend ImportReport type expects ─────────
+    # For each column in the header row, include its header text, the detected
+    # field mapping (or null), and up to 3 sample values from the data rows.
+    header_cells = rows[header_row] if header_row < len(rows) else []
+    num_cols = max((len(r.raw) for r in results), default=len(header_cells))
+
+    # Collect samples per column index from the first few data rows
+    samples: dict[int, list[str]] = {}
+    for r in results[:10]:
+        for col_idx, cell in enumerate(r.raw):
+            if cell and cell.strip():
+                samples.setdefault(col_idx, [])
+                if len(samples[col_idx]) < 3:
+                    samples[col_idx].append(cell.strip())
+
+    columns = [
+        {
+            "index": col_idx,
+            "header": header_cells[col_idx] if col_idx < len(header_cells) else f"Column {col_idx + 1}",
+            "field": col_map.get(col_idx),  # None when unmatched
+            "sample": samples.get(col_idx, []),
+        }
+        for col_idx in range(num_cols)
+    ]
+
+    # ── Build the fields dict: field_name → display label ─────────────────────
+    # Core fields
+    fields: dict[str, str] = dict(contact_import.FIELDS)
+    # Profile fields from this tenant's contact_field_definitions
+    for entity_defs in field_defs.values():
+        for defn in entity_defs:
+            fields[defn.field_name] = defn.field_label or defn.field_name
+
+    # ── Required fields that have no column mapped yet ─────────────────────────
+    # "phone" is the only hard-required field (name and district become warnings).
+    required = {"phone"}
+    mapped_fields = set(col_map.values())
+    missing_required = [f for f in required if f not in mapped_fields]
+
+    # ── Problem rows only (warning, duplicate, error) ─────────────────────────
+    # The frontend only displays rows that need attention; "ready" rows are silent.
+    problem_rows = [
+        {
+            "row": r.row,
+            "status": r.status,
+            "issues": r.issues,
+            "raw": r.raw,
+            # Extract name and phone from validated data for the row preview
+            "name": r.data.get("name"),
+            "phone": r.data.get("phone"),
+        }
+        for r in results
+        if r.status != "ready"
+    ]
+
     return {
-        "header_row": header_row + 1,
-        "columns": [
-            {
-                "index": i,
-                "header": headers[i] if i < len(headers) else "",
-                "field": chosen.get(i),
-                "sample": [r[i] for r in rows[header_row + 1:header_row + 4] if i < len(r) and r[i]],
-            }
-            for i in range(max(len(headers), max(chosen, default=-1) + 1))
-        ],
-        "fields": contact_import.FIELDS,
-        "missing_required": [f for f in ("name", "phone") if f not in chosen.values()],
-        "summary": contact_import.summarize(results),
-        "rows": [
-            {"row": r.row, "status": r.status, "issues": r.issues, "raw": r.raw,
-             "name": r.data.get("name"), "phone": r.data.get("phone")}
-            for r in results if r.status != "ready"
-        ],
+        "header_row": header_row,
+        "columns": columns,
+        "fields": fields,
+        "missing_required": missing_required,
+        "summary": summary,
+        "rows": problem_rows,
     }
 
 
-@router.post("/import/commit", summary="Import contacts from a file")
-def commit_import(
+@router.post("/import/commit", summary="Write a contact import to the database")
+def import_commit(
     file: UploadFile = File(...),
-    mapping: str = Form(...),
     default_type: str = Form("consumer"),
     default_source_id: int | None = Form(None),
     duplicates: str = Form("skip"),
-    assigned_to: int | None = Form(None, description="Owner for every imported contact; random eligible employee when omitted"),
-    db: Session = Depends(get_db),
+    mapping: str = Form(...),
+    assigned_to: str | None = Form(None),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """Writes the ready and warning rows of an uploaded sheet. Error rows are skipped.
-    `duplicates` decides what happens to a row that matches an existing contact (skip it, or fill only its blank fields).
     """
-    rows, header_row, chosen = _read_upload(file, mapping)
-    if "name" not in chosen.values() or "phone" not in chosen.values():
-        raise HTTPException(status_code=400, detail="Map the Name and Phone columns first")
-    options = _import_options(default_type, default_source_id, duplicates)
-    if default_source_id is not None and not db.get(LeadSource, default_source_id):
-        raise HTTPException(status_code=400, detail="Lead source not found")
+    Re-analyze the same file and write all ready/warning rows to the database.
 
-    if assigned_to is not None:
-        if not db.query(Employee).filter(Employee.id == assigned_to, Employee.deleted_at.is_(None)).first():
-            raise HTTPException(status_code=400, detail="Assigned employee not found")
-        assignees = [assigned_to]
+    WHY RE-ANALYZE?
+        The frontend calls analyze first (dry run) so the user can preview.
+        On commit it re-uploads the same file and we re-run analysis so the
+        preview and the actual import always agree — there is no stale state.
+
+    FORM FIELDS:
+        file              — same .csv or .xlsx as analyze
+        default_type      — "consumer" or "partner"
+        default_source_id — fallback lead source id
+        duplicates        — "skip" or "update_blank"
+        mapping           — required JSON column→field map from the analyze response
+        assigned_to       — JSON array of employee ids, e.g. "[3,5,7]", or null to
+                            auto-pick from the active sales staff
+
+    RETURNS:
+        { "created": 40, "updated": 5, "skipped": 5 }
+    """
+    import json as _json
+
+    content = file.file.read()
+    try:
+        rows = contact_import.read_rows(file.filename or "", content)
+    except contact_import.ImportFileError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    try:
+        raw_map = _json.loads(mapping)
+        col_map: dict[int, str] = {int(k): v for k, v in raw_map.items()}
+    except Exception:
+        raise HTTPException(status_code=422, detail="mapping must be a JSON object like {\"0\": \"name\", \"1\": \"phone\"}")
+
+    # Resolve assignee ids — use the provided list or fall back to active sales staff
+    if assigned_to:
+        try:
+            assignee_ids: list[int] = _json.loads(assigned_to)
+            if not isinstance(assignee_ids, list) or not assignee_ids:
+                raise ValueError
+        except Exception:
+            raise HTTPException(status_code=422, detail="assigned_to must be a JSON array of employee ids")
     else:
-        assignees = [
-            e.id for e in db.query(Employee).filter(
-                Employee.deleted_at.is_(None), Employee.is_active == 1, Employee.role.notin_(NON_ASSIGNABLE_ROLES)
-            )
-        ]
-        if not assignees:
-            raise HTTPException(status_code=409, detail="No eligible employee available to assign these leads")
+        sales_staff = (
+            db.query(Employee.id)
+            .filter(Employee.role == "sales_executive", Employee.is_active.is_(True))
+            .all()
+        )
+        assignee_ids = [row[0] for row in sales_staff]
+        if not assignee_ids:
+            raise HTTPException(status_code=422, detail="No active sales staff found; pass assigned_to explicitly")
 
-    results = contact_import.analyze(db, rows, header_row, chosen, options)
-    return contact_import.run_import(db, results, options, assignees, current_user.id)
+    opts = contact_import.Options(
+        default_type=default_type,
+        default_source_id=default_source_id,
+        duplicates=duplicates,
+    )
+    # Load field defs for validation — same query as in analyze to keep both in sync
+    field_defs = contact_import.load_field_defs(db)
+    header_row, _ = contact_import.detect_all_columns(rows, field_defs)
+    results = contact_import.analyze(db, rows, header_row, col_map, opts, field_defs=field_defs)
+    return contact_import.run_import(db, results, opts, assignee_ids, created_by=current_user.id)
 
 
 @router.get("/type-counts", summary="Count contacts per type")
 def contact_type_counts(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """A live count of the contacts per type (consumer, partner), for the tab badges."""
@@ -718,18 +684,133 @@ def contact_type_counts(
     return {"all": sum(counts.values()), **counts}
 
 
+# ── Stats ─────────────────────────────────────────────────────────────────────
+# IMPORTANT: these fixed-path routes MUST come before /{contact_id}.
+# FastAPI matches routes in registration order; "stats" would otherwise be
+# tested against contact_id: int and fail before reaching this handler.
+
+@router.get("/stats", response_model=ContactStatsResponse, summary="Unassigned contact counts by lead source")
+def contact_stats(current_user: Employee = Depends(get_current_user)):
+    """
+    Return the total number of unassigned contacts and a breakdown by lead source.
+
+    WHY THIS EXISTS:
+        The Bulk Assign modal needs to know how many unassigned contacts exist per
+        source so the user can decide how many to distribute to each employee.
+
+    RETURNS:
+        {
+          "total_unassigned": 42,
+          "unassigned_by_source": {"WhatsApp": 15, "Website": 10, "Walk-in": 17}
+        }
+    """
+    schema = current_user._tenant_schema
+    try:
+        from database import get_session_for_schema
+        with get_session_for_schema(schema) as db:
+            total = db.scalar(
+                select(func.count(Contact.id)).where(
+                    Contact.deleted_at.is_(None),
+                    Contact.assigned_to.is_(None),
+                )
+            ) or 0
+
+            rows = db.execute(
+                select(LeadSource.name, func.count(Contact.id))
+                .join(LeadSource, Contact.lead_source_id == LeadSource.id, isouter=True)
+                .where(Contact.deleted_at.is_(None), Contact.assigned_to.is_(None))
+                .group_by(LeadSource.name)
+            ).all()
+            by_source = {(row[0] or "Unknown"): row[1] for row in rows}
+    except OperationalError as exc:
+        logger.error("contact_stats — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
+    return ContactStatsResponse(total_unassigned=total, unassigned_by_source=by_source)
+
+
+# ── Bulk assign ───────────────────────────────────────────────────────────────
+
+@router.post("/bulk-assign", response_model=ContactBulkAssignResponse, summary="Bulk assign unassigned contacts by source")
+def bulk_assign_contacts(
+    body: ContactBulkAssignRequest,
+    current_user: Employee = Depends(get_current_user),
+):
+    """
+    Assign batches of unassigned contacts to employees by lead source.
+
+    HOW IT WORKS:
+        For each rule {source_id, assigned_to, count}:
+          1. Find the N oldest unassigned contacts from that source (or any source
+             when source_id is None), ordered oldest-first so early enquiries
+             get picked up first.
+          2. UPDATE their assigned_to to the given employee id.
+
+    BODY EXAMPLE:
+        {
+          "assignments": [
+            { "source_id": 3, "assigned_to": 5, "count": 15 },
+            { "source_id": null, "assigned_to": 7, "count": 10 }
+          ]
+        }
+
+    Returns the total number of contacts actually assigned (may be less than
+    requested when fewer unassigned contacts exist for that source).
+    """
+    schema = current_user._tenant_schema
+    try:
+        from database import get_session_for_schema
+        with get_session_for_schema(schema) as db:
+            total_assigned = 0
+
+            for rule in body.assignments:
+                query = (
+                    select(Contact.id)
+                    .where(Contact.deleted_at.is_(None), Contact.assigned_to.is_(None))
+                    .order_by(Contact.created_at.asc())
+                    .limit(rule.count)
+                )
+                if rule.source_id is not None:
+                    query = query.where(Contact.lead_source_id == rule.source_id)
+
+                contact_ids = [row[0] for row in db.execute(query).all()]
+                if not contact_ids:
+                    continue
+
+                db.execute(
+                    sa_update(Contact)
+                    .where(Contact.id.in_(contact_ids))
+                    .values(
+                        assigned_to=rule.assigned_to,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+                total_assigned += len(contact_ids)
+
+            try:
+                db.commit()
+            except SQLAlchemyError as exc:
+                db.rollback()
+                logger.error("bulk_assign_contacts — commit failed: %s", exc)
+                raise HTTPException(503, detail="Could not save. Please try again.")
+
+    except OperationalError as exc:
+        logger.error("bulk_assign_contacts — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
+
+    return ContactBulkAssignResponse(assigned=total_assigned)
+
+
 @router.get("/{contact_id}", response_model=ContactResponse, summary="Get a contact")
 def get_contact(
     contact_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """
     GET /contacts/{id} — Full detail for one contact.
 
-    The contact relationships are eagerly loaded, and only the latest pipeline
-    stage is queried. This prevents response serialization from issuing hidden
-    lazy-load queries and avoids loading the complete stage history.
+    The contact relationships are eagerly loaded so response serialization does not
+    issue hidden lazy-load queries.
     """
     contact = db.scalar(
         select(Contact)
@@ -740,7 +821,6 @@ def get_contact(
             joinedload(Contact.referred_by),
             joinedload(Contact.consumer_profile),
             joinedload(Contact.partner_profile),
-            selectinload(Contact.interested_products),
         )
         .where(
             Contact.id == contact_id,
@@ -760,17 +840,6 @@ def get_contact(
             detail="Only the assigned employee, the creator, or an admin or manager can view this contact",
         )
 
-    current_stage = db.scalar(
-        select(LeadStage)
-        .options(
-            joinedload(LeadStage.stage_type),
-            joinedload(LeadStage.changed_by_employee),
-        )
-        .where(LeadStage.contact_id == contact_id)
-        .order_by(LeadStage.id.desc())
-        .limit(1)
-    )
-
     response = ContactResponse.model_validate(contact, from_attributes=True)
 
     # How many contacts does this person refer? Requires a COUNT — set it explicitly.
@@ -784,9 +853,6 @@ def get_contact(
     response.missing_fields = missing_fields(contact)
     response.is_verified = not response.missing_fields
 
-    if current_stage is not None:
-        response.current_stage = _stage_response(current_stage)
-
     return response
 
 
@@ -794,7 +860,7 @@ def get_contact(
 def create_contact(
     body: ContactCreate,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
     platform: str = Depends(client_platform),
 ):
@@ -806,17 +872,9 @@ def create_contact(
         2. Validate lead source, GPS rules, referrer, profile blocks, and phone uniqueness.
         3. Build the Contact ORM object.
         4. Attach the type-specific profile (consumer/partner) if provided.
-        5. Attach an initial "new_lead" LeadStage row — every contact starts here.
-        6. db.flush() writes the contact to get its auto-generated `id` before commit.
-        7. If an assignee was chosen, write a ContactAssignment history row.
-        8. db.commit() persists everything atomically (all or nothing).
-        9. db.refresh(contact) reloads the contact from DB so relationships are populated.
-       10. Build and return the response.
-
-    WHY db.flush() BEFORE db.add(ContactAssignment)?
-        ContactAssignment needs `contact.id`. flush() sends the INSERT to MySQL and
-        gets the auto-increment id back, but the transaction isn't committed yet.
-        If anything after this fails, the entire transaction rolls back cleanly.
+        5. db.commit() persists the contact atomically.
+        6. db.refresh(contact) reloads the contact from DB so relationships are populated.
+        7. Build and return the response.
 
     ASSIGNMENT BEHAVIOUR:
         - body.assigned_to provided → validate employee exists, assign to them.
@@ -830,12 +888,12 @@ def create_contact(
     source = db.query(LeadSource).filter(LeadSource.id == body.lead_source_id).first()
     if not source:
         raise HTTPException(status_code=400, detail="Lead source not found")
-    _check_location(source, body.latitude, body.longitude, creating=True, platform=platform)
     _ensure_referrer(db, body.referred_by_id)
     _check_type_profiles(body.contact_type, body.consumer_profile, body.partner_profile)
     if body.partner_profile is not None:
-        catalog.ensure_allowed(db, catalog.PROFESSIONAL_TYPE, body.partner_profile.profession_type)
-    _check_consumer_options(db, body.consumer_profile)
+        _validate_partner_profile_data(db, body.partner_profile.data)
+    if body.consumer_profile is not None:
+        _validate_consumer_profile_data(db, body.consumer_profile.data)
     # partner_profile is now optional at create time — profession_type + work_area are required for verification.
     _ensure_phone_free(db, body.phone, current_user)
 
@@ -849,7 +907,7 @@ def create_contact(
     # Step 3: build the Contact row.
     # model_dump() converts the Pydantic object to a plain dict; we exclude profile
     # blocks and assigned_to because they are handled separately below.
-    data = body.model_dump(exclude={"consumer_profile", "partner_profile", "assigned_to", "interested_product_ids"})
+    data = body.model_dump(exclude={"consumer_profile", "partner_profile", "assigned_to"})
     contact = Contact(**data, phone_key=phone_key(body.phone), assigned_to=assigned_to, created_by=current_user.id)
 
     # Step 4: attach type-specific profile in the same transaction
@@ -858,47 +916,14 @@ def create_contact(
     if body.partner_profile is not None:
         contact.partner_profile = PartnerProfile(**body.partner_profile.model_dump(mode="json"))
 
-    # Link any interested products (validated: must exist and not be deleted)
-    if body.interested_product_ids:
-        product_rows = db.query(Product).filter(
-            Product.id.in_(body.interested_product_ids), Product.deleted_at.is_(None)
-        ).all()
-        if len(product_rows) != len(set(body.interested_product_ids)):
-            raise HTTPException(status_code=400, detail="One or more selected products were not found")
-        contact.interested_products = product_rows
+    auto_followup_needed = getattr(current_user, "_role_slug", None) in NON_ASSIGNABLE_ROLES
 
-    # Step 5: every contact enters the pipeline at the "new_lead" stage
-    new_lead_type = _get_new_lead_stage(db, body.contact_type.value if body.contact_type else "consumer")
-    contact.lead_stages.append(LeadStage(stage_id=new_lead_type.id, changed_by=current_user.id))
-
-    # Steps 6–8: write to DB
     db.add(contact)
-    db.flush()  # Get contact.id without committing yet
-    if assigned_to is not None:
-        db.add(ContactAssignment(contact_id=contact.id, assigned_to=assigned_to, changed_by=current_user.id))
-
-    # Auto-schedule the first follow-up.
-    # Staff roles (everyone except admin/manager) get a silent auto-scheduled follow-up at +48h.
-    # Admin/manager create contacts too but they don't carry leads themselves (rule 1), so they
-    # get no auto-schedule here — the web will show a prompt instead (auto_followup_needed=True).
-    auto_followup_needed = current_user.role in NON_ASSIGNABLE_ROLES
-    if not auto_followup_needed:
-        db.add(FollowupSchedule(
-            contact_id=contact.id,
-            assigned_to=current_user.id,
-            title="First Contact",
-            due_at=ist_now() + timedelta(hours=config.AUTO_FOLLOWUP_HOURS),
-            status="todo",
-            priority="high",
-            channel="phone_call",
-            created_by=current_user.id,
-        ))
-
     db.commit()
     db.refresh(contact)  # Reload so relationships (lead_source, assigned_employee, etc.) are populated
 
-    # Fire notifications — after commit so contact.id is guaranteed persisted
-    try:
+    # Notifications fire after commit so contact.id is guaranteed persisted
+    def _notify_created():
         from services.notification_service import create_notification, notify_roles
         notify_roles(
             db, ["admin", "manager"], "contact_created",
@@ -907,7 +932,6 @@ def create_contact(
             "contact", contact.id,
             background_tasks=background_tasks,
         )
-        # If assigned to a sales exec, notify them too
         if contact.assigned_to and contact.assigned_to != current_user.id:
             create_notification(
                 db, contact.assigned_to, "contact_assigned",
@@ -916,16 +940,13 @@ def create_contact(
                 "contact", contact.id,
                 background_tasks=background_tasks,
             )
-        db.commit()
-    except Exception:
-        pass
+    _run_notification(db, _notify_created)
 
     # Steps 9–10: build response
     response = ContactResponse.model_validate(contact, from_attributes=True)
     response.referrals_count = 0  # Brand new contact cannot have referrals yet
     response.missing_fields = missing_fields(contact)
     response.is_verified = not response.missing_fields
-    response.current_stage = _stage_response(contact.lead_stages[0])
     response.auto_followup_needed = auto_followup_needed
     return response
 
@@ -935,7 +956,7 @@ def update_contact(
     contact_id: int,
     body: ContactUpdate,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
     platform: str = Depends(client_platform),
 ):
@@ -949,11 +970,6 @@ def update_contact(
 
         `model_dump(exclude_unset=True)` returns only the fields that were explicitly
         provided, not the defaults. This is how the partial update is implemented.
-
-    ASSIGNMENT HISTORY:
-        When assigned_to changes, we write a ContactAssignment row so managers can
-        see the full ownership history. We track `assigned_from` (previous owner)
-        and `assigned_to` (new owner).
 
     PROFILE UPSERT:
         - If the contact already has a profile, we merge the sent fields into it.
@@ -976,33 +992,22 @@ def update_contact(
     # `fields` is the set of keys the caller actually included in the request
     fields = body.model_fields_set
 
-    # Re-validate GPS rules only if any location-related field was sent
-    if fields & {"lead_source_id", "latitude", "longitude"}:
-        source_id = body.lead_source_id if "lead_source_id" in fields else contact.lead_source_id
-        source = (
-            db.query(LeadSource).filter(LeadSource.id == source_id).first()
-            if source_id is not None
-            else None
-        )
-        if "lead_source_id" in fields and source_id is not None and source is None:
+    # Re-validate lead source if it was changed
+    if "lead_source_id" in fields and body.lead_source_id is not None:
+        if not db.query(LeadSource).filter(LeadSource.id == body.lead_source_id).first():
             raise HTTPException(status_code=400, detail="Lead source not found")
-        _check_location(
-            source,
-            body.latitude if "latitude" in fields else contact.latitude,
-            body.longitude if "longitude" in fields else contact.longitude,
-            platform=platform,
-        )
 
     # Use the new type if being changed, otherwise the existing type from the DB
     final_type = body.contact_type.value if body.contact_type is not None else contact.contact_type
     _check_type_profiles(final_type, body.consumer_profile, body.partner_profile)
-    _check_consumer_options(db, body.consumer_profile, contact.consumer_profile)
+    if body.consumer_profile is not None and body.consumer_profile.data:
+        _validate_consumer_profile_data(db, body.consumer_profile.data)
 
     if "phone" in fields and body.phone is not None:
         _ensure_phone_free(db, body.phone, current_user, exclude_id=contact.id)
 
-    # Build a dict of only the fields to apply (excludes profiles and products, handled separately)
-    update_data = body.model_dump(exclude_unset=True, exclude={"consumer_profile", "partner_profile", "interested_product_ids"})
+    # Build a dict of only the fields to apply (excludes profiles, handled separately)
+    update_data = body.model_dump(exclude_unset=True, exclude={"consumer_profile", "partner_profile"})
     # Do not allow clearing required fields by sending null
     for key in ("contact_type", "name", "phone", "assigned_to"):
         if key in update_data and update_data[key] is None:
@@ -1012,69 +1017,44 @@ def update_contact(
     for field, value in update_data.items():
         setattr(contact, field, value)
 
-    # Write assignment history if the owner changed
     new_owner = update_data.get("assigned_to")
-    if "assigned_to" in update_data and new_owner != previous_owner:
-        db.add(ContactAssignment(
-            contact_id=contact.id, assigned_from=previous_owner,
-            assigned_to=new_owner, changed_by=current_user.id,
-        ))
 
     # If the phone was updated, recalculate the phone_key for duplicate detection
     if "phone" in update_data:
         contact.phone_key = phone_key(update_data["phone"])
 
-    # --- Interested products: replace the full set when the caller explicitly sent the field ---
-    # `interested_product_ids` in model_fields_set → the caller wants to change the list.
-    # An empty list clears all products; a non-empty list replaces with the given ids.
-    if "interested_product_ids" in fields and body.interested_product_ids is not None:
-        ids = body.interested_product_ids
-        if ids:
-            product_rows = db.query(Product).filter(
-                Product.id.in_(ids), Product.deleted_at.is_(None)
-            ).all()
-            if len(product_rows) != len(set(ids)):
-                raise HTTPException(status_code=400, detail="One or more selected products were not found")
-            contact.interested_products = product_rows
-        else:
-            contact.interested_products = []
-
     # --- Profile upsert logic ---
 
     if body.consumer_profile is not None:
         profile_data = body.consumer_profile.model_dump(exclude_unset=True, mode="json")
+        new_data = profile_data.get("data") or {}
         if contact.consumer_profile is None:
-            contact.consumer_profile = ConsumerProfile(**profile_data)
+            contact.consumer_profile = ConsumerProfile(data=new_data)
         else:
-            for field, value in profile_data.items():
-                setattr(contact.consumer_profile, field, value)
+            # Merge incoming keys into the existing JSONB dict (only sent keys change)
+            contact.consumer_profile.data = {**(contact.consumer_profile.data or {}), **new_data}
 
     if body.partner_profile is not None:
         profile_data = body.partner_profile.model_dump(exclude_unset=True, mode="json")
-        if profile_data.get("profession_type"):
-            # If the current profession_type was hidden by the admin, the record's existing
-            # value stays valid. Pass it as `current` so ensure_allowed allows it through.
-            current = profession_key(contact.partner_profile.profession_type) if contact.partner_profile else None
-            catalog.ensure_allowed(db, catalog.PROFESSIONAL_TYPE, profile_data["profession_type"], current)
+        new_data = profile_data.get("data") or {}
+        if new_data:
+            _validate_partner_profile_data(db, new_data)
         if contact.partner_profile is None:
-            if not profile_data.get("profession_type"):
+            if not new_data.get("partner_type"):
                 raise HTTPException(
-                    status_code=400, detail="profession_type is required for a partner"
+                    status_code=400, detail="partner_type is required for a partner"
                 )
-            contact.partner_profile = PartnerProfile(**profile_data)
+            contact.partner_profile = PartnerProfile(data=new_data)
         else:
-            for field, value in profile_data.items():
-                if field == "profession_type" and value is None:
-                    continue  # Never clear profession_type via a partial update
-                setattr(contact.partner_profile, field, value)
+            # Merge incoming keys into the existing JSONB dict (only sent keys change)
+            contact.partner_profile.data = {**(contact.partner_profile.data or {}), **new_data}
 
     db.add(contact)
     db.commit()
     db.refresh(contact)
 
-    # Notify assigned employee when contact is reassigned
     if "assigned_to" in update_data and new_owner != previous_owner and new_owner:
-        try:
+        def _notify_assignee():
             from services.notification_service import create_notification
             create_notification(
                 db, new_owner, "contact_assigned",
@@ -1083,9 +1063,7 @@ def update_contact(
                 "contact", contact.id,
                 background_tasks=background_tasks,
             )
-            db.commit()
-        except Exception:
-            pass
+        _run_notification(db, _notify_assignee)
 
     response = ContactResponse.model_validate(contact, from_attributes=True)
     response.referrals_count = (
@@ -1096,17 +1074,13 @@ def update_contact(
     response.missing_fields = missing_fields(contact)
     response.is_verified = not response.missing_fields
 
-    if contact.lead_stages:
-        latest_stage = max(contact.lead_stages, key=lambda s: s.changed_at)
-        response.current_stage = _stage_response(latest_stage)
-
     return response
 
 
 @router.delete("/{contact_id}", status_code=204, summary="Delete a contact")
 def delete_contact(
     contact_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """
@@ -1126,147 +1100,6 @@ def delete_contact(
     """
     contact = get_live_contact(db, contact_id)
 
-    contact.deleted_at = datetime.utcnow()
+    contact.deleted_at = datetime.now(timezone.utc)
     db.add(contact)
     db.commit()
-
-
-
-
-@router.get("/{contact_id}/stages", response_model=list[LeadStageResponse], summary="List stage history")
-def get_contact_stages(
-    contact_id: int,
-    db: Session = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
-):
-    """
-    GET /contacts/{id}/stages — Full pipeline history for a contact.
-
-    Stage rows are append-only (we never update or delete them). The newest row
-    is the contact's current stage. This endpoint returns all rows in
-    descending order (newest first), so index 0 is always the current stage.
-
-    joinedload(stage_type) and joinedload(changed_by_employee) are included so
-    _stage_response() can read slug, name, and the changer's name without
-    triggering additional lazy-load queries per row.
-    """
-    get_live_contact(db, contact_id)  # Raises 404 if contact is gone
-
-    stages = (
-        db.query(LeadStage)
-        .options(joinedload(LeadStage.stage_type), joinedload(LeadStage.changed_by_employee))
-        .filter(LeadStage.contact_id == contact_id)
-        .order_by(LeadStage.changed_at.desc(), LeadStage.id.desc())
-        .all()
-    )
-
-    return [_stage_response(s) for s in stages]
-
-
-@router.post("/{contact_id}/stages", response_model=LeadStageResponse, status_code=201, summary="Move contact to a stage")
-def add_contact_stage(
-    contact_id: int,
-    body: LeadStageCreate,
-    db: Session = Depends(get_db),
-    current_user: Employee = Depends(get_current_user),
-):
-    """
-    POST /contacts/{id}/stages — Move a contact to a new pipeline stage.
-
-    HOW STAGE HISTORY WORKS:
-        We never update or delete stage rows. Moving to a new stage means APPENDING
-        a new LeadStage row. The contact's history is the full list; the current
-        stage is always the most recent row.
-
-    VALIDATION RULES:
-        1. The employee recorded in `changed_by` must exist.
-        2. The requested stage must be active.
-        3. The stage must belong to this contact's pipeline type — EXCEPT "lost",
-           which is a terminal stage that applies across all pipelines.
-        4. Moving to "lost" requires a `loss_reason` (and must not have one otherwise).
-        5. `awareness_note` is only valid when moving to the "aware" stage.
-        6. A contact must have all required fields filled before leaving "new_lead".
-           This is the verification gate — incomplete contacts stay at the first stage.
-    """
-    contact = get_live_contact(db, contact_id)
-
-    employee = db.query(Employee).filter(Employee.id == body.changed_by).first()
-    if not employee:
-        raise HTTPException(status_code=400, detail="Employee not found")
-
-    stage_type = db.query(PipelineStage).filter(
-        PipelineStage.id == body.stage_id,
-        PipelineStage.is_active == 1,
-    ).first()
-    if not stage_type:
-        raise HTTPException(status_code=400, detail="Stage not found")
-
-    # "lost" is the one stage that can be set from any pipeline type
-    if stage_type.slug != "lost" and stage_type.contact_type != contact.contact_type:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Stage '{stage_type.slug}' is not part of the {contact.contact_type} pipeline",
-        )
-
-    if stage_type.slug == "lost" and body.loss_reason is None:
-        raise HTTPException(status_code=400, detail="loss_reason is required when moving to Lost")
-    if stage_type.slug != "lost" and body.loss_reason is not None:
-        raise HTTPException(status_code=400, detail="loss_reason is only valid when moving to Lost")
-    if stage_type.slug != "aware" and body.awareness_note is not None:
-        raise HTTPException(status_code=400, detail="awareness_note is only valid when moving to Aware")
-
-    if body.loss_reason is not None:
-        catalog.ensure_allowed(db, catalog.LOSS_REASON, body.loss_reason)
-
-    completed_sale_stage = stage_type.slug in {"won", "after_sales_referring"}
-
-    # Completed-sale stages do not require house_stage: the sale itself is the
-    # conversion event. Other required identity/contact fields remain enforced.
-    if stage_type.slug != "new_lead":
-        pending = missing_fields(contact)
-        if completed_sale_stage:
-            pending = [field for field in pending if field != "house_stage"]
-        if pending:
-            raise HTTPException(status_code=409, detail={"missing_fields": pending, "message": "Complete the contact's details before advancing the stage"})
-
-    # A completed consumer conversion must have the one product that will be
-    # copied into the sales register. Existing legacy contacts with multiple
-    # links use the first linked product until they are cleaned up.
-    product = None
-    if completed_sale_stage:
-        product = contact.interested_products[0] if contact.interested_products else None
-        if product is None:
-            raise HTTPException(status_code=409, detail={
-                "missing_fields": ["interested_product"],
-                "message": "Select an interested product before converting this contact",
-            })
-
-    new_stage = LeadStage(
-        contact_id=contact_id,
-        stage_id=body.stage_id,
-        changed_by=body.changed_by,
-        loss_reason=body.loss_reason,
-        loss_notes=body.loss_notes,
-        awareness_note=body.awareness_note,
-    )
-    db.add(new_stage)
-
-    # Stage changes are append-only. The linked sale is created only once, so
-    # moving from Won to After Sales does not create a duplicate register row.
-    # Attribute the sale to the employee who originally created the contact;
-    # the administrator remains recorded separately in the stage history.
-    if completed_sale_stage and db.query(Sale.id).filter(Sale.contact_id == contact.id).first() is None:
-        db.add(Sale(
-            contact_id=contact.id,
-            created_by_employee_id=contact.created_by or current_user.id,
-            purchase_date=date.today(),
-            name=contact.name or contact.phone,
-            phone=contact.phone,
-            alt_phone=contact.phone_alt,
-            address=contact.address,
-            purchased_product=product.name,
-        ))
-    db.commit()
-    db.refresh(new_stage)
-
-    return _stage_response(new_stage)
