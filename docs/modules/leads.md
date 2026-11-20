@@ -123,6 +123,8 @@ POST /leads
 
 Staff member adds a new lead by hand (e.g. a walk-in visitor or a phone enquiry).
 
+`created_by` is set automatically to the logged-in employee's id (from the JWT). The client cannot send it. Leads from webhooks, WhatsApp, or Excel import have `created_by: null`.
+
 **Request body**
 ```json
 {

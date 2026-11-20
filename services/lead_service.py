@@ -199,6 +199,7 @@ def create_lead(
     allow_duplicate: bool = False,
     background_tasks: BackgroundTasks | None = None,
     created_at: datetime.datetime | None = None,
+    created_by: int | None = None,
 ) -> Lead:
     """
     Create a new lead.
@@ -208,8 +209,11 @@ def create_lead(
       2. Dedup check (unless allow_duplicate=True)
       3. Auto-assign if assigned_to not provided
       4. Compute initial score
-      5. INSERT lead row
+      5. INSERT lead row (created_by = the employee who entered it, or None)
       6. Queue WhatsApp welcome message (background task, best-effort)
+
+    created_by: employee.id of the staff member creating the lead. Pass None for
+    leads from webhooks or imports that have no logged-in employee.
 
     Raises:
       HTTPException(409) — duplicate lead or contact found (unless allow_duplicate=True)
@@ -259,6 +263,7 @@ def create_lead(
         tags=tags,
         raw_payload=raw_payload,
         assigned_to=assigned_to,
+        created_by=created_by,
         score=0,  # placeholder; re-computed below
         # created_at override: used when importing historical leads so the
         # original lead date is preserved rather than defaulting to now()

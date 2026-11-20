@@ -152,6 +152,9 @@ def create_lead(
                 allow_duplicate=allow_duplicate,
                 background_tasks=background_tasks,
                 created_at=body.created_at,
+                # Taken from the login token, never from the request body,
+                # so a client cannot claim someone else created the lead.
+                created_by=current_user.id,
             )
     except OperationalError as exc:
         logger.error("create_lead — DB error: %s", exc)
