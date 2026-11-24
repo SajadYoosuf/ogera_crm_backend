@@ -47,7 +47,7 @@ from schemas.lead import (
     WhatsAppSendResponse,
 )
 import services.lead_service as lead_svc
-from services.lead_access import is_head
+from services.lead_access import is_head, ensure_can_work_lead, ensure_is_head
 from services.whatsapp_service import send_whatsapp_template
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,7 @@ def list_leads(
         with get_session_for_schema(schema) as db:
             return lead_svc.list_leads(
                 db,
+                current_employee=current_user,
                 status=status,
                 source_id=source_id,
                 assigned_to=assigned_to,
@@ -366,6 +367,8 @@ def get_lead(lead_id: int, current_user: Employee = Depends(get_current_user)):
     schema = current_user._tenant_schema
     try:
         with get_session_for_schema(schema) as db:
+            lead = lead_svc.get_lead(db, lead_id)
+            ensure_can_work_lead(current_user, lead)
             return lead_svc.get_lead_detail(db, lead_id)
     except OperationalError as exc:
         logger.error("get_lead — DB error: %s", exc)
@@ -395,6 +398,9 @@ def create_lead(
         raise HTTPException(status_code=403, detail="Only admin or manager can bypass duplicate check")
     if body.created_at is not None and not is_head(current_user):
         raise HTTPException(status_code=403, detail="Only admin or manager can backdate leads")
+    # Staff cannot choose the assignee; heads can. Auto-assign runs when assigned_to is None.
+    if body.assigned_to is not None and not is_head(current_user):
+        raise HTTPException(status_code=403, detail="Only admin or manager can assign leads to a specific person")
     schema = current_user._tenant_schema
     try:
         with get_session_for_schema(schema) as db:
@@ -441,10 +447,20 @@ def update_lead(
     schema = current_user._tenant_schema
     try:
         with get_session_for_schema(schema) as db:
+            lead = lead_svc.get_lead(db, lead_id)
+            ensure_can_work_lead(current_user, lead)
             if body.status is not None:
                 lead_svc.ensure_valid_status(db, body.status)
+            # Only heads can reassign leads
             updates = body.model_dump(exclude_none=True)
-            return lead_svc.update_lead(db, lead_id, **updates)
+            if "assigned_to" in updates and not is_head(current_user):
+                raise HTTPException(status_code=403, detail="Only admin or manager can reassign leads")
+            previous_assignee = lead.assigned_to
+            updated = lead_svc.update_lead(db, lead_id, actor_id=current_user.id, **updates)
+            if updated.assigned_to != previous_assignee:
+                lead_svc.notify_lead_assigned(db, updated, current_user.id)
+                db.commit()
+            return updated
     except OperationalError as exc:
         logger.error("update_lead — DB error: %s", exc)
         raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
@@ -456,6 +472,7 @@ def delete_lead(lead_id: int, current_user: Employee = Depends(get_current_user)
     Soft-delete a lead (sets deleted_at, never hard-deletes).
     The lead is no longer shown in any list but its data is preserved.
     """
+    ensure_is_head(current_user, "delete leads")
     schema = current_user._tenant_schema
     try:
         with get_session_for_schema(schema) as db:
@@ -478,6 +495,8 @@ def convert_lead(lead_id: int, current_user: Employee = Depends(get_current_user
     schema = current_user._tenant_schema
     try:
         with get_session_for_schema(schema) as db:
+            lead = lead_svc.get_lead(db, lead_id)
+            ensure_can_work_lead(current_user, lead)
             result = lead_svc.convert_lead(db, lead_id, current_user.id)
             return result
     except OperationalError as exc:

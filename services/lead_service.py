@@ -203,6 +203,38 @@ def auto_assign(db: Session) -> int | None:
     return result.id if result else None
 
 
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+def notify_lead_assigned(db: Session, lead: Lead, actor_id: int | None) -> None:
+    """Tell the assignee a lead was assigned to them (skipped when they assigned it to themselves)."""
+    if not lead.assigned_to or lead.assigned_to == actor_id:
+        return
+    from services.notification_service import create_notification
+    name = " ".join(p for p in (lead.first_name, lead.last_name) if p) or "a lead"
+    create_notification(db, lead.assigned_to, "lead_assigned", "Lead assigned to you",
+                        f"{name} was assigned to you.", "lead", lead.id)
+
+
+def _notify_lead_created(db: Session, lead: Lead, created_by: int | None) -> None:
+    """Notify the assignee, and tell heads about every new lead (manual or auto-captured)."""
+    from services.notification_service import create_notification
+    from models.role import Role
+    notify_lead_assigned(db, lead, created_by)
+    name = " ".join(p for p in (lead.first_name, lead.last_name) if p) or "A lead"
+    kind = "Lead added manually" if created_by else "New lead received"
+    head_ids = db.scalars(
+        select(Employee.id)
+        .join(Role, Role.id == Employee.role_id)
+        .where(Role.slug.in_(("admin", "manager")))
+        .where(Employee.is_active.is_(True))
+        .where(Employee.deleted_at.is_(None))
+    ).all()
+    for hid in head_ids:
+        if hid in (created_by, lead.assigned_to):
+            continue
+        create_notification(db, hid, "lead_created", kind, f"{name} was added.", "lead", lead.id)
+
+
 # ── Create ────────────────────────────────────────────────────────────────────
 
 def create_lead(
@@ -307,6 +339,10 @@ def create_lead(
     lead.score = compute_score(lead)
     db.add(lead)
     try:
+        db.flush()
+        from services.record_log_service import add_log
+        add_log(db, "lead", lead.id, "created", created_by)
+        _notify_lead_created(db, lead, created_by)
         db.commit()
         db.refresh(lead)
         _preload_display_relations(lead)
@@ -328,6 +364,7 @@ def create_lead(
 
 def list_leads(
     db: Session,
+    current_employee: "Employee | None" = None,
     status: str | None = None,
     source_id: int | None = None,
     assigned_to: int | None = None,
@@ -340,15 +377,25 @@ def list_leads(
     """
     Return a paginated, filtered list of leads.
 
+    ROLE SCOPE:
+        staff (non-head roles) only see leads where assigned_to == their id.
+        heads (admin, manager) see all leads.
+
     HOW PAGINATION WORKS:
         skip=0, limit=20 → returns leads 1–20
         skip=20, limit=20 → returns leads 21–40
         The frontend uses `total` to calculate the number of pages.
     """
+    from services.lead_access import is_head
+
     q = (
         select(Lead)
         .where(Lead.deleted_at.is_(None))
     )
+
+    # Role scope: staff only see their own leads
+    if current_employee is not None and not is_head(current_employee):
+        q = q.where(Lead.assigned_to == current_employee.id)
 
     if status:
         q = q.where(Lead.status == status)
@@ -450,6 +497,12 @@ def get_lead_detail(db: Session, lead_id: int) -> dict:
         else:
             result["created_by_name"] = None
 
+        if lead.assigned_to:
+            assignee = db.scalar(select(Employee).where(Employee.id == lead.assigned_to))
+            result["assigned_name"] = assignee.name if assignee else None
+        else:
+            result["assigned_name"] = None
+
         if lead.branch_id:
             from models.branch import Branch
             branch = db.scalar(select(Branch).where(Branch.id == lead.branch_id))
@@ -464,14 +517,24 @@ def get_lead_detail(db: Session, lead_id: int) -> dict:
 
 # ── Update ────────────────────────────────────────────────────────────────────
 
-def update_lead(db: Session, lead_id: int, **fields) -> Lead:
+def update_lead(db: Session, lead_id: int, *, actor_id: int | None = None, **fields) -> Lead:
     """
     Apply a partial update to a lead.
 
     Only the fields in `fields` are changed — fields not passed are left as-is.
-    Re-computes the score after any change.
+    Re-computes the score after any change. Status and assignee changes are
+    written to record_logs (the lead's timeline); other edits as one "edited" row.
     """
+    from services.record_log_service import add_log
+
     lead = get_lead(db, lead_id)
+    changed = {k for k, v in fields.items() if v is not None and getattr(lead, k, None) != v}
+    if "status" in changed:
+        add_log(db, "lead", lead_id, "status_changed", actor_id, lead.status, fields["status"])
+    if "assigned_to" in changed:
+        add_log(db, "lead", lead_id, "assigned", actor_id, lead.assigned_to, fields["assigned_to"])
+    if changed - {"status", "assigned_to"}:
+        add_log(db, "lead", lead_id, "edited", actor_id, None, ", ".join(sorted(changed - {"status", "assigned_to"})))
 
     for key, value in fields.items():
         if value is not None:
@@ -580,10 +643,13 @@ def convert_lead(db: Session, lead_id: int, current_user_id: int) -> dict:
         created = True
 
     # Mark the lead as converted and store the contact link.
+    old_status = lead.status
     lead.status = "converted"
     lead.converted_at = datetime.datetime.now(_tz.utc)
     if hasattr(lead, "contact_id"):
         lead.contact_id = contact_id
+    from services.record_log_service import add_log
+    add_log(db, "lead", lead.id, "converted", current_user_id, old_status, contact_id)
     try:
         db.commit()
     except SQLAlchemyError as exc:

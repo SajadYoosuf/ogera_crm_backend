@@ -42,7 +42,8 @@ class TenantApiKey(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     # Which tenant this key belongs to.
-    tenant_id: int = Field(foreign_key="public.tenants.id")
+    # SQLite (tests) creates `tenants` without the "public" schema, so the FK target must match.
+    tenant_id: int = Field(foreign_key="tenants.id" if not _PUBLIC_SCHEMA else "public.tenants.id")
     # SHA-256 hex digest of the raw key — 64 characters, never the plaintext key.
     key_hash: str = Field(max_length=64)
     # Human-readable label so the admin can tell keys apart, e.g. "website-form" or "zapier".

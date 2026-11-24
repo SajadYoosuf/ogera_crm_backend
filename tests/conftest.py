@@ -23,6 +23,20 @@ def _bigint_as_integer(type_, compiler, **kw):
     return "INTEGER"
 
 
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB  # noqa: E402
+
+
+@compiles(ARRAY, "sqlite")
+def _array_as_text(type_, compiler, **kw):
+    # leads.tags is a PostgreSQL text[]; tests never write a value to it.
+    return "TEXT"
+
+
+@compiles(JSONB, "sqlite")
+def _jsonb_as_json(type_, compiler, **kw):
+    return "JSON"
+
+
 from database import Base, SessionLocal, engine, DATABASE_URL  # noqa: E402
 from models import LeadSource, PipelineStage  # noqa: E402
 from seed_data import MOBILE_APP, PASSWORD, email_of, seed  # noqa: E402

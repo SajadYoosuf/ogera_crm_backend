@@ -1,4 +1,7 @@
 from .lead import Lead
+from .interaction import Interaction
+from .whatsapp_message import WhatsAppMessage
+from .record_log import RecordLog
 from .tenant_api_key import TenantApiKey
 from .tenant import Tenant
 from .role import Role
@@ -33,6 +36,9 @@ from .expense import Expense, EXPENSE_CATEGORIES, EXPENSE_STATUSES
 
 __all__ = [
     "Lead",
+    "Interaction",
+    "WhatsAppMessage",
+    "RecordLog",
     "TenantApiKey",
     "Tenant",
     "Role",

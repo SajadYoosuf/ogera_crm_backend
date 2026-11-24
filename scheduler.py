@@ -53,6 +53,18 @@ def _run_daily_digest() -> None:
         run_daily_digest(db)
 
 
+def _run_followups_due() -> None:
+    """09:00 IST — lead follow-ups due today, for every active tenant."""
+    from services.followup_reminders import run_for_all_tenants, send_due_today
+    run_for_all_tenants(send_due_today)
+
+
+def _run_followups_overdue() -> None:
+    """Hourly — lead follow-ups more than 24 h overdue, for every active tenant."""
+    from services.followup_reminders import run_for_all_tenants, send_overdue
+    run_for_all_tenants(send_overdue)
+
+
 def start_scheduler() -> None:
     """Register jobs and start the scheduler. Called once at server startup."""
     _scheduler.add_job(
@@ -66,6 +78,20 @@ def start_scheduler() -> None:
         _run_daily_digest,
         CronTrigger(hour=config.NOTIF_DIGEST_HOUR, minute=0, timezone="Asia/Kolkata"),
         id="daily_digest",
+        replace_existing=True,
+    )
+    # Lead follow-up reminders (tenant-aware; see services/followup_reminders.py)
+    _scheduler.add_job(
+        _run_followups_due,
+        CronTrigger(hour=9, minute=0, timezone="Asia/Kolkata"),
+        id="lead_followups_due",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        _run_followups_overdue,
+        "interval",
+        hours=1,
+        id="lead_followups_overdue",
         replace_existing=True,
     )
     _scheduler.start()

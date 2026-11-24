@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS, UPLOAD_DIR
-from routes import auth_router, password_reset_router, contacts_router, dashboard_router, employees_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router, attendance_router, staff_locations_router, expenses_router, diagnostics_router, leads_router, lead_inbound_router, webhooks_router, api_keys_router, branches_router, contact_fields_router
+from routes import auth_router, password_reset_router, contacts_router, dashboard_router, employees_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router, attendance_router, staff_locations_router, expenses_router, diagnostics_router, leads_router, lead_inbound_router, webhooks_router, api_keys_router, branches_router, contact_fields_router, lead_interactions_router, lead_statuses_router, lead_whatsapp_router
 # lead_activities_router, followups_router, history_router disabled — tables not yet in ventino schema
 from middleware import RequestLoggingMiddleware
 from firebase_init import init_firebase
@@ -199,6 +199,9 @@ app.include_router(staff_locations_router)
 app.include_router(expenses_router)
 app.include_router(diagnostics_router)
 app.include_router(leads_router)
+app.include_router(lead_interactions_router)
+app.include_router(lead_statuses_router)
+app.include_router(lead_whatsapp_router)
 app.include_router(lead_inbound_router)
 app.include_router(webhooks_router)
 app.include_router(api_keys_router)

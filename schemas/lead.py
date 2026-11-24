@@ -97,6 +97,8 @@ class LeadResponse(BaseModel):
     whatsapp_sent: bool
     whatsapp_sent_at: datetime.datetime | None
     assigned_to: int | None
+    # Filled by get_lead_detail (GET /leads/{id}); create/update responses leave it None.
+    assigned_name: str | None = None
     created_by: int | None
     created_by_name: str | None = None
     branch_id: int | None = None
