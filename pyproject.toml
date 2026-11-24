@@ -14,6 +14,7 @@ dependencies = [
 [project.scripts]
 ogera-crm-backend = "ogera_crm_backend:main"
 
-[build-system]
-requires = ["uv_build>=0.13.6,<0.14.0"]
-build-backend = "uv_build"
+[tool.uv]
+# Flat layout app (main.py at the root), not an installable package.
+# Skip building/installing the project itself; only sync its dependencies.
+package = false
