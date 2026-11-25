@@ -52,6 +52,28 @@ def seed(db) -> None:
             db.add(Role(slug=slug, name=slug.replace("_", " ").title()))
     db.flush()
 
+    # Production gets these from scripts/migrations/002 and 003: admin has every module,
+    # manager is a head role (sees all records) with WhatsApp integrations read and update.
+    # Without them, every permission-checked route answers 403, admin included.
+    for slug, perms, see_all in (
+        ("admin", {m: "crud" for m in ("leads", "contacts", "employees", "settings", "team",
+                                        "integrations", "lead_statuses", "company")}, True),
+        ("manager", {"leads": "crud", "contacts": "crud", "employees": "crud", "settings": "r",
+                     "team": "", "integrations": "ru", "lead_statuses": "", "company": ""}, True),
+    ):
+        role = db.scalar(select(Role).where(Role.slug == slug))
+        if role is not None:
+            role.permissions = perms
+            role.see_all_records = see_all
+    db.flush()
+
+    # The three branch offices the web offers; employees point at them by branch_id.
+    from models.branch import Branch
+    for code, name in (("malappuram", "Malappuram"), ("perinthalmanna", "Perinthalmanna"), ("kottakkal", "Kottakkal")):
+        if db.scalar(select(Branch).where(Branch.code == code)) is None:
+            db.add(Branch(code=code, name=name, is_active=True))
+    db.flush()
+
     # Build slug → id map.
     role_id_map = {
         r.slug: r.id

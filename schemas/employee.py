@@ -159,6 +159,7 @@ class EmployeeResponse(BaseModel):
     phone: str | None = None
     role_id: int
     role_slug: str | None = None
+    branch: str | None = None  # branches.code of branch_id, filled by the route (e.g. "malappuram")
     is_active: int
     created_at: datetime.datetime
     updated_at: datetime.datetime

@@ -97,9 +97,11 @@ def get_current_user(credentials=Depends(security)) -> Employee:
         with get_session_for_schema(tenant_schema) as db:
             employee = db.scalar(select(Employee).where(Employee.id == employee_id))
             role_slug: Optional[str] = None
+            role_permissions: dict = {}
             if employee:
                 role = db.scalar(select(Role).where(Role.id == employee.role_id))
                 role_slug = role.slug if role else None
+                role_permissions = dict(role.permissions or {}) if role else {}
     except OperationalError as exc:
         logger.error("TOKEN — DB error: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -121,6 +123,8 @@ def get_current_user(credentials=Depends(security)) -> Employee:
     # raises ValueError when you set an attribute that is not a declared field.
     object.__setattr__(employee, "_tenant_schema", tenant_schema)
     object.__setattr__(employee, "_role_slug", role_slug)
+    # services/permissions.can() reads this: {"integrations": "ru", ...} from the role row.
+    object.__setattr__(employee, "_permissions", role_permissions)
     object.__setattr__(employee, "role_slug", role_slug)
 
     return employee

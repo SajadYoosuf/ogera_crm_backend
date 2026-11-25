@@ -7,10 +7,12 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
-from auth import get_current_user, get_password_hash, require_admin_or_manager
-from database import get_db
+from sqlalchemy import select, update
+from auth import get_current_user, get_password_hash, get_tenant_db, require_admin_or_manager
+from database import get_db, get_public_db
 from mailer import send_employee_credentials, send_password_changed_notice
-from models import Employee, FcmDevice, Role
+from models import Employee, EmployeeLookup, FcmDevice, Role, Tenant
+from models.branch import Branch
 from request_context import client_platform
 from schemas import (
     EmployeeCreate,
@@ -104,6 +106,20 @@ def _ensure_role_assignable(db: Session, slug: str, actor: Employee | None = Non
     return role
 
 
+def _branch_id_for(db: Session, code: str | None) -> int | None:
+    """The branches.id for a branch code the web sends (e.g. "malappuram"). None clears it."""
+    if code is None:
+        return None
+    row = db.query(Branch.id).filter(Branch.code == code, Branch.is_active.is_(True)).first()
+    if row is None:
+        raise HTTPException(status_code=422, detail="Branch is not one of the active branches")
+    return row.id
+
+
+def _branch_codes(db: Session) -> dict[int, str]:
+    return {b.id: b.code for b in db.query(Branch.id, Branch.code).all()}
+
+
 def _email_taken(db: Session, email: str, exclude_id: int | None = None) -> bool:
     q = db.query(Employee.id).filter(func.lower(Employee.email) == email.lower())
     if exclude_id is not None:
@@ -195,10 +211,12 @@ def list_employees(
         r.id: r.slug
         for r in db.query(Role).all()
     }
+    branch_map = _branch_codes(db)
     items = []
     for emp in rows:
         resp = EmployeeResponse.model_validate(emp, from_attributes=True)
         resp.role_slug = slug_map.get(emp.role_id)
+        resp.branch = branch_map.get(emp.branch_id) if emp.branch_id else None
         items.append(resp)
 
     return EmployeeListResponse(items=items, total=total, skip=skip, limit=limit)
@@ -217,6 +235,7 @@ def get_employee(
         raise HTTPException(status_code=403, detail="You do not have permission to view this employee")
     resp = EmployeeResponse.model_validate(employee, from_attributes=True)
     resp.role_slug = _load_slug(employee, db)
+    resp.branch = _branch_codes(db).get(employee.branch_id) if employee.branch_id else None
     return resp
 
 
@@ -237,8 +256,13 @@ def create_employee(
         raise HTTPException(status_code=409, detail=DUPLICATE_PHONE)
 
     # body.role is a slug string; Employee needs role_id (integer FK)
-    data = body.model_dump(exclude={"password", "role"})
-    employee = Employee(**data, role_id=role_row.id, password_hash=get_password_hash(body.password))
+    data = body.model_dump(exclude={"password", "role", "branch"})
+    employee = Employee(
+        **data,
+        role_id=role_row.id,
+        branch_id=_branch_id_for(db, body.branch),
+        password_hash=get_password_hash(body.password),
+    )
     db.add(employee)
     try:
         db.commit()
@@ -258,6 +282,7 @@ def create_employee(
 
     resp = EmployeeResponse.model_validate(employee, from_attributes=True)
     resp.role_slug = body.role
+    resp.branch = _branch_codes(db).get(employee.branch_id) if employee.branch_id else None
     return EmployeeCreateResponse(
         **resp.model_dump(),
         credentials_email=mail_result,
@@ -268,7 +293,8 @@ def create_employee(
 def update_employee(
     employee_id: int,
     body: EmployeeUpdate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
+    db_public: Session = Depends(get_public_db),
     actor: Employee = Depends(manage_employees),
 ):
     """Admin or manager edits an employee. Only the sent fields are changed."""
@@ -278,6 +304,9 @@ def update_employee(
     for field in ("name", "email", "role", "is_active", "password"):
         if field in data and data[field] is None:
             raise HTTPException(status_code=422, detail=f"{field} cannot be null")
+    if "email" in data:
+        # Login matches the lowercase address, so store it that way in both tables.
+        data["email"] = data["email"].strip().lower()
 
     # If role is being changed, validate the new slug and get its ID
     new_role_id: int | None = None
@@ -300,6 +329,28 @@ def update_employee(
     if data.get("phone") and _phone_taken(db, data["phone"], exclude_id=employee.id):
         raise HTTPException(status_code=409, detail=DUPLICATE_PHONE)
 
+    # Login finds the account through public.employee_tenant_map, so it must follow an email change.
+    old_email = employee.email.lower()
+    email_changes = "email" in data and data["email"] != old_email
+    if email_changes:
+        if db_public.scalar(select(EmployeeLookup.email).where(EmployeeLookup.email == data["email"])):
+            raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
+        tenant = db_public.scalar(select(Tenant).where(Tenant.schema_name == actor._tenant_schema))
+        if tenant is None:
+            raise HTTPException(status_code=503, detail="Server unavailable, please retry in a moment")
+        moved = db_public.execute(
+            update(EmployeeLookup)
+            .where(EmployeeLookup.email == old_email, EmployeeLookup.tenant_id == tenant.id)
+            .values(email=data["email"])
+        )
+        if moved.rowcount == 0:
+            # No lookup row existed for this employee (e.g. created before lookups were kept), so add one.
+            db_public.add(EmployeeLookup(email=data["email"], tenant_id=tenant.id))
+        db_public.flush()
+
+    if "branch" in data:
+        employee.branch_id = _branch_id_for(db, data.pop("branch"))
+
     password_changed = "password" in data
     if password_changed:
         employee.password_hash = get_password_hash(data.pop("password"))
@@ -320,8 +371,15 @@ def update_employee(
         db.commit()
     except IntegrityError as exc:
         db.rollback()
+        db_public.rollback()
         detail = DUPLICATE_PHONE if "phone" in str(exc.orig).lower() else DUPLICATE_EMAIL
         raise HTTPException(status_code=409, detail=detail)
+    except Exception:
+        db.rollback()
+        db_public.rollback()
+        raise
+    if email_changes:
+        db_public.commit()
 
     db.refresh(employee)
     if password_changed:
@@ -335,6 +393,7 @@ def update_employee(
 
     resp = EmployeeResponse.model_validate(employee, from_attributes=True)
     resp.role_slug = role_slug_sent if new_role_id is not None else _load_slug(employee, db)
+    resp.branch = _branch_codes(db).get(employee.branch_id) if employee.branch_id else None
     return resp
 
 
