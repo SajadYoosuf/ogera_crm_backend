@@ -103,6 +103,8 @@ def list_enum(category: str, db: Session = Depends(get_db), _: Employee = Depend
 def create_enum(category: str, body: EnumValueCreate, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
     """Adds a value to a category (admin and manager). The stored value cannot be changed later, so pick it carefully."""
     _category_or_404(category)
+    if category in catalog.FIXED_CATEGORIES:
+        raise HTTPException(status_code=400, detail="These options are fixed by the app; rename them instead")
     label_col, value_col, order_col = _cols(category)
     max_label = 60 if category == catalog.LEAD_SOURCE else 100
     if len(body.label) > max_label:

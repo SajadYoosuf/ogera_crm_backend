@@ -20,6 +20,8 @@ DISTRICT = "district"
 PARTNER_TYPE = "partner_type"
 HOUSE_STAGE = "house_stage"  # consumers
 TANK_TYPE = "tank_type"  # consumers: the tank they have now
+TASK_STATUS = "task_status"
+TASK_PRIORITY = "task_priority"
 
 CATEGORY_LABELS = {
     # lead_source and lead_stage are intentionally excluded here.
@@ -34,8 +36,12 @@ CATEGORY_LABELS = {
     PARTNER_TYPE: "Partner types",
     HOUSE_STAGE: "House stages",
     TANK_TYPE: "Tank types",
+    TASK_STATUS: "Task statuses",
+    TASK_PRIORITY: "Task priorities",
 }
 CATEGORIES = tuple(CATEGORY_LABELS)
+# Options the code branches on: labels can be renamed, but no option can be added.
+FIXED_CATEGORIES = frozenset({TASK_STATUS, TASK_PRIORITY})
 
 # Values the code branches on. Their label and position can change, but they can't be turned off or removed.
 LOCKED = {
@@ -43,6 +49,8 @@ LOCKED = {
     LEAD_STAGE: {"new_lead", "won", "lost"},  # pipeline entry/exit stages
     ACTIVITY_TYPE: {"field_visit", "internal_note"},  # GPS capture / cannot be scheduled
     PARTNER_TYPE: {"other"},  # imports fall back to it when a partner type is missing or unknown
+    TASK_STATUS: {"todo", "inprogress", "completed"},
+    TASK_PRIORITY: {"high", "medium", "low"},
 }
 # Seeded from what the app already stores, so existing records keep matching. (value, label)
 DEFAULT_ENUMS: dict[str, list[tuple[str, str]]] = {
@@ -67,6 +75,8 @@ DEFAULT_ENUMS: dict[str, list[tuple[str, str]]] = {
     TANK_TYPE: [
         ("plastic", "Plastic"), ("concrete", "Concrete"), ("steel", "Steel"), ("other", "Other"),
     ],
+    TASK_STATUS: [("todo", "To do"), ("inprogress", "In progress"), ("completed", "Completed")],
+    TASK_PRIORITY: [("high", "High"), ("medium", "Medium"), ("low", "Low")],
     DISTRICT: [
         ("thiruvananthapuram", "Thiruvananthapuram"), ("kollam", "Kollam"), ("pathanamthitta", "Pathanamthitta"),
         ("alappuzha", "Alappuzha"), ("kottayam", "Kottayam"), ("idukki", "Idukki"), ("ernakulam", "Ernakulam"),
