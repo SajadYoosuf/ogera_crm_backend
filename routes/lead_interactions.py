@@ -100,6 +100,8 @@ class TaskUpdate(BaseModel):
     status: Literal["todo", "inprogress", "completed"]
     outcome: Outcome | None = None
     notes: str | None = None
+    actual_activity_type: str | None = None
+    custom_label: str | None = None
 
     @model_validator(mode="after")
     def _completed_needs_outcome(self):
@@ -387,6 +389,18 @@ def update_task(
         if body.notes and body.notes.strip():
             row.notes = f"{row.notes}\n{body.notes.strip()}" if row.notes else body.notes.strip()
         add_log(db, "lead", row.entity_id, "task_completed", current_user.id, old, row.title)
+        if old != "completed" and row.entity_type == "lead":
+            done_type = body.actual_activity_type or row.activity_type
+            done_label = (body.custom_label or "").strip() or None
+            if done_type == "other" and not done_label:
+                raise HTTPException(400, detail="Name how you contacted them")
+            db.add(Interaction(
+                entity_type="lead", entity_id=row.entity_id, kind="log",
+                activity_type=done_type, custom_label=done_label if done_type == "other" else None,
+                title=row.title, notes=(body.notes or "").strip() or None, outcome=body.outcome,
+                done_by=current_user.id, created_by=current_user.id,
+                parent_task_id=row.id, logged_at=_now(),
+            ))
     else:
         add_log(db, "lead", row.entity_id, "task_status_changed", current_user.id, old, body.status)
     if old != body.status and row.entity_type == "lead":
