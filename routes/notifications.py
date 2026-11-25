@@ -3,6 +3,7 @@ Notification routes — the in-app notification inbox API.
 
 ENDPOINTS (the first three keep the original contract the web/mobile apps use):
     GET    /notifications               — list my notifications, unread first; returns unread_count
+    GET    /notifications/stream        — live push (server-sent events): one "notification" event per new row
     POST   /notifications/read-all      — mark all as read
     POST   /notifications/{id}/read     — mark one as read
     DELETE /notifications/{id}          — dismiss one notification
@@ -14,18 +15,30 @@ SECURITY:
     tenant-scoped one (get_tenant_db), so rows live in the tenant schema.
 """
 import datetime
+import json
+import time
 from datetime import timezone as _tz
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from auth import get_current_user, get_tenant_db
+from database import get_session_for_schema
 from models import Employee
 from models.notification import Notification
-from schemas.notification import NotificationListOut
+from schemas.notification import NotificationListOut, NotificationOut
 
 PURGE_DAYS = 30
+
+# Live stream: the server checks the database for this user's new rows and pushes them.
+# A connection closes after STREAM_LIFETIME_S; the client reconnects on its own.
+STREAM_INTERVAL_S = 3.0
+STREAM_LIFETIME_S = 600.0
+STREAM_HEARTBEAT_S = 15.0
+# Rows committed slightly late still get pushed: each check looks back this far and skips ids already sent.
+STREAM_LOOKBACK = datetime.timedelta(minutes=2)
 
 
 class OkResponse(BaseModel):
@@ -41,6 +54,59 @@ router = APIRouter(
     tags=["notifications"],
     dependencies=[Depends(get_current_user)],
 )
+
+
+def _utc_naive_now() -> datetime.datetime:
+    return datetime.datetime.now(_tz.utc).replace(tzinfo=None)
+
+
+def _recent_for(schema: str, recipient_id: int, since: datetime.datetime) -> list[dict]:
+    """This user's notifications created at or after `since`, oldest first, as JSON-ready dicts."""
+    with get_session_for_schema(schema) as db:
+        rows = (
+            db.query(Notification)
+            .filter(Notification.recipient_id == recipient_id, Notification.created_at >= since)
+            .order_by(Notification.id)
+            .all()
+        )
+        return [NotificationOut.model_validate(r).model_dump(mode="json") for r in rows]
+
+
+def _event_stream(schema: str, recipient_id: int, interval: float = STREAM_INTERVAL_S,
+                  lifetime: float = STREAM_LIFETIME_S, heartbeat: float = STREAM_HEARTBEAT_S):
+    """
+    Yields server-sent events. Only notifications created after the connection opens are pushed:
+    the ids already present when it starts are remembered and skipped.
+    """
+    started = time.monotonic()
+    last_sent = started
+    seen = {n["id"] for n in _recent_for(schema, recipient_id, _utc_naive_now() - STREAM_LOOKBACK)}
+    yield "retry: 3000\n\n"
+    while time.monotonic() - started < lifetime:
+        time.sleep(interval)
+        for item in _recent_for(schema, recipient_id, _utc_naive_now() - STREAM_LOOKBACK):
+            if item["id"] in seen:
+                continue
+            seen.add(item["id"])
+            yield f"event: notification\ndata: {json.dumps(item)}\n\n"
+            last_sent = time.monotonic()
+        if time.monotonic() - last_sent >= heartbeat:
+            yield ": ping\n\n"  # comment line keeps proxies from closing an idle connection
+            last_sent = time.monotonic()
+
+
+@router.get("/stream", summary="Live notifications (server-sent events)")
+def stream_notifications(current_user: Employee = Depends(get_current_user)):
+    """
+    Keeps the connection open and sends `event: notification` with the notification JSON as soon as
+    it is created for the caller. The stream ends after ~10 minutes; the client reconnects.
+    The token goes in the Authorization header, same as every other endpoint.
+    """
+    return StreamingResponse(
+        _event_stream(current_user._tenant_schema, current_user.id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("", response_model=NotificationListOut, summary="List my notifications")
