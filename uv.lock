@@ -611,7 +611,7 @@ wheels = [
 [[package]]
 name = "ogera-crm-backend"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
 ]

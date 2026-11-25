@@ -11,10 +11,12 @@ dependencies = [
     "fastapi[standard]>=0.163.1",
 ]
 
-[project.scripts]
-ogera-crm-backend = "ogera_crm_backend:main"
-
 [tool.uv]
 # Flat layout app (main.py at the root), not an installable package.
 # Skip building/installing the project itself; only sync its dependencies.
 package = false
+
+[tool.setuptools]
+# Vercel passes --no-editable which invokes setuptools; explicitly declare no packages
+# to prevent flat-layout auto-discovery failure on models/routes/schemas/services dirs.
+packages = []
