@@ -191,6 +191,9 @@ def get_session_for_schema(schema: str):
         # SET search_path is PostgreSQL-only; SQLite (used by the test suite) has no schemas.
         if not DATABASE_URL.startswith("sqlite"):
             conn.execute(text(f"SET search_path TO {schema}"))
+            # Ends the SET's transaction, so the session below owns its own: db.commit() then
+            # reaches the database before the response, not after it.
+            conn.commit()
         with Session(bind=conn, expire_on_commit=False) as db:
             yield db
         # db.commit() inside the route flushes changes to the connection but does NOT
