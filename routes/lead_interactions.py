@@ -311,6 +311,8 @@ def create_task(
         title=(body.title.strip() if body.title else None) or f"Follow-up: {label}",
         notes=body.notes, due_at=body.due_at, priority=body.priority, status="todo",
         assigned_to=body.assigned_to, created_by=current_user.id,
+        # The live table has logged_at NOT NULL, so a new task must carry it (it is the scheduling time).
+        logged_at=_now(),
     )
     db.add(row)
     db.flush()
