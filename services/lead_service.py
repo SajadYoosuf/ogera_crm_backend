@@ -222,6 +222,9 @@ def _notify_lead_created(db: Session, lead: Lead, created_by: int | None) -> Non
     notify_lead_assigned(db, lead, created_by)
     name = " ".join(p for p in (lead.first_name, lead.last_name) if p) or "A lead"
     kind = "Lead added manually" if created_by else "New lead received"
+    # Name who added it, so heads can tell at a glance who entered the lead.
+    creator = db.get(Employee, created_by) if created_by else None
+    by = f" by {creator.name}" if creator else ""
     head_ids = db.scalars(
         select(Employee.id)
         .join(Role, Role.id == Employee.role_id)
@@ -232,7 +235,7 @@ def _notify_lead_created(db: Session, lead: Lead, created_by: int | None) -> Non
     for hid in head_ids:
         if hid in (created_by, lead.assigned_to):
             continue
-        create_notification(db, hid, "lead_created", kind, f"{name} was added.", "lead", lead.id)
+        create_notification(db, hid, "lead_created", kind, f"{name} was added{by}.", "lead", lead.id)
 
 
 # ── Create ────────────────────────────────────────────────────────────────────
