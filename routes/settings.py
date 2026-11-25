@@ -2,14 +2,16 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import settings_catalog as catalog
-from auth import get_current_user, require_admin_or_manager
+from auth import get_current_user, get_tenant_db, require_admin_or_manager
 from config import UPLOAD_DIR
-from database import get_db
+from database import get_public_db
 from models import Employee, EnumValue
+from models.tenant import Tenant
 from schemas.settings import (
     CompanyResponse,
     CompanyUpdate,
@@ -79,7 +81,7 @@ def _commit(db: Session) -> None:
 # ---- Enum values ----------------------------------------------------------------------------------
 
 @router.get("/enums", response_model=dict[str, list[EnumValueResponse]], summary="All dropdown options (admin)")
-def list_all_enums(db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+def list_all_enums(db: Session = Depends(get_tenant_db), _: Employee = Depends(require_manager_or_admin)):
     """Every category with all its values, including inactive ones, and how many records use each value. Admin and manager."""
     return {
         category: [EnumValueResponse(**i.__dict__) for i in catalog.list_items(db, category, with_usage=True)]
@@ -88,7 +90,7 @@ def list_all_enums(db: Session = Depends(get_db), _: Employee = Depends(require_
 
 
 @router.get("/enums/{category}", response_model=list[EnumValueResponse], summary="Dropdown options of one category")
-def list_enum(category: str, db: Session = Depends(get_db), _: Employee = Depends(get_current_user)):
+def list_enum(category: str, db: Session = Depends(get_tenant_db), _: Employee = Depends(get_current_user)):
     """Active options of one category, in order, for dropdowns. Open to every signed-in user."""
     _category_or_404(category)
     # Dropdowns get the consumer pipeline only, as before; the other pipelines are managed in Settings.
@@ -100,7 +102,7 @@ def list_enum(category: str, db: Session = Depends(get_db), _: Employee = Depend
 
 
 @router.post("/enums/{category}", response_model=EnumValueResponse, status_code=201, summary="Add a dropdown option")
-def create_enum(category: str, body: EnumValueCreate, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+def create_enum(category: str, body: EnumValueCreate, db: Session = Depends(get_tenant_db), _: Employee = Depends(require_manager_or_admin)):
     """Adds a value to a category (admin and manager). The stored value cannot be changed later, so pick it carefully."""
     _category_or_404(category)
     if category in catalog.FIXED_CATEGORIES:
@@ -135,7 +137,7 @@ def create_enum(category: str, body: EnumValueCreate, db: Session = Depends(get_
 
 
 @router.patch("/enums/{category}/{item_id}", response_model=EnumValueResponse, summary="Update a dropdown option")
-def update_enum(category: str, item_id: int, body: EnumValueUpdate, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+def update_enum(category: str, item_id: int, body: EnumValueUpdate, db: Session = Depends(get_tenant_db), _: Employee = Depends(require_manager_or_admin)):
     """Renames, repositions or switches an option on or off (admin and manager). The stored value itself never changes."""
     _category_or_404(category)
     row = _row_or_404(db, category, item_id)
@@ -159,7 +161,7 @@ def update_enum(category: str, item_id: int, body: EnumValueUpdate, db: Session 
 
 
 @router.delete("/enums/{category}/{item_id}", response_model=EnumValueResponse, summary="Delete a dropdown option")
-def delete_enum(category: str, item_id: int, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+def delete_enum(category: str, item_id: int, db: Session = Depends(get_tenant_db), _: Employee = Depends(require_manager_or_admin)):
     """Removes an unused option (admin and manager). The option is turned off rather than erased, so old reports still read correctly. Options in use must be deactivated instead."""
     _category_or_404(category)
     row = _row_or_404(db, category, item_id)
@@ -175,7 +177,7 @@ def delete_enum(category: str, item_id: int, db: Session = Depends(get_db), _: E
 
 
 @router.post("/enums/{category}/reorder", response_model=list[EnumValueResponse], summary="Reorder dropdown options")
-def reorder_enum(category: str, body: EnumReorder, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+def reorder_enum(category: str, body: EnumReorder, db: Session = Depends(get_tenant_db), _: Employee = Depends(require_manager_or_admin)):
     """Sets the order of a category to the position of each id in `ordered_ids` (admin and manager)."""
     _category_or_404(category)
     if len(set(body.ordered_ids)) != len(body.ordered_ids):
@@ -196,18 +198,26 @@ def reorder_enum(category: str, body: EnumReorder, db: Session = Depends(get_db)
 
 # ---- Company ---------------------------------------------------------------------------------------
 
-def _company(db: Session) -> CompanyResponse:
-    return CompanyResponse(**catalog.get_company(db))
+def _tenant_row(db: Session, employee: Employee) -> Tenant:
+    """The company's row in public.tenants (name and logo live there, one row per tenant)."""
+    tenant = db.scalar(select(Tenant).where(Tenant.schema_name == employee._tenant_schema))
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return tenant
+
+
+def _company(tenant: Tenant) -> CompanyResponse:
+    return CompanyResponse(company_name=tenant.name, company_logo_url=tenant.logo_url)
 
 
 @router.get("/company", response_model=CompanyResponse, summary="Get company profile")
-def get_company(db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+def get_company(db: Session = Depends(get_public_db), employee: Employee = Depends(require_manager_or_admin)):
     """The company name and logo. Admin and manager only."""
-    return _company(db)
+    return _company(_tenant_row(db, employee))
 
 
 @router.patch("/company", response_model=CompanyResponse, summary="Update company profile")
-def update_company(body: CompanyUpdate, db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+def update_company(body: CompanyUpdate, db: Session = Depends(get_public_db), employee: Employee = Depends(require_manager_or_admin)):
     """Changes the company name (admin only)."""
     data = body.model_dump(exclude_unset=True)
     if data.get("company_name") is None:
@@ -217,13 +227,18 @@ def update_company(body: CompanyUpdate, db: Session = Depends(get_db), _: Employ
         if url and not (url.startswith("/uploads/") or url.startswith(("http://", "https://"))):
             raise HTTPException(status_code=422, detail="Logo address must be an uploaded file or an http(s) link")
         data["company_logo_url"] = url or None
+    tenant = _tenant_row(db, employee)
+    if "company_name" in data:
+        tenant.name = data["company_name"]
+    if "company_logo_url" in data:
+        tenant.logo_url = data["company_logo_url"]
     if data:
-        catalog.set_company(db, data)
-    return _company(db)
+        db.commit()
+    return _company(tenant)
 
 
 @router.post("/company/logo", response_model=CompanyResponse, summary="Upload company logo")
-async def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db), _: Employee = Depends(require_manager_or_admin)):
+async def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_public_db), employee: Employee = Depends(require_manager_or_admin)):
     """Stores a PNG or JPEG logo of up to 2 MB and makes it the company logo."""
     content = await file.read(MAX_LOGO_BYTES + 1)
     if len(content) > MAX_LOGO_BYTES:
@@ -237,8 +252,10 @@ async def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db
     name = f"logo-{uuid.uuid4().hex[:12]}.{extension}"
     (folder / name).write_bytes(content)
 
-    previous = catalog.get_company(db)["company_logo_url"]
-    catalog.set_company(db, {"company_logo_url": f"/uploads/{name}"})
+    tenant = _tenant_row(db, employee)
+    previous = tenant.logo_url
+    tenant.logo_url = f"/uploads/{name}"
+    db.commit()
     if previous and previous.startswith("/uploads/logo-"):
         (folder / Path(previous).name).unlink(missing_ok=True)
-    return _company(db)
+    return _company(tenant)
