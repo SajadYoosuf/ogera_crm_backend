@@ -28,7 +28,7 @@ import logging
 from datetime import timezone as _tz
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -278,27 +278,63 @@ def log_activity(
     return _enrich_many(db, [row])[0]
 
 
+_IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+_STATUS_LABELS = {"todo": "To do", "inprogress": "In progress", "completed": "Completed"}
+
+
+def _lead_name(lead: Lead) -> str:
+    return " ".join(p for p in (lead.first_name, lead.last_name) if p) or f"Lead #{lead.id}"
+
+
+def _employee_name(db: Session, employee_id: int | None) -> str:
+    employee = db.get(Employee, employee_id) if employee_id else None
+    return employee.name if employee else "a team member"
+
+
+def _ist_text(value: datetime.datetime) -> str:
+    aware = value if value.tzinfo else value.replace(tzinfo=_tz.utc)
+    return aware.astimezone(_IST).strftime("%d %b %Y, %I:%M %p IST")
+
+
+def _notify_heads(
+    db: Session, actor_id: int, lead: Lead, notif_type: str, title: str, message: str,
+    background_tasks: BackgroundTasks | None = None, skip: set[int | None] = frozenset(),
+) -> None:
+    """Every head (see-all role) except the actor and anyone in `skip`."""
+    for head_id in lead_access.head_employee_ids(db):
+        if head_id != actor_id and head_id not in skip:
+            create_notification(db, head_id, notif_type, title, message, "lead", lead.id, background_tasks)
+
+
+def _notify_task_parties(
+    db: Session, actor: Employee, row: Interaction, lead: Lead, notif_type: str, title: str, message: str,
+    background_tasks: BackgroundTasks | None = None,
+) -> None:
+    """The task's assignee and every head, except the person who made the change."""
+    if row.assigned_to and row.assigned_to != actor.id:
+        create_notification(db, row.assigned_to, notif_type, title, message, "lead", lead.id, background_tasks)
+    _notify_heads(db, actor.id, lead, notif_type, title, message, background_tasks, skip={row.assigned_to})
+
+
 def _notify_heads_of_logged_activity(db: Session, actor: Employee, lead: Lead, row: Interaction) -> None:
     """Tell every active admin/manager (any see-all head, not the actor) that a staff member logged an activity."""
     label = row.custom_label or row.activity_type.replace("_", " ")
-    name = " ".join(p for p in (lead.first_name, lead.last_name) if p) or f"Lead #{lead.id}"
-    for head_id in lead_access.head_employee_ids(db):
-        if head_id == actor.id:
-            continue
-        create_notification(
-            db, head_id, "activity_logged", f"Activity logged by {actor.name}",
-            f"{actor.name} logged {label} on {name}.", "lead", lead.id,
-        )
+    _notify_heads(
+        db, actor.id, lead, "activity_logged", f"Activity logged by {actor.name}",
+        f"{actor.name} logged {label} on {_lead_name(lead)}.",
+    )
 
 
 @router.post("/leads/{lead_id}/interactions/task", status_code=201, summary="Schedule a follow-up task on a lead")
 def create_task(
     lead_id: int,
     body: TaskCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    lead_access.ensure_can_work_lead(current_user, _lead_for(db, lead_id))
+    lead = _lead_for(db, lead_id)
+    lead_access.ensure_can_work_lead(current_user, lead)
     lead_access.ensure_can_assign_task(current_user, body.assigned_to)
     if body.assigned_to != current_user.id:
         _check_employee_exists(db, body.assigned_to)
@@ -320,8 +356,13 @@ def create_task(
     if body.assigned_to != current_user.id:
         create_notification(
             db, body.assigned_to, "followup_assigned", "New follow-up assigned",
-            f"{current_user.name} assigned you: {row.title}", "lead", lead_id,
+            f"{current_user.name} assigned you: {row.title}", "lead", lead_id, background_tasks,
         )
+    _notify_heads(
+        db, current_user.id, lead, "followup_created", f"Follow-up created: {row.title}",
+        f"{current_user.name} scheduled '{row.title}' for {_employee_name(db, body.assigned_to)} on {_lead_name(lead)}.",
+        background_tasks, skip={body.assigned_to},
+    )
     db.commit()
     db.refresh(row)
     return _enrich_many(db, [row])[0]
@@ -331,6 +372,7 @@ def create_task(
 def update_task(
     iid: int,
     body: TaskUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
@@ -347,6 +389,16 @@ def update_task(
         add_log(db, "lead", row.entity_id, "task_completed", current_user.id, old, row.title)
     else:
         add_log(db, "lead", row.entity_id, "task_status_changed", current_user.id, old, body.status)
+    if old != body.status and row.entity_type == "lead":
+        lead = _lead_for(db, row.entity_id)
+        label = _STATUS_LABELS[body.status]
+        _notify_task_parties(
+            db, current_user, row, lead,
+            "followup_completed" if body.status == "completed" else "followup_status",
+            f"Follow-up {label.lower()}: {row.title}",
+            f"{current_user.name} changed '{row.title}' on {_lead_name(lead)} to {label}.",
+            background_tasks,
+        )
     db.commit()
     db.refresh(row)
     return _enrich_many(db, [row])[0]
@@ -357,10 +409,11 @@ def reschedule_task(
     lead_id: int,
     iid: int,
     body: RescheduleBody,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    _lead_for(db, lead_id)
+    lead = _lead_for(db, lead_id)
     row = _get_interaction(db, iid, lead_id)
     if row.kind != "task":
         raise HTTPException(400, detail="Only tasks can be rescheduled")
@@ -368,6 +421,12 @@ def reschedule_task(
     old_due = row.due_at
     row.due_at = body.due_at
     add_log(db, "lead", lead_id, "task_rescheduled", current_user.id, str(old_due), str(body.due_at))
+    _notify_task_parties(
+        db, current_user, row, lead, "followup_rescheduled",
+        f"Follow-up rescheduled: {row.title}",
+        f"{current_user.name} moved '{row.title}' on {_lead_name(lead)} to {_ist_text(body.due_at)}.",
+        background_tasks,
+    )
     db.commit()
     db.refresh(row)
     return _enrich_many(db, [row])[0]
@@ -378,11 +437,12 @@ def reassign_interaction(
     lead_id: int,
     iid: int,
     body: ReassignBody,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     lead_access.ensure_is_head(current_user, "reassign tasks")
-    _lead_for(db, lead_id)
+    lead = _lead_for(db, lead_id)
     row = _get_interaction(db, iid, lead_id)
     if row.kind != "task":
         raise HTTPException(400, detail="Only tasks can be reassigned")
@@ -390,11 +450,22 @@ def reassign_interaction(
     old = row.assigned_to
     row.assigned_to = body.assigned_to
     add_log(db, "lead", lead_id, "task_reassigned", current_user.id, old, body.assigned_to)
+    new_name = _employee_name(db, body.assigned_to)
+    summary = f"{current_user.name} reassigned '{row.title}' on {_lead_name(lead)} to {new_name}."
     if body.assigned_to != current_user.id:
         create_notification(
             db, body.assigned_to, "followup_assigned", "Follow-up assigned to you",
-            f"{current_user.name} assigned you: {row.title}", "lead", lead_id,
+            f"{current_user.name} assigned you: {row.title}", "lead", lead_id, background_tasks,
         )
+    if old and old not in (body.assigned_to, current_user.id):
+        create_notification(
+            db, old, "followup_reassigned", f"Follow-up reassigned: {row.title}", summary,
+            "lead", lead_id, background_tasks,
+        )
+    _notify_heads(
+        db, current_user.id, lead, "followup_reassigned", f"Follow-up reassigned: {row.title}", summary,
+        background_tasks, skip={body.assigned_to, old},
+    )
     db.commit()
     db.refresh(row)
     return _enrich_many(db, [row])[0]
@@ -404,12 +475,20 @@ def reassign_interaction(
 def delete_interaction(
     lead_id: int,
     iid: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     lead_access.ensure_is_head(current_user, "delete interactions")
-    _lead_for(db, lead_id)
+    lead = _lead_for(db, lead_id)
     row = _get_interaction(db, iid, lead_id)
     add_log(db, "lead", lead_id, f"{row.kind}_deleted", current_user.id, old_value=row.title or row.activity_type)
+    if row.kind == "task":
+        _notify_task_parties(
+            db, current_user, row, lead, "followup_deleted",
+            f"Follow-up deleted: {row.title}",
+            f"{current_user.name} deleted '{row.title}' on {_lead_name(lead)}.",
+            background_tasks,
+        )
     db.delete(row)
     db.commit()

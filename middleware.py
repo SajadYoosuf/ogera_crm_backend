@@ -94,7 +94,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
         response_body = b""
-        if log_bodies and hasattr(response, "body_iterator"):
+        # Server-sent events never end on their own; draining them would hold every event back.
+        log_result = log_bodies and not response.headers.get("content-type", "").startswith("text/event-stream")
+        if log_result and hasattr(response, "body_iterator"):
             # Drain the streamed body so it can be logged, then rebuild the response.
             response_body = b"".join([chunk async for chunk in response.body_iterator])
             response = Response(
@@ -110,7 +112,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             f"{_timestamp()}  {color}{BOLD}<- {response.status_code} {_status_phrase(response.status_code)}{RESET}  "
             f"{DIM}{duration_ms:.1f} ms  {request.method} {request.url.path}{RESET}"
         )
-        if log_bodies and (response_body or response.body):
+        if log_result and (response_body or response.body):
             print(f"{DIM}           result  "
                   f"{_format_body(response_body or response.body, response.headers.get('content-type', ''))}{RESET}")
 

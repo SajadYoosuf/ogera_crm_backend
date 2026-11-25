@@ -10,9 +10,12 @@ RULES
 - assignee on create: heads only (staff auto-assign runs)
 """
 from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from models.lead import Lead
 from models.employee import Employee
+from models.role import Role
 
 HEAD_ROLES = frozenset({"admin", "manager"})
 
@@ -109,3 +112,16 @@ def ensure_is_head(employee: Employee, action: str = "perform this action") -> N
         status_code=403,
         detail=f"Only admin or manager can {action}",
     )
+
+
+def head_employee_ids(db: Session) -> list[int]:
+    """Active employees whose role sees every record (admin and manager in production)."""
+    return list(db.scalars(
+        select(Employee.id)
+        .join(Role, Role.id == Employee.role_id)
+        .where(
+            Role.see_all_records.is_(True),
+            Employee.is_active == 1,
+            Employee.deleted_at.is_(None),
+        )
+    ).all())
