@@ -412,16 +412,19 @@ def list_leads(
         skip=20, limit=20 → returns leads 21–40
         The frontend uses `total` to calculate the number of pages.
     """
-    from services.lead_access import is_head
+    from services.lead_access import is_head, open_task_lead_ids_for
 
     q = (
         select(Lead)
         .where(Lead.deleted_at.is_(None))
     )
 
-    # Role scope: staff only see their own leads
+    # Role scope: staff see leads assigned to them, plus leads where they hold an open follow-up
     if current_employee is not None and not is_head(current_employee):
-        q = q.where(Lead.assigned_to == current_employee.id)
+        q = q.where(or_(
+            Lead.assigned_to == current_employee.id,
+            Lead.id.in_(open_task_lead_ids_for(current_employee.id)),
+        ))
 
     if status:
         q = q.where(Lead.status == status)

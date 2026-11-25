@@ -31,5 +31,8 @@ from .staff_locations import router as staff_locations_router
 from .expenses import router as expenses_router
 from .diagnostics import router as diagnostics_router
 from .followup_settings import router as followup_settings_router
+from .whatsapp_inbox import router as whatsapp_inbox_router
+from .whatsapp_config import router as whatsapp_config_router
+from .whatsapp_templates import router as whatsapp_templates_router
 
-__all__ = ["leads_router", "lead_inbound_router", "webhooks_router", "api_keys_router", "auth_router", "password_reset_router", "contacts_router", "dashboard_router", "employees_router", "lead_sources_router", "notifications_router", "pipeline_router", "products_router", "roles_router", "sales_router", "settings_router", "tasks_router", "attendance_router", "staff_locations_router", "expenses_router", "diagnostics_router", "branches_router", "contact_fields_router", "lead_interactions_router", "lead_statuses_router", "lead_whatsapp_router", "lead_tasks_router", "followup_settings_router"]
+__all__ = ["leads_router", "lead_inbound_router", "webhooks_router", "api_keys_router", "auth_router", "password_reset_router", "contacts_router", "dashboard_router", "employees_router", "lead_sources_router", "notifications_router", "pipeline_router", "products_router", "roles_router", "sales_router", "settings_router", "tasks_router", "attendance_router", "staff_locations_router", "expenses_router", "diagnostics_router", "branches_router", "contact_fields_router", "lead_interactions_router", "lead_statuses_router", "lead_whatsapp_router", "lead_tasks_router", "followup_settings_router", "whatsapp_inbox_router", "whatsapp_config_router", "whatsapp_templates_router"]

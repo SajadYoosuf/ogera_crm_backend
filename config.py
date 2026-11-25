@@ -55,3 +55,5 @@ NOTIF_INACTIVITY_HOURS = int(os.getenv("NOTIF_INACTIVITY_HOURS", "48"))
 NOTIF_DIGEST_HOUR = int(os.getenv("NOTIF_DIGEST_HOUR", "8"))
 # Set NOTIF_DIGEST_ENABLED=false to disable the daily digest entirely
 NOTIF_DIGEST_ENABLED = os.getenv("NOTIF_DIGEST_ENABLED", "true").lower() == "true"
+# Public base URL of this API, used for the WhatsApp webhook URL shown in Settings. Empty = the request's host.
+PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "").strip()
