@@ -239,13 +239,26 @@ def _notify_lead_created(db: Session, lead: Lead, created_by: int | None) -> Non
         select(Employee.id)
         .join(Role, Role.id == Employee.role_id)
         .where(Role.slug.in_(("admin", "manager")))
-        .where(Employee.is_active.is_(True))
+        .where(Employee.is_active == 1)
         .where(Employee.deleted_at.is_(None))
     ).all()
     for hid in head_ids:
         if hid in (created_by, lead.assigned_to):
             continue
         create_notification(db, hid, "lead_created", kind, f"{name} was added{by}.", "lead", lead.id)
+
+
+def _notify_lead_created_safely(db: Session, lead: Lead, created_by: int | None) -> None:
+    """
+    Run the notification step inside a savepoint. A failure here (e.g. a schema
+    mismatch on the notification queries) only drops the notifications; the lead
+    itself is still saved. The error is logged so it can be fixed.
+    """
+    try:
+        with db.begin_nested():
+            _notify_lead_created(db, lead, created_by)
+    except SQLAlchemyError as exc:
+        logger.error("lead %s saved but notifications were skipped — %s", lead.id, exc)
 
 
 # ── Create ────────────────────────────────────────────────────────────────────
@@ -355,7 +368,7 @@ def create_lead(
         db.flush()
         from services.record_log_service import add_log
         add_log(db, "lead", lead.id, "created", created_by)
-        _notify_lead_created(db, lead, created_by)
+        _notify_lead_created_safely(db, lead, created_by)
         db.commit()
         db.refresh(lead)
         _preload_display_relations(lead)
