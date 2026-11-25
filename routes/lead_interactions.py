@@ -248,7 +248,8 @@ def log_activity(
     db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    lead_access.ensure_can_log_on_lead(current_user, _lead_for(db, lead_id))
+    lead = _lead_for(db, lead_id)
+    lead_access.ensure_can_log_on_lead(current_user, lead)
     done_by = current_user.id
     if body.done_by is not None and body.done_by != current_user.id:
         lead_access.ensure_is_head(current_user, "log on behalf of another employee")
@@ -269,9 +270,25 @@ def log_activity(
     )
     db.add(row)
     add_log(db, "lead", lead_id, "activity_logged", current_user.id, new_value=body.custom_label or body.activity_type)
+    # Staff activity is visible to admins and managers in the app: notify them.
+    if not lead_access.is_head(current_user):
+        _notify_heads_of_logged_activity(db, current_user, lead, row)
     db.commit()
     db.refresh(row)
     return _enrich_many(db, [row])[0]
+
+
+def _notify_heads_of_logged_activity(db: Session, actor: Employee, lead: Lead, row: Interaction) -> None:
+    """Tell every active admin/manager (any see-all head, not the actor) that a staff member logged an activity."""
+    label = row.custom_label or row.activity_type.replace("_", " ")
+    name = " ".join(p for p in (lead.first_name, lead.last_name) if p) or f"Lead #{lead.id}"
+    for head_id in lead_access.head_employee_ids(db):
+        if head_id == actor.id:
+            continue
+        create_notification(
+            db, head_id, "activity_logged", f"Activity logged by {actor.name}",
+            f"{actor.name} logged {label} on {name}.", "lead", lead.id,
+        )
 
 
 @router.post("/leads/{lead_id}/interactions/task", status_code=201, summary="Schedule a follow-up task on a lead")

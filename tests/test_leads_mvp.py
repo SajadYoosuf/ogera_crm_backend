@@ -350,6 +350,38 @@ def test_overdue_reminder_after_24h_once(client, login):
     assert _types_for(client, anu_h).count("followup_overdue") == 1
 
 
+@pytest.fixture(autouse=True)
+def _heads_see_all(client):
+    """The test seed creates roles with see_all_records=False; production sets it for admin/manager. Mirror that here."""
+    from sqlalchemy import select
+    from models.role import Role
+    with SessionLocal() as db:
+        for role in db.scalars(select(Role).where(Role.slug.in_(("admin", "manager")))).all():
+            role.see_all_records = True
+        db.commit()
+    yield
+
+
+def test_staff_logged_activity_notifies_admin_not_the_actor(client, login):
+    admin_h, _ = login("admin")
+    anu_h, anu = login("anu")
+    lead = _create_lead(client, anu_h)  # staff lead: assigned to anu
+    r = client.post(f"/leads/{lead['id']}/interactions/log", headers=anu_h,
+                    json={"activity_type": "phone_call", "notes": "called, will call back"})
+    assert r.status_code == 201, r.text
+    assert _types_for(client, admin_h).count("activity_logged") == 1
+    assert "activity_logged" not in _types_for(client, anu_h)
+
+
+def test_admin_logged_activity_does_not_notify_heads(client, login):
+    admin_h, _ = login("admin")
+    anu_h, anu = login("anu")
+    lead = _create_lead(client, admin_h, assigned_to=anu["id"])
+    client.post(f"/leads/{lead['id']}/interactions/log", headers=admin_h,
+                json={"activity_type": "visit", "notes": "site visit"})
+    assert "activity_logged" not in _types_for(client, admin_h)
+
+
 def test_reminders_run_per_tenant_and_survive_errors(monkeypatch):
     import services.followup_reminders as fr
 
