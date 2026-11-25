@@ -464,3 +464,19 @@ def test_whatsapp_reply_validation(client, login):
     assert client.post(f"/leads/{lead['id']}/whatsapp-reply", headers=admin_h, json={}).status_code == 400
     # No Meta credentials in the test environment
     assert client.post(f"/leads/{lead['id']}/whatsapp-reply", headers=admin_h, json={"message": "hi"}).status_code == 503
+
+
+def test_staff_created_lead_is_theirs_and_staff_cannot_import(client, login):
+    _, anu = login("anu")
+    anu_h, _ = login("anu")
+    r = client.post("/leads?allow_duplicate=false", json={"first_name": "Self", "phone": next(_PHONES)}, headers=anu_h)
+    assert r.status_code == 201, r.text
+    assert r.json()["assigned_to"] == anu["id"]
+
+    csv = b"phone\n9830000002\n"
+    imp = client.post("/leads/import/commit", headers=anu_h,
+                      files={"file": ("leads.csv", csv, "text/csv")}, data={"mapping": '{"0": "phone"}'})
+    assert imp.status_code == 403
+    ana = client.post("/leads/import/analyze", headers=anu_h,
+                      files={"file": ("leads.csv", csv, "text/csv")}, data={"mapping": '{"0": "phone"}'})
+    assert ana.status_code == 403

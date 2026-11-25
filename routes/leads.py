@@ -139,6 +139,7 @@ def import_analyze(
     mapping: str | None = Form(None),
     current_user: Employee = Depends(get_current_user),
 ):
+    ensure_is_head(current_user, "import leads")
     """
     Read an uploaded CSV/XLSX, validate every row, and return a preview
     WITHOUT writing anything to the database. See lead_import.analyze().
@@ -242,6 +243,7 @@ def import_commit(
         assign_mode       — "auto" | "unassigned" | "specific"
         assigned_to       — employee id, required when assign_mode="specific"
     """
+    ensure_is_head(current_user, "import leads")
     if assign_mode not in ("auto", "unassigned", "specific"):
         raise HTTPException(status_code=422, detail="assign_mode must be 'auto', 'unassigned' or 'specific'")
     if assign_mode == "specific" and assigned_to is None:
@@ -401,6 +403,10 @@ def create_lead(
     # Staff cannot choose the assignee; heads can. Auto-assign runs when assigned_to is None.
     if body.assigned_to is not None and not is_head(current_user):
         raise HTTPException(status_code=403, detail="Only admin or manager can assign leads to a specific person")
+    # A staff member's own lead is theirs by default; only a head can hand it to someone else.
+    assignee = body.assigned_to
+    if assignee is None and not is_head(current_user):
+        assignee = current_user.id
     schema = current_user._tenant_schema
     try:
         with get_session_for_schema(schema) as db:
@@ -414,7 +420,7 @@ def create_lead(
                 notes=body.notes,
                 address=body.address,
                 tags=body.tags,
-                assigned_to=body.assigned_to,
+                assigned_to=assignee,
                 branch_id=body.branch_id,
                 allow_duplicate=allow_duplicate,
                 background_tasks=background_tasks,
