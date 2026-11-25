@@ -173,9 +173,17 @@ def auto_assign(db: Session) -> int | None:
         Pure round-robin (1→2→3→1→...) ignores differences in lead complexity.
         Least-loaded ensures no one is overwhelmed while others are idle.
 
+    WHY ADMIN AND MANAGER ARE EXCLUDED?
+        Admins and managers oversee the pipeline and should not be handed leads
+        automatically. Auto-assigned leads go to other active employees only. A
+        head-created lead with no explicit assignee therefore lands on a staff
+        member; an admin or manager can still assign a lead to themselves by hand.
+
     Returns:
         employee.id of the chosen employee, or None if no eligible employee found.
     """
+    from models.role import Role
+
     # Count open (non-converted, non-lost) leads per active employee.
     # LEFT JOIN so employees with zero leads are included.
     subq = (
@@ -194,8 +202,10 @@ def auto_assign(db: Session) -> int | None:
             Employee.id,
             func.coalesce(subq.c.open_leads, 0).label("cnt"),
         )
+        .join(Role, Role.id == Employee.role_id)
         .outerjoin(subq, Employee.id == subq.c.emp_id)
         .where(Employee.is_active == 1)
+        .where(Role.slug.notin_(("admin", "manager")))
         .order_by(func.coalesce(subq.c.open_leads, 0).asc(), Employee.id.asc())
         .limit(1)
     ).first()

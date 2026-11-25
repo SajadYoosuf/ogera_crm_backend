@@ -548,6 +548,8 @@ The frontend can offer to open the existing record or override with `?allow_dupl
 
 When a lead is created without `assigned_to`, `auto_assign()` picks the active employee with the **fewest open leads** (`status NOT IN (converted, lost)`). This ensures the workload is spread evenly across the sales team.
 
+**Admins and managers are excluded** (`Role.slug NOT IN ('admin', 'manager')`). Auto-assign never hands a lead to an admin or manager. Ties go to the lowest employee id. A lead created by an admin or manager with no assignee is routed to another active employee; an admin or manager can still assign a lead to themselves manually.
+
 ---
 
 ## 7. WhatsApp Auto-Reply
