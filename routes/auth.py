@@ -10,8 +10,8 @@ import datetime
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -25,6 +25,7 @@ from auth import (
     get_password_hash,
 )
 from mailer import send_password_changed_notice
+from routes.employees import DUPLICATE_EMAIL, _email_taken
 from schemas import EmployeeResponse
 from schemas.employee import _validate_password
 
@@ -162,6 +163,95 @@ def get_profile(
         company=CompanyResponse.model_validate(tenant),
         employee=EmployeeResponse.model_validate(current_user, from_attributes=True),
     )
+
+
+class ProfileUpdate(BaseModel):
+    """My account: name, and email (email needs current_password). Only the sent fields change."""
+    name: str | None = Field(default=None, max_length=120)
+    email: EmailStr | None = None
+    current_password: str | None = Field(default=None, max_length=PASSWORD_MAX_LENGTH)
+
+
+@router.patch("/me", response_model=EmployeeResponse, summary="Update my name or email")
+def update_profile(
+    body: ProfileUpdate,
+    current_user: Employee = Depends(get_current_user),
+    db_public: Session = Depends(get_public_db),
+):
+    """
+    400 — email change without the right current password
+    409 — email already used by another employee
+    503 — database unavailable
+    """
+    tenant_schema = _extract_tenant_from_employee(current_user)
+    data = body.model_dump(exclude_unset=True)
+    for field in ("name", "email"):
+        if field in data and data[field] is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{field} cannot be null")
+    if "name" in data:
+        data["name"] = data["name"].strip()
+        if not data["name"]:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Name is required")
+
+    try:
+        tenant = db_public.scalar(select(Tenant).where(Tenant.schema_name == tenant_schema))
+        if tenant is None:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="Server unavailable, please retry in a moment")
+
+        with get_session_for_schema(tenant_schema) as db:
+            me = db.scalar(
+                select(Employee).where(Employee.id == current_user.id, Employee.deleted_at.is_(None))
+            )
+            if me is None:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                                    detail="Your login has expired. Please sign in again to continue.")
+
+            old_email = me.email
+            new_email = data["email"].strip().lower() if "email" in data else None
+            email_changes = new_email is not None and new_email != old_email.lower()
+            if email_changes:
+                if not body.current_password or not verify_password(body.current_password, me.password_hash):
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                        detail="Enter your current password to change your email")
+                if _email_taken(db, new_email, exclude_id=me.id) or db_public.scalar(
+                    select(EmployeeLookup).where(EmployeeLookup.email == new_email)
+                ):
+                    raise HTTPException(status.HTTP_409_CONFLICT, detail=DUPLICATE_EMAIL)
+
+            # Login finds the account through public.employee_lookup, so move that row first.
+            if email_changes:
+                db_public.execute(
+                    update(EmployeeLookup).where(EmployeeLookup.email == old_email).values(email=new_email)
+                )
+                db_public.flush()
+            if "name" in data:
+                me.name = data["name"]
+            if email_changes:
+                me.email = new_email
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                db_public.rollback()
+                raise HTTPException(status.HTTP_409_CONFLICT, detail=DUPLICATE_EMAIL)
+            except SQLAlchemyError as exc:
+                db.rollback()
+                db_public.rollback()
+                logger.error("UPDATE PROFILE — commit failed: %s", exc)
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                                    detail="Could not save your changes. Please try again in a moment.")
+            db_public.commit()
+
+            db.refresh(me)
+            resp = EmployeeResponse.model_validate(me, from_attributes=True)
+            resp.role_slug = getattr(current_user, "role_slug", None)
+            return resp
+
+    except OperationalError as exc:
+        logger.error("UPDATE PROFILE — DB error: %s", exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Server unavailable, please retry in a moment")
 
 
 class ChangePasswordRequest(BaseModel):
