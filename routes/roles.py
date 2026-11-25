@@ -3,8 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
-from auth import require_admin_or_manager
-from database import get_db
+from auth import get_tenant_db, require_admin_or_manager
 from models import Employee, Role
 from schemas import (
     RoleCreate,
@@ -40,9 +39,11 @@ def _to_response(role: Role, employee_count: int) -> RoleResponse:
 def _employee_counts(db: Session) -> dict[str, int]:
     """Active (not soft-deleted) employees per role slug."""
     rows = (
-        db.query(Employee.role, func.count(Employee.id))
+        db.query(Role.slug, func.count(Employee.id))
+        .select_from(Employee)
+        .join(Role, Role.id == Employee.role_id)
         .filter(Employee.deleted_at.is_(None))
-        .group_by(Employee.role)
+        .group_by(Role.slug)
         .all()
     )
     return {slug: count for slug, count in rows}
@@ -65,7 +66,7 @@ def _name_taken(db: Session, name: str, exclude_id: int | None = None) -> bool:
 @router.get("", response_model=RoleListResponse, summary="List roles")
 def list_roles(
     include_inactive: bool = True,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(view_roles),
 ):
     """Lists roles for admins and managers. Pass `include_inactive=false` to get only the roles that can be assigned."""
@@ -83,7 +84,9 @@ def _count_for_slug(db: Session, slug: str) -> int:
     """Active employee count for a single role slug — targeted query, not a full scan."""
     return (
         db.query(func.count(Employee.id))
-        .filter(Employee.role == slug, Employee.deleted_at.is_(None))
+        .select_from(Employee)
+        .join(Role, Role.id == Employee.role_id)
+        .filter(Role.slug == slug, Employee.deleted_at.is_(None))
         .scalar()
         or 0
     )
@@ -92,7 +95,7 @@ def _count_for_slug(db: Session, slug: str) -> int:
 @router.get("/{role_id}", response_model=RoleResponse, summary="Get a role")
 def get_role(
     role_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(view_roles),
 ):
     """One role by id. Admin and manager only."""
@@ -103,7 +106,7 @@ def get_role(
 @router.post("", response_model=RoleResponse, status_code=201, summary="Create a custom role")
 def create_role(
     body: RoleCreate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(manage_roles),
 ):
     """Creates a custom role (admin only). The slug is generated from the name and never changes."""
@@ -126,13 +129,13 @@ def create_role(
 def update_role(
     role_id: int,
     body: RoleUpdate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(manage_roles),
 ):
     """Edits a role's name or description, or turns it on or off (admin only). The slug never changes."""
     role = _get_role_or_404(db, role_id)
     data = body.model_dump(exclude_unset=True)
-    for field in ("name", "is_active"):
+    for field in ("name", "is_active", "see_all_records", "permissions"):
         if field in data and data[field] is None:
             raise HTTPException(status_code=422, detail=f"{field} cannot be null")
 
@@ -155,7 +158,7 @@ def update_role(
 @router.delete("/{role_id}", status_code=204, summary="Delete a role")
 def delete_role(
     role_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(manage_roles),
 ):
     """Deletes a custom role that no employee uses (admin only). For a role that is in use, deactivate it instead."""
@@ -163,7 +166,7 @@ def delete_role(
     if role.is_system:
         raise HTTPException(status_code=400, detail="System roles cannot be deleted")
     # Count soft-deleted employees too: they still reference the role.
-    in_use = db.query(func.count(Employee.id)).filter(Employee.role == role.slug).scalar() or 0
+    in_use = db.query(func.count(Employee.id)).filter(Employee.role_id == role.id).scalar() or 0
     if in_use:
         raise HTTPException(
             status_code=409,
