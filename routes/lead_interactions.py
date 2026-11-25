@@ -210,15 +210,28 @@ def lead_timeline(
         .where(RecordLog.entity_type == "lead", RecordLog.entity_id == lead_id)
         .order_by(RecordLog.created_at.desc(), RecordLog.id.desc())
     ).all()
+    # Assignment rows store the employee id in new_value; resolve it to a name for the detail line.
+    assignee_actions = {"assigned", "task_reassigned"}
     ids = {r.actor_id for r in rows if r.actor_id}
+    ids |= {int(r.new_value) for r in rows if r.action in assignee_actions and r.new_value and r.new_value.isdigit()}
     names = {}
     if ids:
         names = {r.id: r.name for r in db.execute(select(Employee.id, Employee.name).where(Employee.id.in_(ids))).all()}
+
+    def _detail(r: RecordLog) -> str | None:
+        if r.action not in assignee_actions:
+            return None
+        if not r.new_value:
+            return "Unassigned"
+        assignee = names.get(int(r.new_value)) if r.new_value.isdigit() else None
+        return f"Assigned to {assignee}" if assignee else "Assigned to an employee"
+
     return [
         {
             "id": r.id,
             "action": r.action,
             "label": _TIMELINE_LABELS.get(r.action, r.action.replace("_", " ").capitalize()),
+            "detail": _detail(r),
             "actor_name": names.get(r.actor_id),
             "old_value": r.old_value,
             "new_value": r.new_value,
