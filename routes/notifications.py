@@ -14,12 +14,13 @@ SECURITY:
     recipient_id is always compared to the current user's id. The session is the
     tenant-scoped one (get_tenant_db), so rows live in the tenant schema.
 """
+import asyncio
 import datetime
 import json
 import time
 from datetime import timezone as _tz
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -72,19 +73,23 @@ def _recent_for(schema: str, recipient_id: int, since: datetime.datetime) -> lis
         return [NotificationOut.model_validate(r).model_dump(mode="json") for r in rows]
 
 
-def _event_stream(schema: str, recipient_id: int, interval: float = STREAM_INTERVAL_S,
-                  lifetime: float = STREAM_LIFETIME_S, heartbeat: float = STREAM_HEARTBEAT_S):
+async def _event_stream(request: Request, schema: str, recipient_id: int, interval: float = STREAM_INTERVAL_S,
+                        lifetime: float = STREAM_LIFETIME_S, heartbeat: float = STREAM_HEARTBEAT_S):
     """
     Yields server-sent events. Only notifications created after the connection opens are pushed:
-    the ids already present when it starts are remembered and skipped.
+    the ids already present when it starts are remembered and skipped. Stops as soon as the
+    client disconnects, so a closed tab does not keep a server task and DB polling alive.
     """
     started = time.monotonic()
     last_sent = started
-    seen = {n["id"] for n in _recent_for(schema, recipient_id, _utc_naive_now() - STREAM_LOOKBACK)}
+    seen = {n["id"] for n in await asyncio.to_thread(_recent_for, schema, recipient_id, _utc_naive_now() - STREAM_LOOKBACK)}
     yield "retry: 3000\n\n"
     while time.monotonic() - started < lifetime:
-        time.sleep(interval)
-        for item in _recent_for(schema, recipient_id, _utc_naive_now() - STREAM_LOOKBACK):
+        await asyncio.sleep(interval)
+        if await request.is_disconnected():
+            return
+        items = await asyncio.to_thread(_recent_for, schema, recipient_id, _utc_naive_now() - STREAM_LOOKBACK)
+        for item in items:
             if item["id"] in seen:
                 continue
             seen.add(item["id"])
@@ -96,14 +101,14 @@ def _event_stream(schema: str, recipient_id: int, interval: float = STREAM_INTER
 
 
 @router.get("/stream", summary="Live notifications (server-sent events)")
-def stream_notifications(current_user: Employee = Depends(get_current_user)):
+def stream_notifications(request: Request, current_user: Employee = Depends(get_current_user)):
     """
     Keeps the connection open and sends `event: notification` with the notification JSON as soon as
-    it is created for the caller. The stream ends after ~10 minutes; the client reconnects.
-    The token goes in the Authorization header, same as every other endpoint.
+    it is created for the caller. The stream ends after ~10 minutes or when the client disconnects;
+    the client reconnects. The token goes in the Authorization header, same as every other endpoint.
     """
     return StreamingResponse(
-        _event_stream(current_user._tenant_schema, current_user.id),
+        _event_stream(request, current_user._tenant_schema, current_user.id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
