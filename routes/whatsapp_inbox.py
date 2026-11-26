@@ -133,7 +133,7 @@ def unread_count(current_user: Employee = Depends(require_permission("leads", "r
                 select(func.count(func.distinct(WhatsAppMessage.lead_id)))
                 .where(
                     WhatsAppMessage.direction == "in",
-                    WhatsAppMessage.is_read.is_(False),
+                    WhatsAppMessage.status != "read",
                     WhatsAppMessage.lead_id.in_(_visible_leads(current_user)),
                 )
             ) or 0
@@ -154,9 +154,9 @@ def mark_read(lead_id: int, current_user: Employee = Depends(require_permission(
                 .where(
                     WhatsAppMessage.lead_id == lead_id,
                     WhatsAppMessage.direction == "in",
-                    WhatsAppMessage.is_read.is_(False),
+                    WhatsAppMessage.status != "read",
                 )
-                .values(is_read=True)
+                .values(status="read")
             )
             db.commit()
             return {"ok": True}
