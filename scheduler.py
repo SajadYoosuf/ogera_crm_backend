@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # Using BackgroundScheduler (thread-based) because FastAPI may run with a sync
 # ASGI server (uvicorn in sync mode). BackgroundScheduler runs in its own thread
 # and does not interfere with the async event loop.
-_scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
+_scheduler = BackgroundScheduler(timezone="Asia/Kolkata", daemon=True)
 
 
 def _run_inactivity_check() -> None:
