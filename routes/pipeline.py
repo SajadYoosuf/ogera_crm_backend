@@ -32,8 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import settings_catalog as catalog
-from auth import get_current_user, require_admin_or_manager
-from database import get_db
+from auth import get_current_user, get_tenant_db, require_admin_or_manager
 from models import Employee, LeadStage, PipelineStage
 from schemas.contact import (
     ContactType,
@@ -109,7 +108,7 @@ def _commit(db: Session) -> None:
 @router.get("/stages", response_model=list[PipelineStageItem], summary="Active pipeline stages (board)")
 def list_pipeline_stages(
     contact_type: ContactType | None = Query(None, description="Filter: consumer or partner"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(get_current_user),
 ):
     """
@@ -144,7 +143,7 @@ def list_pipeline_stages(
 @router.get("/stages/all", response_model=list[PipelineStageAdminResponse], summary="All pipeline stages (admin)")
 def list_all_pipeline_stages(
     contact_type: ContactType | None = Query(None, description="Filter: consumer or partner"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(require_admin_or_manager),
 ):
     """
@@ -167,7 +166,7 @@ def list_all_pipeline_stages(
 )
 def reorder_pipeline_stages(
     body: PipelineStageReorder,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(require_admin_or_manager),
 ):
     """
@@ -217,7 +216,7 @@ def reorder_pipeline_stages(
 @router.post("/stages", response_model=PipelineStageAdminResponse, status_code=201, summary="Add a pipeline stage")
 def create_pipeline_stage(
     body: PipelineStageCreate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(require_admin_or_manager),
 ):
     """
@@ -274,7 +273,7 @@ def create_pipeline_stage(
 def update_pipeline_stage(
     stage_id: int,
     body: PipelineStageUpdate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(require_admin_or_manager),
 ):
     """
@@ -310,7 +309,7 @@ def update_pipeline_stage(
 @router.delete("/stages/{stage_id}", response_model=PipelineStageAdminResponse, summary="Delete a pipeline stage")
 def delete_pipeline_stage(
     stage_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(require_admin_or_manager),
 ):
     """

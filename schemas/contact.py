@@ -378,3 +378,22 @@ class ContactStatsResponse(BaseModel):
     """Counts of unassigned contacts, total and broken down by lead source."""
     total_unassigned: int
     unassigned_by_source: dict[str, int] = Field(default_factory=dict)
+
+
+# ── Stage schemas ─────────────────────────────────────────────────────────────
+
+class ContactStageResponse(BaseModel):
+    """Current stage of a contact."""
+    stage_id: int
+    stage_slug: str
+    stage_name: str
+    contact_type: str
+    changed_at: datetime.datetime | None = None
+
+
+class ContactStageSet(BaseModel):
+    """Body for POST /contacts/{id}/stage."""
+    stage_id: int
+    loss_reason: str | None = None   # required when moving to slug=lost or inactive
+    loss_notes: str | None = None
+    awareness_note: str | None = None

@@ -434,7 +434,7 @@ class _FcmTokenBody(BaseModel):
 @router.post("/me/fcm-token", summary="Register or update FCM device token")
 def register_fcm_token(
     body: _FcmTokenBody,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """Store the caller's FCM push token. Called by web and mobile after login."""
@@ -463,7 +463,7 @@ def register_fcm_token(
 @router.delete("/me/fcm-token", summary="Unregister an FCM device token")
 def unregister_fcm_token(
     body: _FcmTokenBody,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """Remove one browser/phone registration, normally called on logout."""

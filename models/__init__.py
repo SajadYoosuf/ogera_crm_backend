@@ -23,6 +23,7 @@ from .consumer_profile import ConsumerProfile
 from .partner_profile import PartnerProfile
 from .branch import Branch
 from .contact_field_definition import ContactFieldDefinition
+from .dealer_profile import DealerProfile
 from .password_reset import PasswordResetCode
 from .sale import Sale
 from .product import Product, ProductOption
@@ -60,6 +61,7 @@ __all__ = [
     "PartnerProfile",
     "Branch",
     "ContactFieldDefinition",
+    "DealerProfile",
     "PasswordResetCode",
     "Sale",
     "Product",

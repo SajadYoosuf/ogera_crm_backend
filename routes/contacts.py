@@ -54,11 +54,16 @@ from request_context import client_platform
 from services.lead_access import is_head
 from verification import missing_fields, verified_clause
 from models import Contact, ConsumerProfile, Employee, LeadSource, PartnerProfile
+from models.lead_stage import LeadStage
+from models.pipeline_stage import PipelineStage
+from models.record_log import RecordLog
 from schemas import (
     ContactCreate,
     ContactListItem,
     ContactListResponse,
     ContactResponse,
+    ContactStageResponse,
+    ContactStageSet,
     ContactType,
     ContactUpdate,
     ContactBulkAssignRequest,
@@ -66,6 +71,7 @@ from schemas import (
     ContactStatsResponse,
 )
 from services.contact_field_service import validate_profile_data
+from services.record_log_service import add_log
 
 router = APIRouter(
     prefix="/contacts", tags=["contacts"], dependencies=[Depends(get_current_user)]
@@ -1103,3 +1109,172 @@ def delete_contact(
     contact.deleted_at = datetime.now(timezone.utc)
     db.add(contact)
     db.commit()
+
+
+# ── Stage endpoints ───────────────────────────────────────────────────────────
+
+_LOCKED_TERMINAL = frozenset({"lost", "inactive", "inactive_dealer"})
+
+
+def _current_stage(db: Session, contact_id: int) -> LeadStage | None:
+    return (
+        db.query(LeadStage)
+        .filter(LeadStage.contact_id == contact_id)
+        .order_by(LeadStage.changed_at.desc(), LeadStage.id.desc())
+        .first()
+    )
+
+
+@router.get("/{contact_id}/stage", response_model=ContactStageResponse, summary="Current stage of a contact")
+def get_contact_stage(
+    contact_id: int,
+    db: Session = Depends(get_tenant_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    contact = get_live_contact(db, contact_id)
+    from services.lead_access import ensure_can_work_contact
+    ensure_can_work_contact(current_user, contact)
+    row = _current_stage(db, contact_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No stage set for this contact")
+    stage = db.query(PipelineStage).filter(PipelineStage.id == row.stage_id).first()
+    if not stage:
+        raise HTTPException(status_code=404, detail="Stage not found")
+    return ContactStageResponse(
+        stage_id=stage.id,
+        stage_slug=stage.slug,
+        stage_name=stage.name,
+        contact_type=stage.contact_type,
+        changed_at=row.changed_at,
+    )
+
+
+@router.post("/{contact_id}/stage", response_model=ContactStageResponse, status_code=201, summary="Move contact to a stage")
+def set_contact_stage(
+    contact_id: int,
+    body: ContactStageSet,
+    db: Session = Depends(get_tenant_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    contact = get_live_contact(db, contact_id)
+    from services.lead_access import ensure_can_work_contact
+    ensure_can_work_contact(current_user, contact)
+
+    stage = db.query(PipelineStage).filter(
+        PipelineStage.id == body.stage_id,
+        PipelineStage.is_active == 1,
+    ).first()
+    if not stage:
+        raise HTTPException(status_code=404, detail="Pipeline stage not found or inactive")
+    if stage.contact_type != contact.contact_type:
+        raise HTTPException(status_code=400, detail=f"Stage belongs to {stage.contact_type} pipeline, not {contact.contact_type}")
+
+    if stage.slug in _LOCKED_TERMINAL and not body.loss_reason:
+        raise HTTPException(status_code=422, detail="loss_reason is required when moving to this stage")
+
+    current = _current_stage(db, contact_id)
+    old_slug = None
+    if current:
+        old_stage = db.query(PipelineStage).filter(PipelineStage.id == current.stage_id).first()
+        old_slug = old_stage.slug if old_stage else None
+        if current.stage_id == body.stage_id:
+            raise HTTPException(status_code=409, detail="Contact is already in this stage")
+
+    row = LeadStage(
+        contact_id=contact_id,
+        stage_id=body.stage_id,
+        changed_by=current_user.id,
+        loss_reason=body.loss_reason,
+        loss_notes=body.loss_notes,
+        awareness_note=body.awareness_note,
+    )
+    db.add(row)
+    add_log(db, "contact", contact_id, "stage_changed", current_user.id, old_slug, stage.slug)
+    db.commit()
+    db.refresh(row)
+    return ContactStageResponse(
+        stage_id=stage.id,
+        stage_slug=stage.slug,
+        stage_name=stage.name,
+        contact_type=stage.contact_type,
+        changed_at=row.changed_at,
+    )
+
+
+# ── Timeline ──────────────────────────────────────────────────────────────────
+
+_TIMELINE_LABELS = {
+    "created": "Contact created",
+    "edited": "Contact edited",
+    "stage_changed": "Stage changed",
+    "assigned": "Contact assigned",
+    "activity_logged": "Activity logged",
+    "task_created": "Follow-up scheduled",
+    "task_completed": "Follow-up completed",
+    "task_status_changed": "Follow-up status changed",
+    "task_rescheduled": "Follow-up rescheduled",
+    "task_reassigned": "Follow-up reassigned",
+    "task_deleted": "Follow-up deleted",
+    "log_deleted": "Activity deleted",
+}
+
+
+@router.get("/{contact_id}/timeline", summary="History of a contact, newest first")
+def contact_timeline(
+    contact_id: int,
+    db: Session = Depends(get_tenant_db),
+    current_user: Employee = Depends(get_current_user),
+):
+    from sqlalchemy import select as sa_select
+    from services.lead_access import ensure_can_work_contact
+    contact = get_live_contact(db, contact_id)
+    ensure_can_work_contact(current_user, contact)
+
+    rows = db.scalars(
+        sa_select(RecordLog)
+        .where(RecordLog.entity_type == "contact", RecordLog.entity_id == contact_id)
+        .order_by(RecordLog.created_at.desc(), RecordLog.id.desc())
+    ).all()
+
+    assignee_actions = {"assigned", "task_reassigned"}
+    ids = {r.actor_id for r in rows if r.actor_id}
+    ids |= {int(r.new_value) for r in rows if r.action in assignee_actions and r.new_value and r.new_value.isdigit()}
+    names: dict[int, str] = {}
+    if ids:
+        from sqlalchemy import select as _sel
+        names = {r.id: r.name for r in db.execute(_sel(Employee.id, Employee.name).where(Employee.id.in_(ids))).all()}
+
+    stage_actions = {"stage_changed"}
+    stage_ids_needed = {int(r.new_value) for r in rows if r.action in stage_actions and r.new_value and r.new_value.isdigit()}
+    stage_names: dict[str, str] = {}
+    if stage_ids_needed:
+        pass  # new_value already holds the slug string from add_log
+
+    def _detail(r: RecordLog) -> str | None:
+        if r.action in assignee_actions:
+            if not r.new_value:
+                return "Unassigned"
+            emp = names.get(int(r.new_value)) if r.new_value.isdigit() else None
+            return f"Assigned to {emp}" if emp else "Assigned to an employee"
+        if r.action == "stage_changed":
+            parts = []
+            if r.old_value:
+                parts.append(r.old_value.replace("_", " ").capitalize())
+            if r.new_value:
+                parts.append(r.new_value.replace("_", " ").capitalize())
+            return " → ".join(parts) if parts else None
+        return None
+
+    return [
+        {
+            "id": r.id,
+            "action": r.action,
+            "label": _TIMELINE_LABELS.get(r.action, r.action.replace("_", " ").capitalize()),
+            "detail": _detail(r),
+            "actor_name": names.get(r.actor_id),
+            "old_value": r.old_value,
+            "new_value": r.new_value,
+            "created_at": r.created_at,
+        }
+        for r in rows
+    ]

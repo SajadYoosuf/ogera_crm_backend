@@ -70,6 +70,12 @@ class Employee(SQLModel, table=True):
         sa_column=Column("deleted_at", DateTime, nullable=True),
     )
 
+    # Latest FCM push token (web or mobile). Notification dispatch also reads fcm_devices.
+    fcm_token: Optional[str] = Field(
+        default=None,
+        sa_column=Column("fcm_token", String(512), nullable=True),
+    )
+
     # FK to branches table (ventino schema). Tells which branch office this employee belongs to.
     # Used in contacts list to show "which branch created this lead".
     branch_id: Optional[int] = Field(

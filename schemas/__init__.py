@@ -51,6 +51,8 @@ from .contact import (
     ContactBulkAssignRequest,
     ContactBulkAssignResponse,
     ContactStatsResponse,
+    ContactStageResponse,
+    ContactStageSet,
 )
 
 __all__ = [

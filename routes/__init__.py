@@ -10,7 +10,8 @@ from .webhooks import router as webhooks_router
 from .api_keys import router as api_keys_router
 from .auth import router as auth_router
 from .password_reset import router as password_reset_router
-# from .recent_activity import router as recent_activity_router  # disabled — contact_assignments not in ventino yet
+from .recent_activity import router as recent_activity_router
+from .contact_interactions import router as contact_interactions_router
 from .contacts import router as contacts_router
 from .dashboard import router as dashboard_router
 from .employees import router as employees_router
@@ -35,4 +36,4 @@ from .whatsapp_inbox import router as whatsapp_inbox_router
 from .whatsapp_config import router as whatsapp_config_router
 from .whatsapp_templates import router as whatsapp_templates_router
 
-__all__ = ["leads_router", "lead_inbound_router", "webhooks_router", "api_keys_router", "auth_router", "password_reset_router", "contacts_router", "dashboard_router", "employees_router", "lead_sources_router", "notifications_router", "pipeline_router", "products_router", "roles_router", "sales_router", "settings_router", "tasks_router", "attendance_router", "staff_locations_router", "expenses_router", "diagnostics_router", "branches_router", "contact_fields_router", "lead_interactions_router", "lead_statuses_router", "lead_whatsapp_router", "lead_tasks_router", "followup_settings_router", "whatsapp_inbox_router", "whatsapp_config_router", "whatsapp_templates_router"]
+__all__ = ["leads_router", "lead_inbound_router", "webhooks_router", "api_keys_router", "auth_router", "password_reset_router", "contacts_router", "contact_interactions_router", "recent_activity_router", "dashboard_router", "employees_router", "lead_sources_router", "notifications_router", "pipeline_router", "products_router", "roles_router", "sales_router", "settings_router", "tasks_router", "attendance_router", "staff_locations_router", "expenses_router", "diagnostics_router", "branches_router", "contact_fields_router", "lead_interactions_router", "lead_statuses_router", "lead_whatsapp_router", "lead_tasks_router", "followup_settings_router", "whatsapp_inbox_router", "whatsapp_config_router", "whatsapp_templates_router"]

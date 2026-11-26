@@ -28,11 +28,7 @@ def is_head(employee: Employee) -> bool:
 
 
 def open_task_lead_ids_for(employee_id: int):
-    """Subquery of lead ids that have a not-yet-completed follow-up assigned to this employee.
-
-    A follow-up reassigned to someone keeps the lead visible to them until the task is completed.
-    NULL status counts as open (the column defaults to 'todo').
-    """
+    """Subquery of lead ids that have a not-yet-completed follow-up assigned to this employee."""
     return (
         select(Interaction.entity_id)
         .where(Interaction.entity_type == "lead")
@@ -40,6 +36,26 @@ def open_task_lead_ids_for(employee_id: int):
         .where(Interaction.assigned_to == employee_id)
         .where(or_(Interaction.status.is_(None), Interaction.status != "completed"))
     )
+
+
+def open_task_contact_ids_for(employee_id: int):
+    """Subquery of contact ids that have a not-yet-completed task assigned to this employee."""
+    return (
+        select(Interaction.entity_id)
+        .where(Interaction.entity_type == "contact")
+        .where(Interaction.kind == "task")
+        .where(Interaction.assigned_to == employee_id)
+        .where(or_(Interaction.status.is_(None), Interaction.status != "completed"))
+    )
+
+
+def _has_open_task_on_contact(contact, employee: Employee) -> bool:
+    db = object_session(contact)
+    if db is None:
+        return False
+    return db.scalar(
+        open_task_contact_ids_for(employee.id).where(Interaction.entity_id == contact.id).limit(1)
+    ) is not None
 
 
 def _has_open_task_on_lead(lead: Lead, employee: Employee) -> bool:
@@ -100,30 +116,59 @@ def ensure_can_modify_interaction(employee: Employee, interaction_assigned_to: i
     )
 
 
-# ── Contact-scoped helpers (legacy contact/follow-up routes still import these) ──
+# ── Contact-scoped helpers ────────────────────────────────────────────────────
 
-def ensure_can_work_contact(employee: Employee, contact) -> None:
-    """Raise 403 unless the employee is a head or owns this contact."""
-    if is_head(employee) or contact.assigned_to == employee.id:
-        return
-    raise HTTPException(
-        status_code=403,
-        detail="Only the assigned employee or an admin or manager can change this lead",
+def can_work_contact(employee: Employee, contact) -> bool:
+    """Heads see all. Staff see contacts they own, created, or have an open task on."""
+    return (
+        is_head(employee)
+        or contact.assigned_to == employee.id
+        or contact.created_by == employee.id
+        or _has_open_task_on_contact(contact, employee)
     )
 
 
-def ensure_can_log_activity(employee: Employee, contact) -> None:
-    """Raise 403 unless the employee is a head, the contact's assignee, or its creator."""
+def ensure_can_work_contact(employee: Employee, contact) -> None:
+    if can_work_contact(employee, contact):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Only the assigned employee, creator, or an admin or manager can work on this contact",
+    )
+
+
+def ensure_can_edit_contact(employee: Employee, contact) -> None:
+    """Edit requires ownership or head — open task alone is not enough."""
     if is_head(employee) or contact.assigned_to == employee.id or contact.created_by == employee.id:
         return
     raise HTTPException(
         status_code=403,
-        detail="Only the assigned employee, the creator, or an admin or manager can log on this lead",
+        detail="Only the assigned employee, creator, or an admin or manager can edit this contact",
     )
 
 
+def ensure_can_log_on_contact(employee: Employee, contact) -> None:
+    if can_work_contact(employee, contact):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Only the assigned employee, creator, or an admin or manager can log on this contact",
+    )
+
+
+def ensure_can_assign_task_on_contact(employee: Employee, assigned_to: int) -> None:
+    if is_head(employee) or assigned_to == employee.id:
+        return
+    raise HTTPException(status_code=403, detail="You can only assign tasks to yourself")
+
+
+# ── Legacy aliases (old follow-up routes still import these) ──────────────────
+
+def ensure_can_log_activity(employee: Employee, contact) -> None:
+    ensure_can_log_on_contact(employee, contact)
+
+
 def ensure_can_work_followup(employee: Employee, followup) -> None:
-    """Raise 403 unless the employee is a head or is the follow-up's assignee."""
     if is_head(employee) or followup.assigned_to == employee.id:
         return
     raise HTTPException(
@@ -133,7 +178,6 @@ def ensure_can_work_followup(employee: Employee, followup) -> None:
 
 
 def ensure_can_assign_followup(employee: Employee, assigned_to: int) -> None:
-    """Raise 403 unless the employee is a head or is booking the follow-up for themselves."""
     if is_head(employee) or assigned_to == employee.id:
         return
     raise HTTPException(status_code=403, detail="You can only schedule follow-ups for yourself")
