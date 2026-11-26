@@ -12,13 +12,15 @@ NEVER RAISES:
     failure must never crash a contact creation, follow-up update, or any other action.
 """
 import logging
+import threading
 from datetime import timedelta
 from fastapi import BackgroundTasks
-from sqlalchemy import func as sqlfunc, select
+from sqlalchemy import event, func as sqlfunc, select
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from models.notification import Notification
 from models.employee import Employee
+from models.role import Role
 from models.fcm_device import FcmDevice
 from models.activity_log import ActivityLog
 from models.followup_schedule import FollowupSchedule
@@ -153,6 +155,10 @@ def create_notification(
                 entity_type,
                 entity_id,
             )
+        else:
+            db.info.setdefault(PENDING_PUSHES_KEY, []).append(
+                (recipient_id, notif_type, title, message, entity_type, entity_id)
+            )
         return notif
     except Exception as exc:
         logger.error("create_notification failed for recipient_id=%s: %s", recipient_id, exc)
@@ -212,6 +218,26 @@ def dispatch_notification_push(
             cleanup_db.close()
 
 
+PENDING_PUSHES_KEY = "pending_pushes"
+
+
+def _dispatch_pending(pushes: list) -> None:
+    for push in pushes:
+        dispatch_notification_push(*push)
+
+
+@event.listens_for(Session, "after_commit")
+def _send_pushes_after_commit(session: Session) -> None:
+    pending = session.info.pop(PENDING_PUSHES_KEY, None)
+    if pending:
+        threading.Thread(target=_dispatch_pending, args=(pending,), daemon=True).start()
+
+
+@event.listens_for(Session, "after_rollback")
+def _drop_pushes_after_rollback(session: Session) -> None:
+    session.info.pop(PENDING_PUSHES_KEY, None)
+
+
 def _remove_invalid_token(db: Session, token: str | None) -> None:
     if not token:
         return
@@ -231,7 +257,7 @@ def notify_task_completed(
     msg = f'{completed_by.name} completed the task "{task_title}".'
     recipients = {task.assigned_to}
     leaders = db.query(Employee).filter(
-        Employee.role.in_(["admin", "manager"]),
+        Employee.role_id.in_(select(Role.id).where(Role.slug.in_(["admin", "manager"]))),
         Employee.is_active == 1,
         Employee.deleted_at.is_(None),
     ).all()
@@ -273,7 +299,7 @@ def notify_roles(
     """
     try:
         employees = db.query(Employee).filter(
-            Employee.role.in_(roles),
+            Employee.role_id.in_(select(Role.id).where(Role.slug.in_(roles))),
             Employee.is_active == 1,
             Employee.deleted_at.is_(None),
         ).all()
@@ -312,7 +338,6 @@ def run_48h_rule(db: Session) -> int:
     hours = config.NOTIF_INACTIVITY_HOURS
     cutoff = ist_now() - timedelta(hours=hours)
     sent = 0
-    pending_pushes = []
     try:
         # Contacts that have had recent activity — we exclude these
         # select() builds an explicit SQL SELECT, which IN() accepts without the
@@ -340,7 +365,7 @@ def run_48h_rule(db: Session) -> int:
         )
 
         admins_managers = db.query(Employee).filter(
-            Employee.role.in_(["admin", "manager"]),
+            Employee.role_id.in_(select(Role.id).where(Role.slug.in_(["admin", "manager"]))),
             Employee.is_active == 1,
             Employee.deleted_at.is_(None),
         ).all()
@@ -352,20 +377,16 @@ def run_48h_rule(db: Session) -> int:
             # Notify the assigned sales executive
             if not check_dedup(db, contact.assigned_to, "inactivity", contact.id, 24):
                 create_notification(db, contact.assigned_to, "inactivity", title, msg, "contact", contact.id)
-                pending_pushes.append((contact.assigned_to, "inactivity", title, msg, "contact", contact.id))
                 sent += 1
 
             # Notify admin / manager (skip if they are the assigned person too)
             for emp in admins_managers:
                 if emp.id != contact.assigned_to and not check_dedup(db, emp.id, "inactivity", contact.id, 24):
                     create_notification(db, emp.id, "inactivity", title, msg, "contact", contact.id)
-                    pending_pushes.append((emp.id, "inactivity", title, msg, "contact", contact.id))
                     sent += 1
 
         if sent:
             db.commit()
-            for push in pending_pushes:
-                dispatch_notification_push(*push)
         logger.info("Inactivity rule run: %d notification(s) sent", sent)
     except Exception as exc:
         logger.error("run_48h_rule failed: %s", exc)
@@ -386,7 +407,6 @@ def run_daily_digest(db: Session) -> int:
         return 0
     today = ist_now().date()
     sent = 0
-    pending_pushes = []
     try:
         rows = (
             db.query(
@@ -406,13 +426,10 @@ def run_daily_digest(db: Session) -> int:
             title = f"You have {count} task{s} today"
             msg = f"Good morning! You have {count} follow-up task{s} scheduled for today."
             create_notification(db, assigned_to, "daily_digest", title, msg)
-            pending_pushes.append((assigned_to, "daily_digest", title, msg, None, None))
             sent += 1
 
         if sent:
             db.commit()
-            for push in pending_pushes:
-                dispatch_notification_push(*push)
         logger.info("Daily digest sent to %d employee(s)", sent)
     except Exception as exc:
         logger.error("run_daily_digest failed: %s", exc)

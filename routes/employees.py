@@ -452,7 +452,8 @@ def register_fcm_token(
             platform=body.platform,
             device_id=body.device_id,
         ))
-    current_user.fcm_token = token
+    employee = db.get(Employee, current_user.id)
+    employee.fcm_token = token
     try:
         db.commit()
     except IntegrityError:
@@ -472,7 +473,8 @@ def unregister_fcm_token(
         FcmDevice.employee_id == current_user.id,
         FcmDevice.token == token,
     ).delete(synchronize_session=False)
-    if current_user.fcm_token == token:
-        current_user.fcm_token = None
+    employee = db.get(Employee, current_user.id)
+    if employee.fcm_token == token:
+        employee.fcm_token = None
     db.commit()
     return {"ok": True}
