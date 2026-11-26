@@ -94,4 +94,4 @@ def seed(db) -> None:
     for name, slug in LEAD_SOURCES:
         db.add(LeadSource(name=name, slug=slug))
     db.commit()
-    settings_catalog.seed_defaults(db)  # dropdown options, pipeline stages, company name
+    settings_catalog.seed_defaults(db)  # dropdown options and pipeline stages

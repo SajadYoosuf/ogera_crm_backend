@@ -13,19 +13,19 @@ NEVER RAISES:
 """
 import logging
 import threading
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import BackgroundTasks
-from sqlalchemy import event, func as sqlfunc, select
+from sqlalchemy import and_, event, func as sqlfunc, or_, select
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from models.notification import Notification
 from models.employee import Employee
 from models.role import Role
 from models.fcm_device import FcmDevice
-from models.activity_log import ActivityLog
-from models.followup_schedule import FollowupSchedule
+from models.interaction import Interaction
+from models.lead import Lead
 from models.contact import Contact
-from business_time import ist_now
+from business_time import ist_day_bounds, ist_now, today_ist
 import config
 
 logger = logging.getLogger(__name__)
@@ -327,8 +327,8 @@ def run_48h_rule(db: Session) -> int:
     Find contacts with no recent activity and fire inactivity reminders.
 
     RULE:
-        If a contact has assigned_to set AND no ActivityLog row within the last
-        NOTIF_INACTIVITY_HOURS hours, send a reminder to:
+        If a contact has assigned_to set AND no logged activity (an `interactions`
+        row with kind='log') within the last NOTIF_INACTIVITY_HOURS hours, send a reminder to:
           - the assigned sales executive
           - all admin and manager employees
         Dedup: skip if this (recipient, "inactivity", contact_id) was already sent in the last 24h.
@@ -336,23 +336,24 @@ def run_48h_rule(db: Session) -> int:
     RETURNS: number of notifications inserted this run.
     """
     hours = config.NOTIF_INACTIVITY_HOURS
-    cutoff = ist_now() - timedelta(hours=hours)
+    # Interaction times are written as UTC (see routes/contact_interactions.py), so the cutoff is UTC too.
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     sent = 0
     try:
         # Contacts that have had recent activity — we exclude these
         # select() builds an explicit SQL SELECT, which IN() accepts without the
-        # SAWarning. The NULL filter matters: "x NOT IN (..., NULL)" is never true
-        # in SQL, so a NULL contact_id would silently stop every reminder.
+        # SAWarning. Tasks also carry logged_at, so only kind='log' counts as activity.
         active_contact_ids = (
-            select(ActivityLog.contact_id)
+            select(Interaction.entity_id)
             .where(
-                ActivityLog.logged_at >= cutoff,
-                ActivityLog.contact_id.isnot(None),
+                Interaction.entity_type == "contact",
+                Interaction.kind == "log",
+                Interaction.logged_at >= cutoff,
             )
             .distinct()
         )
         # Also exclude contacts whose follow-ups have been completed recently
-        # (completing a follow-up writes an ActivityLog row, so this is handled above)
+        # (completing a follow-up writes a log interaction, so this is handled above)
 
         contacts = (
             db.query(Contact)
@@ -405,19 +406,29 @@ def run_daily_digest(db: Session) -> int:
     if not config.NOTIF_DIGEST_ENABLED:
         logger.info("Daily digest disabled via NOTIF_DIGEST_ENABLED=false")
         return 0
-    today = ist_now().date()
+    # interactions.due_at holds naive UTC, so "today" is the UTC span of the IST calendar day.
+    start, end = ist_day_bounds(today_ist())
     sent = 0
     try:
+        live_contacts = select(Contact.id).where(Contact.deleted_at.is_(None))
+        live_leads = select(Lead.id).where(Lead.deleted_at.is_(None))
         rows = (
             db.query(
-                FollowupSchedule.assigned_to,
-                sqlfunc.count(FollowupSchedule.id).label("cnt"),
+                Interaction.assigned_to,
+                sqlfunc.count(Interaction.id).label("cnt"),
             )
             .filter(
-                sqlfunc.date(FollowupSchedule.due_at) == today,
-                FollowupSchedule.status.in_(["todo", "inprogress"]),
+                Interaction.kind == "task",
+                Interaction.status.in_(["todo", "inprogress"]),
+                Interaction.assigned_to.isnot(None),
+                Interaction.due_at >= start,
+                Interaction.due_at < end,
+                or_(
+                    and_(Interaction.entity_type == "contact", Interaction.entity_id.in_(live_contacts)),
+                    and_(Interaction.entity_type == "lead", Interaction.entity_id.in_(live_leads)),
+                ),
             )
-            .group_by(FollowupSchedule.assigned_to)
+            .group_by(Interaction.assigned_to)
             .all()
         )
 

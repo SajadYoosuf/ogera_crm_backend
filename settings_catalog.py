@@ -7,10 +7,10 @@ import re
 from dataclasses import dataclass
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from models import ActivityLog, CompanySetting, ConsumerProfile, Contact, EnumValue, LeadSource, LeadStage, PartnerProfile, PipelineStage
+from models import ConsumerProfile, Contact, EnumValue, Interaction, Lead, LeadSource, LeadStage, PartnerProfile, PipelineStage
 
 LEAD_SOURCE = "lead_source"
 LEAD_STAGE = "lead_stage"
@@ -110,9 +110,6 @@ DEFAULT_STAGES: list[tuple[str, str, str, str, int]] = [
     ("inactive",             "Inactive",                "Partner no longer active.",                           "partner", 9),
 ]
 
-DEFAULT_COMPANY = {"company_name": "Ogera", "company_logo_url": None}
-
-
 @dataclass
 class Item:
     id: int
@@ -133,7 +130,7 @@ def slugify(text: str, max_len: int = 40) -> str:
 
 
 def seed_defaults(db: Session) -> None:
-    """Insert any missing default options and company settings (idempotent; never overwrites edits)."""
+    """Insert any missing default options and pipeline stages (idempotent; never overwrites edits)."""
     have = {(c, v) for c, v in db.query(EnumValue.category, EnumValue.value).all()}
     for category, rows in DEFAULT_ENUMS.items():
         for order, (value, label) in enumerate(rows, start=1):
@@ -146,10 +143,6 @@ def seed_defaults(db: Session) -> None:
                 slug=slug, name=name, description=description,
                 contact_type=contact_type, order=order,
             ))
-    keys = {k for (k,) in db.query(CompanySetting.setting_key).all()}
-    for key, value in DEFAULT_COMPANY.items():
-        if key not in keys:
-            db.add(CompanySetting(setting_key=key, value=value))
     db.commit()
 
 
@@ -208,10 +201,20 @@ def usage_counts(db: Session, category: str) -> dict[str, int]:
             .group_by(PipelineStage.slug).all()
         )
     elif category == ACTIVITY_TYPE:
+        # Logged activities on contacts and leads that are not soft-deleted.
+        live_contacts = select(Contact.id).where(Contact.deleted_at.is_(None))
+        live_leads = select(Lead.id).where(Lead.deleted_at.is_(None))
         rows = (
-            db.query(ActivityLog.activity_type, func.count(ActivityLog.id))
-            .join(Contact, Contact.id == ActivityLog.contact_id)
-            .filter(Contact.deleted_at.is_(None)).group_by(ActivityLog.activity_type).all()
+            db.query(Interaction.activity_type, func.count(Interaction.id))
+            .filter(
+                Interaction.kind == "log",
+                Interaction.activity_type.isnot(None),
+                or_(
+                    and_(Interaction.entity_type == "contact", Interaction.entity_id.in_(live_contacts)),
+                    and_(Interaction.entity_type == "lead", Interaction.entity_id.in_(live_leads)),
+                ),
+            )
+            .group_by(Interaction.activity_type).all()
         )
     elif category == LOSS_REASON:
         rows = (
@@ -263,18 +266,3 @@ def ensure_allowed(db: Session, category: str, value: str, current: str | None =
 
 def labels(db: Session, category: str) -> dict[str, str]:
     return {i.value: i.label for i in list_items(db, category)}
-
-
-def get_company(db: Session) -> dict[str, str | None]:
-    rows = {r.setting_key: r.value for r in db.query(CompanySetting).all()}
-    return {k: rows.get(k, DEFAULT_COMPANY[k]) for k in DEFAULT_COMPANY}
-
-
-def set_company(db: Session, values: dict[str, str | None]) -> None:
-    rows = {r.setting_key: r for r in db.query(CompanySetting).all()}
-    for key, value in values.items():
-        if key in rows:
-            rows[key].value = value
-        else:
-            db.add(CompanySetting(setting_key=key, value=value))
-    db.commit()

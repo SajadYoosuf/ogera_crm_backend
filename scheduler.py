@@ -5,7 +5,7 @@ WHAT THIS FILE DOES:
     Starts two background jobs when the FastAPI server boots:
 
     1. Inactivity check  — runs every 60 minutes.
-       Queries contacts with no recent ActivityLog and fires inactivity reminders.
+       Queries contacts with no recent logged interaction and fires inactivity reminders.
 
     2. Daily digest      — runs once per day at NOTIF_DIGEST_HOUR (IST, default 8 AM).
        Sends each employee a summary of their tasks due today.
@@ -28,7 +28,6 @@ HOW TO USE:
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from database import SessionLocal
 import config
 
 logger = logging.getLogger(__name__)
@@ -40,17 +39,17 @@ _scheduler = BackgroundScheduler(timezone="Asia/Kolkata", daemon=True)
 
 
 def _run_inactivity_check() -> None:
-    """Job wrapper — opens its own DB session and calls the service function."""
+    """Hourly — contacts with no recent activity, for every active tenant."""
+    from services.followup_reminders import run_for_all_tenants
     from services.notification_service import run_48h_rule
-    with SessionLocal() as db:
-        run_48h_rule(db)
+    run_for_all_tenants(run_48h_rule)
 
 
 def _run_daily_digest() -> None:
-    """Job wrapper — opens its own DB session and calls the service function."""
+    """Morning summary of tasks due today, for every active tenant."""
+    from services.followup_reminders import run_for_all_tenants
     from services.notification_service import run_daily_digest
-    with SessionLocal() as db:
-        run_daily_digest(db)
+    run_for_all_tenants(run_daily_digest)
 
 
 def _run_followups_due() -> None:

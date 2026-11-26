@@ -49,7 +49,7 @@ AUTO_FOLLOWUP_HOURS = int(os.getenv("AUTO_FOLLOWUP_HOURS", "48"))
 # Notification settings
 # Path to the Firebase service account key JSON file (downloaded from Firebase Console)
 FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "")
-# Contacts with no ActivityLog in this many hours trigger an inactivity reminder
+# Contacts with no logged interaction in this many hours trigger an inactivity reminder
 NOTIF_INACTIVITY_HOURS = int(os.getenv("NOTIF_INACTIVITY_HOURS", "48"))
 # Hour (0–23, IST) when the daily task digest is sent
 NOTIF_DIGEST_HOUR = int(os.getenv("NOTIF_DIGEST_HOUR", "8"))

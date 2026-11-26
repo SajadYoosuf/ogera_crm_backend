@@ -8,8 +8,7 @@ from sqlalchemy.exc import OperationalError
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from config import CORS_ORIGINS, UPLOAD_DIR
-from routes import auth_router, password_reset_router, contacts_router, contact_interactions_router, recent_activity_router, dashboard_router, employees_router, lead_sources_router, notifications_router, pipeline_router, roles_router, sales_router, settings_router, tasks_router, products_router, attendance_router, staff_locations_router, expenses_router, diagnostics_router, leads_router, lead_inbound_router, webhooks_router, api_keys_router, branches_router, contact_fields_router, lead_interactions_router, lead_statuses_router, lead_whatsapp_router, lead_tasks_router, followup_settings_router, whatsapp_inbox_router, whatsapp_config_router, whatsapp_templates_router
-# lead_activities_router, followups_router, history_router disabled — tables not yet in ventino schema
+from routes import auth_router, password_reset_router, contacts_router, contact_interactions_router, recent_activity_router, employees_router, lead_sources_router, notifications_router, pipeline_router, roles_router, settings_router, staff_locations_router, diagnostics_router, leads_router, lead_inbound_router, webhooks_router, api_keys_router, branches_router, contact_fields_router, lead_interactions_router, lead_statuses_router, lead_whatsapp_router, lead_tasks_router, followup_settings_router, whatsapp_inbox_router, whatsapp_config_router, whatsapp_templates_router
 from middleware import RequestLoggingMiddleware
 from firebase_init import init_firebase
 from scheduler import start_scheduler, stop_scheduler
@@ -182,22 +181,13 @@ app.include_router(password_reset_router)
 app.include_router(recent_activity_router)
 app.include_router(contacts_router)
 app.include_router(contact_interactions_router)
-app.include_router(dashboard_router)
 app.include_router(employees_router)
-# app.include_router(lead_activities_router)   # disabled — activity_log table not in ventino yet
-# app.include_router(followups_router)          # disabled — followup_schedules table not in ventino yet
-# app.include_router(history_router)            # disabled — lead_stages, contact_assignments not in ventino yet
 app.include_router(lead_sources_router)
 app.include_router(pipeline_router)
-app.include_router(products_router)
 app.include_router(roles_router)
-app.include_router(sales_router)
 app.include_router(settings_router)
 app.include_router(notifications_router)
-app.include_router(tasks_router)
-app.include_router(attendance_router)
 app.include_router(staff_locations_router)
-app.include_router(expenses_router)
 app.include_router(diagnostics_router)
 app.include_router(leads_router)
 app.include_router(lead_interactions_router)

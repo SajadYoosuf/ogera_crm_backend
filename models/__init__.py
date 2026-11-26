@@ -11,13 +11,8 @@ from .lead_source import LeadSource
 from .lead_status import LeadStatus
 from .pipeline_stage import PipelineStage
 from .enum_value import EnumValue
-from .company_setting import CompanySetting
 from .contact import Contact
 from .lead_stage import LeadStage
-from .followup_schedule import FollowupSchedule
-from .followup_reschedule import FollowupReschedule
-from .followup_edit_log import FollowupEditLog
-from .activity_log import ActivityLog
 from .contact_assignment import ContactAssignment
 from .consumer_profile import ConsumerProfile
 from .partner_profile import PartnerProfile
@@ -25,15 +20,10 @@ from .branch import Branch
 from .contact_field_definition import ContactFieldDefinition
 from .dealer_profile import DealerProfile
 from .password_reset import PasswordResetCode
-from .sale import Sale
-from .product import Product, ProductOption
-from .contact_interested_product import contact_interested_products  # registers the join table with Base.metadata
 from .notification import Notification
 from .fcm_device import FcmDevice
-from .attendance import StaffAttendance
 from .staff_location import StaffLocation
 from .staff_location_history import StaffLocationHistory
-from .expense import Expense, EXPENSE_CATEGORIES, EXPENSE_STATUSES
 
 __all__ = [
     "Lead",
@@ -49,13 +39,8 @@ __all__ = [
     "LeadStatus",
     "PipelineStage",
     "EnumValue",
-    "CompanySetting",
     "Contact",
     "LeadStage",
-    "FollowupSchedule",
-    "FollowupReschedule",
-    "FollowupEditLog",
-    "ActivityLog",
     "ContactAssignment",
     "ConsumerProfile",
     "PartnerProfile",
@@ -63,16 +48,8 @@ __all__ = [
     "ContactFieldDefinition",
     "DealerProfile",
     "PasswordResetCode",
-    "Sale",
-    "Product",
-    "ProductOption",
-    "contact_interested_products",
     "Notification",
     "FcmDevice",
-    "StaffAttendance",
     "StaffLocation",
     "StaffLocationHistory",
-    "Expense",
-    "EXPENSE_CATEGORIES",
-    "EXPENSE_STATUSES",
 ]

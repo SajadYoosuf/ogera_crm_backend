@@ -20,7 +20,7 @@ HOW SQLALCHEMY MODELS WORK (simple version):
 
 RELATIONSHIPS:
     - One Contact has many LeadStages         (pipeline history)
-    - One Contact has many FollowupSchedules  (call-back reminders)
+    - Follow-ups on a contact are `interactions` rows with kind='task'
     - One Contact belongs to one Employee     (assigned_to)
     - One Contact may have ONE of:
         • ConsumerProfile  (house stage, tank info)
@@ -138,9 +138,6 @@ class Contact(Base):
 
     # Full pipeline history for this contact (append-only; newest = current stage)
     lead_stages: Mapped[list["LeadStage"]] = relationship("LeadStage", back_populates="contact")
-
-    # All scheduled follow-up calls for this contact
-    followup_schedules: Mapped[list["FollowupSchedule"]] = relationship("FollowupSchedule", back_populates="contact")
 
     # Type-specific detail tables. uselist=False → one-to-one (returns an object, not a list).
     # Only ONE of these will ever have data for a given contact.

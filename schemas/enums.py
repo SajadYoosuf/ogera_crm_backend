@@ -21,7 +21,7 @@ def profession_key(raw: str) -> str:
 class BranchEnum(str, enum.Enum):
     """
     The three physical branch offices.
-    Used on Contact and Sale so every record can be tied to the branch it came from.
+    Used on Contact so every record can be tied to the branch it came from.
     """
     malappuram = "malappuram"
     kottakkal = "kottakkal"

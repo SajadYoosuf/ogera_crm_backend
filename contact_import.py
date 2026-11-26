@@ -29,10 +29,9 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
-from models import ConsumerProfile, Contact, FollowupSchedule, LeadSource, LeadStage, PartnerProfile, PipelineStage
+from models import ConsumerProfile, Contact, Interaction, LeadSource, LeadStage, PartnerProfile, PipelineStage
 from models.contact_field_definition import ContactFieldDefinition
 from phone_utils import phone_key
-from business_time import ist_now
 
 MAX_ROWS = 5000
 MAX_BYTES = 5 * 1024 * 1024
@@ -560,6 +559,7 @@ def run_import(
     created = updated = 0
     # Cache new_lead stage ids per type to avoid one query per row
     new_lead_ids: dict[str, int] = {}
+    new_contacts: list[Contact] = []
 
     for r in results:
         if r.status in ("ready", "warning"):
@@ -586,14 +586,8 @@ def run_import(
                 contact.partner_profile = PartnerProfile(data=profile_data)
 
             contact.lead_stages.append(LeadStage(stage_id=new_lead_ids[ct], changed_by=created_by))
-            contact.followup_schedules = [FollowupSchedule(
-                assigned_to=contact.assigned_to,
-                due_at=ist_now() + datetime.timedelta(hours=24),
-                status="pending",
-                channel="call",
-                notes="Initial contact regarding new lead",
-            )]
             db.add(contact)
+            new_contacts.append(contact)
             created += 1
 
         elif r.status == "duplicate" and options.duplicates == "update_blank":
@@ -608,6 +602,18 @@ def run_import(
                 changed = True
             updated += changed
 
+    db.flush()  # gives the new contacts their ids
+    now = datetime.datetime.now(datetime.timezone.utc)
+    db.add_all(
+        Interaction(
+            entity_type="contact", entity_id=contact.id, kind="task",
+            activity_type="phone_call", title="Follow-up: phone call",
+            notes="Initial contact regarding new lead",
+            due_at=now + datetime.timedelta(hours=24), priority="medium", status="todo",
+            assigned_to=contact.assigned_to, created_by=created_by, logged_at=now,
+        )
+        for contact in new_contacts
+    )
     db.commit()
     skipped = sum(
         1 for r in results
