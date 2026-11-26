@@ -53,7 +53,7 @@ from phone_utils import phone_key
 from request_context import client_platform
 from services.lead_access import is_head
 from verification import missing_fields, verified_clause
-from models import Contact, ConsumerProfile, Employee, LeadSource, PartnerProfile
+from models import Contact, ConsumerProfile, Employee, LeadSource, PartnerProfile, Role
 from models.lead_stage import LeadStage
 from models.pipeline_stage import PipelineStage
 from models.record_log import RecordLog
@@ -321,9 +321,10 @@ def list_contacts(
         `skip=10&limit=10` → next 10 rows
         The response always includes `total` so the UI can show page numbers.
 
-    TWO QUERIES PER REQUEST:
+    THREE QUERIES PER REQUEST:
         1. COUNT query — runs without offset/limit to get the total matching count.
         2. DATA query  — runs with offset/limit and joinedload to fetch the page.
+        3. STAGE query — current pipeline stage of every contact on the page, in one go.
 
     WHY joinedload?
         Without it, SQLAlchemy would run a separate SELECT for every relationship
@@ -352,6 +353,7 @@ def list_contacts(
     )
 
     # 3. Build the response list
+    stages = _current_stages(db, [contact.id for contact in rows])
     items = []
     for contact in rows:
         pending = missing_fields(contact)
@@ -369,6 +371,7 @@ def list_contacts(
                 "partner_type": (contact.partner_profile.data or {}).get("partner_type") if contact.partner_profile else None,
                 "house_stage": (contact.consumer_profile.data or {}).get("house_stage") if contact.consumer_profile else None,
                 "work_area": (contact.partner_profile.data or {}).get("work_area") if contact.partner_profile else None,
+                "lead_stage": stages.get(contact.id),
                 "lead_source": contact.lead_source,
                 "assigned_to": contact.assigned_employee,
                 "created_by": contact.creator,
@@ -626,8 +629,8 @@ def import_commit(
         default_source_id — fallback lead source id
         duplicates        — "skip" or "update_blank"
         mapping           — required JSON column→field map from the analyze response
-        assigned_to       — JSON array of employee ids, e.g. "[3,5,7]", or null to
-                            auto-pick from the active sales staff
+        assigned_to       — one employee id ("5") or a JSON array ("[3,5,7]"), or
+                            null to auto-pick from the active sales staff
 
     RETURNS:
         { "created": 40, "updated": 5, "skipped": 5 }
@@ -649,15 +652,19 @@ def import_commit(
     # Resolve assignee ids — use the provided list or fall back to active sales staff
     if assigned_to:
         try:
-            assignee_ids: list[int] = _json.loads(assigned_to)
-            if not isinstance(assignee_ids, list) or not assignee_ids:
+            parsed = _json.loads(assigned_to)
+            # The web import form sends one id ("5"); other callers send an array ("[3,5]").
+            assignee_ids: list[int] = parsed if isinstance(parsed, list) else [parsed]
+            if not assignee_ids or not all(type(item) is int for item in assignee_ids):
                 raise ValueError
-        except Exception:
-            raise HTTPException(status_code=422, detail="assigned_to must be a JSON array of employee ids")
+        except ValueError:
+            raise HTTPException(status_code=422, detail="assigned_to must be an employee id or a JSON array of employee ids")
     else:
+        # The role lives in the roles table; employees only hold role_id.
         sales_staff = (
             db.query(Employee.id)
-            .filter(Employee.role == "sales_executive", Employee.is_active.is_(True))
+            .join(Role, Role.id == Employee.role_id)
+            .filter(Role.slug == "sales_executive", Employee.is_active == 1, Employee.deleted_at.is_(None))
             .all()
         )
         assignee_ids = [row[0] for row in sales_staff]
@@ -1123,6 +1130,30 @@ def _current_stage(db: Session, contact_id: int) -> LeadStage | None:
         .order_by(LeadStage.changed_at.desc(), LeadStage.id.desc())
         .first()
     )
+
+
+def _current_stages(db: Session, contact_ids: list[int]) -> dict[int, ContactStageResponse]:
+    """Current stage per contact id, using the same "newest log row" rule as `_current_stage`."""
+    if not contact_ids:
+        return {}
+    rows = (
+        db.query(LeadStage, PipelineStage)
+        .join(PipelineStage, PipelineStage.id == LeadStage.stage_id)
+        .filter(LeadStage.contact_id.in_(contact_ids))
+        .order_by(LeadStage.changed_at.desc(), LeadStage.id.desc())
+        .all()
+    )
+    current: dict[int, ContactStageResponse] = {}
+    for log, stage in rows:
+        # Rows are newest first, so the first one seen for a contact wins.
+        current.setdefault(log.contact_id, ContactStageResponse(
+            stage_id=stage.id,
+            stage_slug=stage.slug,
+            stage_name=stage.name,
+            contact_type=stage.contact_type,
+            changed_at=log.changed_at,
+        ))
+    return current
 
 
 @router.get("/{contact_id}/stage", response_model=ContactStageResponse, summary="Current stage of a contact")

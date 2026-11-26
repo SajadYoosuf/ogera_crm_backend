@@ -246,6 +246,15 @@ class ContactResponse(ContactBase):
     auto_followup_needed: bool = False
 
 
+class ContactStageResponse(BaseModel):
+    """Current stage of a contact."""
+    stage_id: int
+    stage_slug: str
+    stage_name: str
+    contact_type: str
+    changed_at: datetime.datetime | None = None
+
+
 class ContactListItem(BaseModel):
     """
     Slim row for GET /contacts — one item in the paginated list.
@@ -276,6 +285,8 @@ class ContactListItem(BaseModel):
     partner_type: str | None = None   # partners only (data["partner_type"])
     house_stage: str | None = None    # consumers only (data["house_stage"])
     work_area: str | None = None      # partners only (data["work_area"])
+    # Current pipeline stage (the newest stage log row); None if the contact was never put in a stage
+    lead_stage: ContactStageResponse | None = None
     lead_source: LeadSourceSummary | None = None
     assigned_to: NameRef | None = None
     created_by: NameRef | None = None
@@ -385,15 +396,6 @@ class ContactStatsResponse(BaseModel):
 
 
 # ── Stage schemas ─────────────────────────────────────────────────────────────
-
-class ContactStageResponse(BaseModel):
-    """Current stage of a contact."""
-    stage_id: int
-    stage_slug: str
-    stage_name: str
-    contact_type: str
-    changed_at: datetime.datetime | None = None
-
 
 class ContactStageSet(BaseModel):
     """Body for POST /contacts/{id}/stage."""
