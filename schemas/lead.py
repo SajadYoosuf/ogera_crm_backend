@@ -188,6 +188,20 @@ class BulkAssignResponse(BaseModel):
     assigned: int
 
 
+class BulkDeleteLeadsRequest(BaseModel):
+    """Same filters as GET /leads. At least one must be set, so nothing is deleted by accident."""
+    status: str | None = None
+    source_id: int | None = None
+    assigned_to: int | None = None
+    date_from: datetime.date | None = None
+    date_to: datetime.date | None = None
+    search: str | None = None
+
+
+class BulkDeleteLeadsResponse(BaseModel):
+    deleted: int
+
+
 # ── Public inbound schemas (no JWT, only API key) ─────────────────────────────
 
 class WebsiteLeadCreate(BaseModel):

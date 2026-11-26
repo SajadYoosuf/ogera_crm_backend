@@ -33,7 +33,7 @@ import logging
 from datetime import timezone as _tz
 
 from fastapi import BackgroundTasks, HTTPException
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -388,6 +388,39 @@ def create_lead(
 
 # ── Read ──────────────────────────────────────────────────────────────────────
 
+def _apply_lead_filters(
+    q,
+    status: str | None = None,
+    source_id: int | None = None,
+    assigned_to: int | None = None,
+    date_from: datetime.date | None = None,
+    date_to: datetime.date | None = None,
+    search: str | None = None,
+):
+    """Add the GET /leads filters to a select(Lead) query. Shared by the list and bulk delete."""
+    if status:
+        q = q.where(Lead.status == status)
+    if source_id:
+        q = q.where(Lead.source_id == source_id)
+    if assigned_to:
+        q = q.where(Lead.assigned_to == assigned_to)
+    if date_from:
+        q = q.where(Lead.created_at >= ist_day_start_utc(date_from))
+    if date_to:
+        q = q.where(Lead.created_at < ist_day_start_utc(date_to + datetime.timedelta(days=1)))
+    if search:
+        term = f"%{search}%"
+        q = q.where(
+            or_(
+                Lead.first_name.ilike(term),
+                Lead.last_name.ilike(term),
+                Lead.phone.ilike(term),
+                Lead.email.ilike(term),
+            )
+        )
+    return q
+
+
 def list_leads(
     db: Session,
     current_employee: "Employee | None" = None,
@@ -426,26 +459,10 @@ def list_leads(
             Lead.id.in_(open_task_lead_ids_for(current_employee.id)),
         ))
 
-    if status:
-        q = q.where(Lead.status == status)
-    if source_id:
-        q = q.where(Lead.source_id == source_id)
-    if assigned_to:
-        q = q.where(Lead.assigned_to == assigned_to)
-    if date_from:
-        q = q.where(Lead.created_at >= ist_day_start_utc(date_from))
-    if date_to:
-        q = q.where(Lead.created_at < ist_day_start_utc(date_to + datetime.timedelta(days=1)))
-    if search:
-        term = f"%{search}%"
-        q = q.where(
-            or_(
-                Lead.first_name.ilike(term),
-                Lead.last_name.ilike(term),
-                Lead.phone.ilike(term),
-                Lead.email.ilike(term),
-            )
-        )
+    q = _apply_lead_filters(
+        q, status=status, source_id=source_id, assigned_to=assigned_to,
+        date_from=date_from, date_to=date_to, search=search,
+    )
 
     total = db.scalar(select(func.count()).select_from(q.subquery()))
     leads = db.scalars(q.order_by(Lead.created_at.desc()).offset(skip).limit(limit)).all()
@@ -595,6 +612,25 @@ def soft_delete_lead(db: Session, lead_id: int) -> None:
         db.rollback()
         logger.error("soft_delete_lead — commit failed: %s", exc)
         raise HTTPException(503, detail="Could not save. Please try again.")
+
+
+def bulk_soft_delete_leads(db: Session, **filters) -> int:
+    """Soft-delete every live lead matching the list filters. Returns how many were deleted."""
+    now = datetime.datetime.now(_tz.utc)
+    matching = _apply_lead_filters(select(Lead.id).where(Lead.deleted_at.is_(None)), **filters)
+    ids = list(db.scalars(matching).all())
+    if not ids:
+        return 0
+    try:
+        db.execute(
+            update(Lead).where(Lead.id.in_(ids)).values(deleted_at=now).execution_options(synchronize_session=False)
+        )
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error("bulk_soft_delete_leads — commit failed: %s", exc)
+        raise HTTPException(503, detail="Could not save. Please try again.")
+    return len(ids)
 
 
 # ── Convert to Contact ────────────────────────────────────────────────────────

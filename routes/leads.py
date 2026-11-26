@@ -37,6 +37,8 @@ from models.lead_source import LeadSource
 from schemas.lead import (
     BulkAssignRequest,
     BulkAssignResponse,
+    BulkDeleteLeadsRequest,
+    BulkDeleteLeadsResponse,
     ConvertLeadResponse,
     LeadCreate,
     LeadListResponse,
@@ -485,6 +487,35 @@ def delete_lead(lead_id: int, current_user: Employee = Depends(get_current_user)
             lead_svc.soft_delete_lead(db, lead_id)
     except OperationalError as exc:
         logger.error("delete_lead — DB error: %s", exc)
+        raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
+
+
+@router.post(
+    "/bulk-delete",
+    response_model=BulkDeleteLeadsResponse,
+    summary="Soft-delete every lead matching the filters (admin/manager)",
+)
+def bulk_delete_leads(
+    body: BulkDeleteLeadsRequest,
+    current_user: Employee = Depends(get_current_user),
+):
+    """
+    Soft-delete all leads that match the given filters (same filters as GET /leads).
+
+    At least one filter is required, so an empty body cannot wipe the whole list.
+    Admin and manager only. Returns how many leads were deleted.
+    """
+    ensure_is_head(current_user, "bulk delete leads")
+    filters = body.model_dump(exclude_none=True)
+    if not filters:
+        raise HTTPException(status_code=400, detail="Choose at least one filter before deleting leads.")
+    schema = current_user._tenant_schema
+    try:
+        with get_session_for_schema(schema) as db:
+            deleted = lead_svc.bulk_soft_delete_leads(db, **filters)
+            return BulkDeleteLeadsResponse(deleted=deleted)
+    except OperationalError as exc:
+        logger.error("bulk_delete_leads — DB error: %s", exc)
         raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
 
 
