@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
+from isolation import isolate  # noqa: E402
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -24,8 +26,8 @@ def main() -> None:
 
     db_file = Path(tempfile.gettempdir()) / "ogera_mobile_e2e.sqlite"
     db_file.unlink(missing_ok=True)
+    isolate()  # ignore .env: this server must not message anyone
     os.environ["DATABASE_URL"] = f"sqlite:///{db_file.as_posix()}"
-    os.environ["SQL_ECHO"] = "0"
 
     from sqlalchemy import BigInteger
     from sqlalchemy.ext.compiler import compiles

@@ -37,9 +37,8 @@ Web change note: [../../../ogera_crm_web/docs/changes/2026-11-26-pipeline-board-
 
 ## Known issues or not done yet
 
-- **Tests can call live services.** `test_whatsapp_reply_validation` reads `.env` and posts a real request to
-  Meta when WhatsApp credentials are present. Blank `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` before
-  running the suite, until the test is isolated.
+- Tests could call live services: `test_whatsapp_reply_validation` read `.env` and posted a real request to Meta.
+  Fixed afterwards, see [2026-11-26-test-isolation.md](2026-11-26-test-isolation.md).
 - A contact added by hand gets no stage, so the board shows it under "No Stage".
 - Import with the phone column unmapped returns 200 and creates nothing, instead of an error.
 - `settings_catalog.DEFAULT_STAGES` has no dealer stages. A new tenant would start without them.

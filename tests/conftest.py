@@ -1,15 +1,17 @@
 """Shared fixtures: the real FastAPI app on an in-memory SQLite database (no MySQL needed).
 
-`DATABASE_URL` is read when `database` is first imported, so it is set here before anything else loads.
+Settings and credentials are read when the app is first imported, so `isolate()` runs here before anything
+else loads. It ignores `.env`, forces SQLite and refuses connections that leave this machine.
 """
-import os
 import sys
 from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite://")
-os.environ.setdefault("SQL_ECHO", "0")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from isolation import blocked_hosts, isolate  # noqa: E402
+
+isolate()
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -45,6 +47,12 @@ from seed_data import MOBILE_APP, PASSWORD, email_of, seed  # noqa: E402
 # public.tenants and public.employee_tenant_map are created as plain tables.
 if DATABASE_URL.startswith("sqlite"):
     engine.update_execution_options(schema_translate_map={"public": None})
+
+
+def pytest_terminal_summary(terminalreporter):
+    if blocked_hosts:
+        counts = ", ".join(f"{host} ({blocked_hosts.count(host)})" for host in sorted(set(blocked_hosts)))
+        terminalreporter.write_sep("=", f"blocked outside connections: {counts}")
 
 
 @pytest.fixture()
