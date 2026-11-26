@@ -40,6 +40,7 @@ from .consumer_profile import (
     ConsumerProfileUpdate,
 )
 from .partner_profile import PartnerProfileBase, PartnerProfileResponse, PartnerProfileUpdate
+from .dealer_profile import DealerProfileBase, DealerProfileResponse, DealerProfileUpdate
 from phone_utils import clean_phone
 from pydantic import field_validator
 
@@ -145,6 +146,7 @@ class ContactCreate(ContactBase):
     # Type details, created in the same transaction. Each one is only allowed for its own contact type.
     consumer_profile: ConsumerProfileBase | None = None
     partner_profile: PartnerProfileBase | None = None
+    dealer_profile: DealerProfileBase | None = None
 
 
 class ContactUpdate(BaseModel):
@@ -174,6 +176,7 @@ class ContactUpdate(BaseModel):
     # Creates the profile if the contact has none, otherwise merges the given fields
     consumer_profile: ConsumerProfileUpdate | None = None
     partner_profile: PartnerProfileUpdate | None = None
+    dealer_profile: DealerProfileUpdate | None = None
     # Free-text note. Omit → keep existing. Send null → clear. Send string → replace.
     notes: str | None = None
 
@@ -237,6 +240,7 @@ class ContactResponse(ContactBase):
     # Only one of these will have data depending on contact_type
     consumer_profile: ConsumerProfileResponse | None = None
     partner_profile: PartnerProfileResponse | None = None
+    dealer_profile: DealerProfileResponse | None = None
 
     # True when the creator is admin/manager — signals the web to show the "Schedule first follow-up?" prompt
     auto_followup_needed: bool = False

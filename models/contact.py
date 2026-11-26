@@ -150,6 +150,9 @@ class Contact(Base):
     partner_profile: Mapped["PartnerProfile | None"] = relationship(
         "PartnerProfile", back_populates="contact", uselist=False
     )
+    dealer_profile: Mapped["DealerProfile | None"] = relationship(
+        "DealerProfile", back_populates="contact", uselist=False
+    )
     # -------------------------------------------------------------------------
     # INDEXES
     # An index speeds up filtering/searching on a column.
