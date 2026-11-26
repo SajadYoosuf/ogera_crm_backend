@@ -411,7 +411,8 @@ def analyze(
     sources: dict[str, int] = {}
     for s in db.query(LeadSource).filter(LeadSource.is_active == 1):
         sources[_key(s.name)] = s.id
-        sources[_key(s.slug)] = s.id
+        if s.slug:  # the column is nullable in PostgreSQL; such a source is matched by name only
+            sources[_key(s.slug)] = s.id
 
     # Existing contact phones for duplicate detection: {last_10_digits: contact_id}
     existing: dict[str, int] = {}
