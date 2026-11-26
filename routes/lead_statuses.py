@@ -17,7 +17,7 @@ import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
@@ -34,14 +34,27 @@ router = APIRouter(prefix="/settings/lead-statuses", tags=["lead-statuses"])
 LOCKED_SLUGS = frozenset({"new", "converted"})
 MAX_ACTIVE = 20
 
+# The slug is derived from the name and stored in lead_statuses.slug, which is
+# VARCHAR(30). A slug is never longer than its name, so capping the name at 30
+# keeps every slug within the column. Changing this needs a migration first.
+NAME_MAX_LENGTH = 30
+
 
 def _slug_from_name(name: str) -> str:
     """'Attempt to Contact' → 'attempt_to_contact'"""
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
+def _checked_slug(name: str) -> str:
+    """Slug for a name, or a 422 when the name has no letters or digits (e.g. only Malayalam script)."""
+    slug = _slug_from_name(name)
+    if not slug:
+        raise HTTPException(422, detail="Status name must include at least one English letter or number, e.g. “Site visit done”.")
+    return slug
+
+
 class StatusCreate(BaseModel):
-    name: str
+    name: str = Field(max_length=NAME_MAX_LENGTH)
     sort_order: int = 0
 
     @field_validator("name")
@@ -49,14 +62,12 @@ class StatusCreate(BaseModel):
     def _nonempty(cls, v: str) -> str:
         v = v.strip()
         if not v:
-            raise ValueError("Name is required")
-        if len(v) > 60:
-            raise ValueError("Name must be 60 characters or fewer")
+            raise ValueError("must not be empty")
         return v
 
 
 class StatusUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=NAME_MAX_LENGTH)
     sort_order: int | None = None
     is_active: bool | None = None
 
@@ -90,7 +101,7 @@ def create_status(
             if active_count >= MAX_ACTIVE:
                 raise HTTPException(400, detail=f"Maximum {MAX_ACTIVE} active lead statuses allowed")
 
-            slug = _slug_from_name(body.name)
+            slug = _checked_slug(body.name)
             # Case-insensitive unique check
             existing = db.scalar(
                 select(LeadStatus).where(func.lower(LeadStatus.slug) == slug.lower())
@@ -122,7 +133,9 @@ def update_status(
                 raise HTTPException(404, detail="Status not found")
             if body.name is not None:
                 name = body.name.strip()
-                new_slug = _slug_from_name(name)
+                if not name:
+                    raise HTTPException(422, detail="Name must not be empty")
+                new_slug = _checked_slug(name)
                 # Check uniqueness if slug would change
                 if new_slug != row.slug:
                     conflict = db.scalar(
