@@ -23,7 +23,7 @@ from .lead_source import (
     LeadSourceAdminResponse,
 )
 from .branch import BranchResponse
-from .contact_field_definition import ContactFieldDefinitionResponse, ContactFieldDefinitionUpdate
+from .contact_field_definition import ContactFieldDefinitionResponse, ContactFieldDefinitionUpdate, ContactFieldDefinitionCreate
 from .consumer_profile import (
     ConsumerProfileBase,
     ConsumerProfileCreate,
@@ -36,6 +36,7 @@ from .partner_profile import (
     PartnerProfileUpdate,
     PartnerProfileResponse,
 )
+from .dealer_profile import DealerProfileBase, DealerProfileUpdate, DealerProfileResponse
 from .lead_stage import LeadStageCreate, LeadStageResponse
 from .contact import ContactSummary, ContactBase, ContactCreate, ContactUpdate, ContactResponse
 from .contact import ContactListItem, ContactListResponse, NameRef
@@ -68,11 +69,13 @@ __all__ = [
     # Branch
     "BranchResponse",
     # ContactFieldDefinition
-    "ContactFieldDefinitionResponse", "ContactFieldDefinitionUpdate",
+    "ContactFieldDefinitionResponse", "ContactFieldDefinitionUpdate", "ContactFieldDefinitionCreate",
     # ConsumerProfile
     "ConsumerProfileBase", "ConsumerProfileCreate", "ConsumerProfileUpdate", "ConsumerProfileResponse",
     # PartnerProfile
     "PartnerProfileBase", "PartnerProfileCreate", "PartnerProfileUpdate", "PartnerProfileResponse",
+    # DealerProfile
+    "DealerProfileBase", "DealerProfileUpdate", "DealerProfileResponse",
     # LeadStage
     "LeadStageCreate", "LeadStageResponse",
     # Contact

@@ -20,8 +20,23 @@ FRONTEND USAGE:
         consumer_profile.data["tank_type"] = "plastic"
 """
 
-from typing import Any
-from pydantic import BaseModel, ConfigDict
+from typing import Annotated, Literal
+from pydantic import BaseModel, ConfigDict, Field
+
+FieldType = Literal["text", "dropdown", "number", "boolean"]
+VALID_ENTITY_TYPES = ("consumer", "partner", "dealer")
+
+
+class ContactFieldDefinitionCreate(BaseModel):
+    """Body for POST /contact-field-definitions (admin only)."""
+    entity_type: str                        # 'consumer', 'partner', or 'dealer'
+    field_name: Annotated[str, Field(min_length=1, max_length=50, pattern=r"^[a-z_][a-z0-9_]*$")]
+    field_label: Annotated[str, Field(min_length=1, max_length=100)]
+    field_type: FieldType
+    options: list[Annotated[str, Field(min_length=1, max_length=80)]] | None = None
+    is_required: bool = False
+    sort_order: int | None = None           # auto-assigned (max+1) when omitted
+    show_in_list: bool = False
 
 
 class ContactFieldDefinitionResponse(BaseModel):
