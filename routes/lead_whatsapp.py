@@ -166,5 +166,7 @@ def _to_dict(m: WhatsAppMessage) -> dict:
         "template_name": m.template_name,
         "sent_by": m.sent_by,
         "status": m.status,
+        # The web thread marks a conversation read while any incoming message has is_read false.
+        "is_read": m.direction != "in" or m.status == "read",
         "created_at": m.created_at,
     }

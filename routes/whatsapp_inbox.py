@@ -50,7 +50,7 @@ def _visible_leads(current_user: Employee):
 def _unread_by_lead():
     return (
         select(WhatsAppMessage.lead_id, func.count(WhatsAppMessage.id).label("unread"))
-        .where(WhatsAppMessage.direction == "in", WhatsAppMessage.is_read.is_(False))
+        .where(WhatsAppMessage.direction == "in", WhatsAppMessage.status != "read")
         .group_by(WhatsAppMessage.lead_id)
         .subquery()
     )

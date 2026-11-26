@@ -14,15 +14,17 @@ HOW WHATSAPP WEBHOOKS WORK:
   4. We extract the sender's phone number and check if they already exist as a lead
      or contact in the tenant's schema.
   5. If new: create a lead (source="whatsapp") and trigger a WhatsApp auto-reply.
-  6. If existing lead: update status to "contacted".
-  7. We always return HTTP 200 immediately — if we return anything else, Meta
+  6. If existing lead: a "new" lead moves to "contacted".
+  7. For a new or existing lead, save the message (unread) and notify admins,
+     managers and the assignee. A message id we already saved is ignored.
+  8. We always return HTTP 200 immediately — if we return anything else, Meta
      retries endlessly.
 
 MULTI-TENANT WHATSAPP:
   Each tenant has their own WhatsApp Business Account (WABA). To route an inbound
   message to the correct tenant schema, we use the WhatsApp Account ID (`wa_id`)
-  in the webhook payload. The public.tenants table must have a `whatsapp_account_id`
-  column that maps WABA IDs to schemas.
+  in the webhook payload. It is looked up in public.whatsapp_tenant_map (saved from
+  Settings), then in the `whatsapp_account_id` column of public.tenants.
 
   Alternatively (simpler for single-tenant): use a single WABA and configure the
   WABA ID via environment variable WHATSAPP_DEFAULT_SCHEMA.
@@ -45,7 +47,12 @@ from sqlalchemy import select
 
 from database import get_public_db_ctx, get_session_for_schema
 from models.tenant import Tenant
+from models.whatsapp_config import WhatsAppTenantMap
+from models.whatsapp_message import WhatsAppMessage
 import services.lead_service as lead_svc
+from services.lead_access import head_employee_ids
+from services.notification_service import create_notification
+from services.record_log_service import add_log
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +107,16 @@ def _get_schema_for_waba(wa_id: str) -> str | None:
     """
     if not wa_id:
         return WHATSAPP_DEFAULT_SCHEMA or None
+
+    # Saved when a company connects WhatsApp in Settings. Looked up on its own so that a
+    # missing table does not stop the tenants lookup below.
+    try:
+        with get_public_db_ctx() as db:
+            mapped = db.get(WhatsAppTenantMap, wa_id)
+            if mapped:
+                return mapped.schema_name
+    except Exception:
+        logger.exception("Error looking up WABA %s in whatsapp_tenant_map", wa_id)
 
     try:
         with get_public_db_ctx() as db:
@@ -160,6 +177,7 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
       4. Check if phone is already a lead or contact.
       5. If new: create a lead + send welcome message.
       6. If existing lead: update status to "contacted" (they reached out again).
+      7. Save the message against the lead and notify the people who work on it.
     """
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
@@ -218,9 +236,42 @@ async def receive_whatsapp_webhook(request: Request, background_tasks: Backgroun
     return {"status": "ok"}
 
 
+def _is_stored(db, wamid: str | None) -> bool:
+    """True when Meta re-delivers a message we already saved."""
+    if not wamid:
+        return False
+    return db.scalar(select(WhatsAppMessage.id).where(WhatsAppMessage.wamid == wamid).limit(1)) is not None
+
+
+def _save_inbound_message(db, lead, raw_payload: dict) -> None:
+    """
+    Add the customer's message (unread until its status becomes "read") and a bell
+    notification for every admin/manager and the lead's assignee. The caller commits.
+    """
+    db.add(WhatsAppMessage(
+        lead_id=lead.id,
+        direction="in",
+        wamid=raw_payload.get("message_id"),
+        content_type=(raw_payload.get("message_type") or "text")[:20],
+        body=raw_payload.get("message_text") or None,
+        status="received",
+    ))
+
+    name = f"{lead.first_name or ''} {lead.last_name or ''}".strip() or lead.phone or "Unknown"
+    preview = (raw_payload.get("message_text") or "Sent a media message")[:80]
+    recipients = set(head_employee_ids(db))
+    if lead.assigned_to:
+        recipients.add(lead.assigned_to)
+    for recipient_id in recipients:
+        create_notification(
+            db, recipient_id, "whatsapp_inbound",
+            f"New WhatsApp from {name}", f"{name}: {preview}", "lead", lead.id,
+        )
+
+
 def _process_whatsapp_lead(phone: str, raw_payload: dict, schema: str) -> None:
     """
-    Background task — decides whether to create a new lead from a WhatsApp message.
+    Background task — saves a WhatsApp message, creating a lead first when the sender is new.
 
     WHY A BACKGROUND TASK?
       The webhook handler must return quickly (Meta times out after a few seconds).
@@ -241,6 +292,10 @@ def _process_whatsapp_lead(phone: str, raw_payload: dict, schema: str) -> None:
             from models.lead import Lead
             from models.contact import Contact
 
+            # Checked first, so a re-delivery changes nothing at all
+            if _is_stored(db, raw_payload.get("message_id")):
+                return
+
             # Check for an existing lead with this phone
             existing_lead = db.scalar(
                 select(Lead)
@@ -253,7 +308,10 @@ def _process_whatsapp_lead(phone: str, raw_payload: dict, schema: str) -> None:
                 # They messaged again — update status to "contacted" if still "new"
                 if existing_lead.status == "new":
                     existing_lead.status = "contacted"
-                    db.commit()
+                    # No actor: the customer caused this change, not an employee
+                    add_log(db, "lead", existing_lead.id, "status_changed", None, "new", "contacted")
+                _save_inbound_message(db, existing_lead, raw_payload)
+                db.commit()
                 return  # Don't create a duplicate lead
 
             # Check for existing contact (they're already in the CRM)
@@ -277,6 +335,8 @@ def _process_whatsapp_lead(phone: str, raw_payload: dict, schema: str) -> None:
                 raw_payload=raw_payload,
                 notes=raw_payload.get("message_text") or None,
             )
+            _save_inbound_message(db, lead, raw_payload)
+            db.commit()
             # Send welcome reply (don't use BackgroundTasks here — we're already in a background task)
             send_lead_welcome(lead.id, schema)
 
