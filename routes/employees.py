@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 from sqlalchemy import select, update
 from auth import get_current_user, get_password_hash, get_tenant_db, require_admin_or_manager
-from database import get_db, get_public_db
+from database import get_public_db
 from mailer import send_employee_credentials, send_password_changed_notice
 from models import Employee, EmployeeLookup, FcmDevice, Role, Tenant
 from models.branch import Branch
@@ -140,7 +140,7 @@ def _phone_taken(db: Session, phone: str, exclude_id: int | None = None) -> bool
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/directory", summary="Staff directory")
-def employee_directory(db: Session = Depends(get_db), viewer: Employee = Depends(get_current_user)):
+def employee_directory(db: Session = Depends(get_tenant_db), viewer: Employee = Depends(get_current_user)):
     """Active staff with id, name, role slug and phone, for assignee pickers and the staff directory.
     Admin accounts are hidden from all viewers; manager accounts are hidden from manager viewers.
     """
@@ -166,7 +166,7 @@ def list_employees(
     role: str | None = Query(None, pattern=r"^[a-z][a-z0-9_]{1,39}$", description="Role slug, e.g. sales_executive"),
     is_active: bool | None = None,
     search: str | None = Query(None, max_length=100, description="Matches name, email or phone"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     viewer: Employee = Depends(get_current_user),
     platform: str = Depends(client_platform),
 ):
@@ -225,7 +225,7 @@ def list_employees(
 @router.get("/{employee_id}", response_model=EmployeeResponse, summary="Get an employee")
 def get_employee(
     employee_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     viewer: Employee = Depends(get_current_user),
 ):
     """One employee by id. Sales executives may only fetch their own record."""
@@ -242,7 +242,8 @@ def get_employee(
 @router.post("", response_model=EmployeeCreateResponse, status_code=201, summary="Create an employee")
 def create_employee(
     body: EmployeeCreate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
+    db_public: Session = Depends(get_public_db),
     actor: Employee = Depends(manage_employees),
 ):
     """Admin or manager creates an employee. The role must exist and be active.
@@ -255,6 +256,14 @@ def create_employee(
     if body.phone and _phone_taken(db, body.phone):
         raise HTTPException(status_code=409, detail=DUPLICATE_PHONE)
 
+    # Login finds the account through public.employee_tenant_map, so a new employee needs a row there.
+    tenant = db_public.scalar(select(Tenant).where(Tenant.schema_name == actor._tenant_schema))
+    if tenant is None:
+        raise HTTPException(status_code=503, detail="Server unavailable, please retry in a moment")
+    lookup = db_public.scalar(select(EmployeeLookup).where(EmployeeLookup.email == body.email))
+    if lookup is not None and lookup.tenant_id != tenant.id:
+        raise HTTPException(status_code=409, detail=DUPLICATE_EMAIL)
+
     # body.role is a slug string; Employee needs role_id (integer FK)
     data = body.model_dump(exclude={"password", "role", "branch"})
     employee = Employee(
@@ -265,11 +274,20 @@ def create_employee(
     )
     db.add(employee)
     try:
+        if lookup is None:
+            db_public.add(EmployeeLookup(email=body.email, tenant_id=tenant.id))
+            db_public.flush()  # fails here, before the employee is saved, if the address was just taken
         db.commit()
     except IntegrityError as exc:
         db.rollback()
+        db_public.rollback()
         detail = DUPLICATE_PHONE if "phone" in str(exc.orig).lower() else DUPLICATE_EMAIL
         raise HTTPException(status_code=409, detail=detail)
+    except Exception:
+        db.rollback()
+        db_public.rollback()
+        raise
+    db_public.commit()
 
     db.refresh(employee)
 
@@ -400,7 +418,7 @@ def update_employee(
 @router.delete("/{employee_id}", status_code=204, summary="Delete an employee")
 def delete_employee(
     employee_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     actor: Employee = Depends(manage_employees),
 ):
     """Soft delete. The row is kept for history and the employee is deactivated.

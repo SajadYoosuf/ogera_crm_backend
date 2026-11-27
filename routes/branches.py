@@ -17,8 +17,7 @@ ROUTE OVERVIEW:
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from auth import get_current_user
-from database import get_db
+from auth import get_current_user, get_tenant_db
 from models import Employee
 from models.branch import Branch
 from schemas.branch import BranchResponse
@@ -32,7 +31,7 @@ router = APIRouter(
 
 @router.get("", response_model=list[BranchResponse], summary="List active branches")
 def list_branches(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(get_current_user),
 ):
     """
@@ -56,7 +55,7 @@ def list_branches(
 @router.get("/{branch_id}", response_model=BranchResponse, summary="Get a single branch")
 def get_branch(
     branch_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(get_current_user),
 ):
     """

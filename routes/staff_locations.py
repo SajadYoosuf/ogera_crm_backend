@@ -20,8 +20,7 @@ import math
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from auth import get_current_user, require_roles
-from database import get_db
+from auth import get_current_user, get_tenant_db, require_roles
 from models import Employee
 from models.staff_location import StaffLocation
 from models.staff_location_history import StaffLocationHistory
@@ -54,7 +53,7 @@ class LocationUpdateResponse(BaseModel):
     summary="My last known GPS position",
 )
 def get_my_location(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """
@@ -83,7 +82,7 @@ def get_my_location(
 )
 def update_location(
     body: LocationBody,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """
@@ -162,7 +161,7 @@ def _manager(current_user: Employee = Depends(require_roles("admin", "manager"))
 
 
 @router.get("/locations/live", response_model=list[LiveStaffResponse], dependencies=[Depends(_manager)])
-def get_live_staff(db: Session = Depends(get_db)):
+def get_live_staff(db: Session = Depends(get_tenant_db)):
     rows = (
         db.query(StaffLocation, Employee)
         .join(Employee, Employee.id == StaffLocation.employee_id)
@@ -196,7 +195,7 @@ def get_live_staff(db: Session = Depends(get_db)):
 )
 def get_my_location_history(
     date: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """Returns only the signed-in employee's server-accepted route points."""
@@ -225,7 +224,7 @@ def get_my_location_history(
 
 
 @router.get("/locations/history", response_model=RouteResponse, dependencies=[Depends(_manager)])
-def get_staff_history(userId: int, date: str, db: Session = Depends(get_db)):
+def get_staff_history(userId: int, date: str, db: Session = Depends(get_tenant_db)):
     try:
         day = datetime.date.fromisoformat(date)
     except ValueError as error:

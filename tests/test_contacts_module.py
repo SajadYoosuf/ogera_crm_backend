@@ -145,6 +145,13 @@ def _anon_client() -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
+@pytest.fixture(autouse=True)
+def _remove_overrides():
+    """The overrides sit on the shared app, so without this later test files read this module's database."""
+    yield
+    app.dependency_overrides.clear()
+
+
 # Convenience client shortcuts used throughout the tests.
 def _admin():    return _client(1, "admin")
 def _manager():  return _client(2, "manager")

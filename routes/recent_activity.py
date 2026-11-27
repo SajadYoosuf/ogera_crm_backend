@@ -11,8 +11,7 @@ The rules (who sees which events) live in services/recent_activity.py.
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from auth import get_current_user
-from database import get_db
+from auth import get_current_user, get_tenant_db
 from models import Employee
 from schemas.activity_log import RecentActivityItem
 from services.recent_activity import list_recent_activity
@@ -29,7 +28,7 @@ router = APIRouter(
 )
 def get_recent_activity(
     limit: int = Query(20, ge=1, le=50, description="How many events to return (1-50)"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
     """Contact-created and contact-assigned events the signed-in employee may see."""

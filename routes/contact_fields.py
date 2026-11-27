@@ -25,8 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from auth import get_current_user, require_roles
-from database import get_db
+from auth import get_current_user, get_tenant_db, require_roles
 from models import Employee
 from models.contact_field_definition import ContactFieldDefinition
 from schemas.contact_field_definition import (
@@ -55,7 +54,7 @@ router = APIRouter(
     dependencies=[Depends(require_roles("admin"))],
 )
 def list_all_field_definitions(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(get_current_user),
 ):
     """
@@ -73,7 +72,7 @@ def list_all_field_definitions(
 
 @router.get("", response_model=list[ContactFieldDefinitionResponse], summary="List active field definitions")
 def list_field_definitions(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(get_current_user),
 ):
     """
@@ -101,7 +100,7 @@ def list_field_definitions(
 )
 def list_field_definitions_for_entity(
     entity_type: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(get_current_user),
 ):
     """
@@ -135,7 +134,7 @@ def list_field_definitions_for_entity(
 )
 def create_field_definition(
     body: ContactFieldDefinitionCreate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(get_current_user),
 ):
     """
@@ -207,7 +206,7 @@ def create_field_definition(
 def update_field_definition(
     definition_id: int,
     body: ContactFieldDefinitionUpdate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_tenant_db),
     _: Employee = Depends(get_current_user),
 ):
     """
