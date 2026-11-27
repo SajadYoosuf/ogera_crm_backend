@@ -717,24 +717,22 @@ def contact_stats(current_user: Employee = Depends(get_current_user)):
           "unassigned_by_source": {"WhatsApp": 15, "Website": 10, "Walk-in": 17}
         }
     """
-    schema = current_user._tenant_schema
+    db = current_user._db
     try:
-        from database import get_session_for_schema
-        with get_session_for_schema(schema) as db:
-            total = db.scalar(
-                select(func.count(Contact.id)).where(
-                    Contact.deleted_at.is_(None),
-                    Contact.assigned_to.is_(None),
-                )
-            ) or 0
+        total = db.scalar(
+            select(func.count(Contact.id)).where(
+                Contact.deleted_at.is_(None),
+                Contact.assigned_to.is_(None),
+            )
+        ) or 0
 
-            rows = db.execute(
-                select(LeadSource.name, func.count(Contact.id))
-                .join(LeadSource, Contact.lead_source_id == LeadSource.id, isouter=True)
-                .where(Contact.deleted_at.is_(None), Contact.assigned_to.is_(None))
-                .group_by(LeadSource.name)
-            ).all()
-            by_source = {(row[0] or "Unknown"): row[1] for row in rows}
+        rows = db.execute(
+            select(LeadSource.name, func.count(Contact.id))
+            .join(LeadSource, Contact.lead_source_id == LeadSource.id, isouter=True)
+            .where(Contact.deleted_at.is_(None), Contact.assigned_to.is_(None))
+            .group_by(LeadSource.name)
+        ).all()
+        by_source = {(row[0] or "Unknown"): row[1] for row in rows}
     except OperationalError as exc:
         logger.error("contact_stats — DB error: %s", exc)
         raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
@@ -769,42 +767,40 @@ def bulk_assign_contacts(
     Returns the total number of contacts actually assigned (may be less than
     requested when fewer unassigned contacts exist for that source).
     """
-    schema = current_user._tenant_schema
+    db = current_user._db
     try:
-        from database import get_session_for_schema
-        with get_session_for_schema(schema) as db:
-            total_assigned = 0
+        total_assigned = 0
 
-            for rule in body.assignments:
-                query = (
-                    select(Contact.id)
-                    .where(Contact.deleted_at.is_(None), Contact.assigned_to.is_(None))
-                    .order_by(Contact.created_at.asc())
-                    .limit(rule.count)
+        for rule in body.assignments:
+            query = (
+                select(Contact.id)
+                .where(Contact.deleted_at.is_(None), Contact.assigned_to.is_(None))
+                .order_by(Contact.created_at.asc())
+                .limit(rule.count)
+            )
+            if rule.source_id is not None:
+                query = query.where(Contact.lead_source_id == rule.source_id)
+
+            contact_ids = [row[0] for row in db.execute(query).all()]
+            if not contact_ids:
+                continue
+
+            db.execute(
+                sa_update(Contact)
+                .where(Contact.id.in_(contact_ids))
+                .values(
+                    assigned_to=rule.assigned_to,
+                    updated_at=datetime.now(timezone.utc),
                 )
-                if rule.source_id is not None:
-                    query = query.where(Contact.lead_source_id == rule.source_id)
+            )
+            total_assigned += len(contact_ids)
 
-                contact_ids = [row[0] for row in db.execute(query).all()]
-                if not contact_ids:
-                    continue
-
-                db.execute(
-                    sa_update(Contact)
-                    .where(Contact.id.in_(contact_ids))
-                    .values(
-                        assigned_to=rule.assigned_to,
-                        updated_at=datetime.now(timezone.utc),
-                    )
-                )
-                total_assigned += len(contact_ids)
-
-            try:
-                db.commit()
-            except SQLAlchemyError as exc:
-                db.rollback()
-                logger.error("bulk_assign_contacts — commit failed: %s", exc)
-                raise HTTPException(503, detail="Could not save. Please try again.")
+        try:
+            db.commit()
+        except SQLAlchemyError as exc:
+            db.rollback()
+            logger.error("bulk_assign_contacts — commit failed: %s", exc)
+            raise HTTPException(503, detail="Could not save. Please try again.")
 
     except OperationalError as exc:
         logger.error("bulk_assign_contacts — DB error: %s", exc)

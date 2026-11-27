@@ -29,4 +29,5 @@ class LeadStage(Base):
     __table_args__ = (
         Index("idx_lead_stage_log_contact_id", "contact_id"),
         Index("idx_lead_stage_log_stage_id", "stage_id"),
+        Index("idx_lead_stage_log_contact_changed", "contact_id", "changed_at", "id"),
     )

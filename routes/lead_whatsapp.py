@@ -21,7 +21,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from auth import get_current_user
-from database import get_session_for_schema
 from models.employee import Employee
 from models.whatsapp_message import WhatsAppMessage
 import services.lead_service as lead_svc
@@ -49,18 +48,17 @@ def list_messages(
     lead_id: int,
     current_user: Employee = Depends(get_current_user),
 ):
-    schema = current_user._tenant_schema
+    db = current_user._db
     try:
-        with get_session_for_schema(schema) as db:
-            lead = lead_svc.get_lead(db, lead_id)
-            ensure_can_work_lead(current_user, lead)
+        lead = lead_svc.get_lead(db, lead_id)
+        ensure_can_work_lead(current_user, lead)
 
-            rows = db.scalars(
-                select(WhatsAppMessage)
-                .where(WhatsAppMessage.lead_id == lead_id)
-                .order_by(WhatsAppMessage.created_at.asc())
-            ).all()
-            return [_to_dict(r) for r in rows]
+        rows = db.scalars(
+            select(WhatsAppMessage)
+            .where(WhatsAppMessage.lead_id == lead_id)
+            .order_by(WhatsAppMessage.created_at.asc())
+        ).all()
+        return [_to_dict(r) for r in rows]
     except OperationalError as exc:
         logger.error("list_messages — DB error: %s", exc)
         raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
@@ -77,60 +75,59 @@ def send_reply(
     if not WHATSAPP_ACCESS_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
         raise HTTPException(503, detail="WhatsApp is not configured on this server")
 
-    schema = current_user._tenant_schema
+    db = current_user._db
     try:
-        with get_session_for_schema(schema) as db:
-            lead = lead_svc.get_lead(db, lead_id)
-            ensure_can_work_lead(current_user, lead)
+        lead = lead_svc.get_lead(db, lead_id)
+        ensure_can_work_lead(current_user, lead)
 
-            if not lead.phone:
-                raise HTTPException(400, detail="This lead has no phone number")
+        if not lead.phone:
+            raise HTTPException(400, detail="This lead has no phone number")
 
-            phone = lead.phone.lstrip("+")
-            wamid = None
+        phone = lead.phone.lstrip("+")
+        wamid = None
 
-            if body.template_name:
-                payload = _build_template_payload(phone, body.template_name, body.template_params)
-                content_type = "template"
-                content_body = None
-            else:
-                payload = {
-                    "messaging_product": "whatsapp",
-                    "to": phone,
-                    "type": "text",
-                    "text": {"body": body.message},
-                }
-                content_type = "text"
-                content_body = body.message
+        if body.template_name:
+            payload = _build_template_payload(phone, body.template_name, body.template_params)
+            content_type = "template"
+            content_body = None
+        else:
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": phone,
+                "type": "text",
+                "text": {"body": body.message},
+            }
+            content_type = "text"
+            content_body = body.message
 
-            # Send to Meta
-            try:
-                resp = httpx.post(
-                    f"{WHATSAPP_API_URL}/{WHATSAPP_PHONE_NUMBER_ID}/messages",
-                    headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
-                    json=payload,
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                wamid = resp.json().get("messages", [{}])[0].get("id")
-            except Exception as exc:
-                logger.error("WhatsApp send failed: %s", exc)
-                raise HTTPException(502, detail=f"WhatsApp API error: {exc}")
-
-            msg = WhatsAppMessage(
-                lead_id=lead_id,
-                direction="out",
-                wamid=wamid,
-                content_type=content_type,
-                body=content_body,
-                template_name=body.template_name,
-                sent_by=current_user.id,
-                status="sent",
+        # Send to Meta
+        try:
+            resp = httpx.post(
+                f"{WHATSAPP_API_URL}/{WHATSAPP_PHONE_NUMBER_ID}/messages",
+                headers={"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"},
+                json=payload,
+                timeout=10,
             )
-            db.add(msg)
-            db.commit()
-            db.refresh(msg)
-            return _to_dict(msg)
+            resp.raise_for_status()
+            wamid = resp.json().get("messages", [{}])[0].get("id")
+        except Exception as exc:
+            logger.error("WhatsApp send failed: %s", exc)
+            raise HTTPException(502, detail=f"WhatsApp API error: {exc}")
+
+        msg = WhatsAppMessage(
+            lead_id=lead_id,
+            direction="out",
+            wamid=wamid,
+            content_type=content_type,
+            body=content_body,
+            template_name=body.template_name,
+            sent_by=current_user.id,
+            status="sent",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+        return _to_dict(msg)
     except OperationalError as exc:
         logger.error("send_reply — DB error: %s", exc)
         raise HTTPException(503, detail="Server unavailable, please retry in a moment.")

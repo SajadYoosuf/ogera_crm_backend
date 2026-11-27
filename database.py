@@ -195,6 +195,7 @@ def get_session_for_schema(schema: str):
             # reaches the database before the response, not after it.
             conn.commit()
         with Session(bind=conn, expire_on_commit=False) as db:
+            db.info["_tenant_schema"] = schema
             yield db
         # db.commit() inside the route flushes changes to the connection but does NOT
         # commit the connection's own transaction. conn.commit() here does that.

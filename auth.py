@@ -61,9 +61,12 @@ def create_access_token(
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def get_current_user(credentials=Depends(security)) -> Employee:
+def get_current_user(credentials=Depends(security)):
     """
-    FastAPI dependency — decode JWT and return the authenticated employee.
+    FastAPI dependency — decode JWT and yield the authenticated employee.
+
+    Keeps the tenant DB session open for the full request lifetime so routes
+    that call get_tenant_db reuse the same connection (zero extra round-trips).
 
     Raises 401 if the token is missing, invalid, or the password changed.
     Raises 403 if the account is deactivated.
@@ -102,53 +105,51 @@ def get_current_user(credentials=Depends(security)) -> Employee:
                 role = db.scalar(select(Role).where(Role.id == employee.role_id))
                 role_slug = role.slug if role else None
                 role_permissions = dict(role.permissions or {}) if role else {}
+
+            if employee is None or employee.deleted_at is not None:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+            if not employee.is_active:
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN,
+                    detail="Your account has been deactivated. Please contact your administrator.",
+                )
+
+            current_phf = _password_fingerprint(employee.password_hash)
+            if not token_phf or token_phf != current_phf:
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED,
+                    detail="Your login has expired. Please log in again to continue.",
+                )
+
+            # Attach transient attributes. object.__setattr__ is used because SQLModel
+            # raises ValueError when you set an attribute that is not a declared field.
+            object.__setattr__(employee, "_tenant_schema", tenant_schema)
+            object.__setattr__(employee, "_role_slug", role_slug)
+            # services/permissions.can() reads this: {"integrations": "ru", ...} from the role row.
+            object.__setattr__(employee, "_permissions", role_permissions)
+            object.__setattr__(employee, "role_slug", role_slug)
+            object.__setattr__(employee, "_db", db)
+
+            yield employee
+
     except OperationalError as exc:
         logger.error("TOKEN — DB error: %s", exc)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail="Database unavailable, please retry in a moment")
-
-    if employee is None or employee.deleted_at is not None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-
-    if not employee.is_active:
-        raise HTTPException(status.HTTP_403_FORBIDDEN,
-                            detail="Your account has been deactivated. Please contact your administrator.")
-
-    current_phf = _password_fingerprint(employee.password_hash)
-    if not token_phf or token_phf != current_phf:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
-                            detail="Your login has expired. Please log in again to continue.")
-
-    # Attach transient attributes. object.__setattr__ is used because SQLModel
-    # raises ValueError when you set an attribute that is not a declared field.
-    object.__setattr__(employee, "_tenant_schema", tenant_schema)
-    object.__setattr__(employee, "_role_slug", role_slug)
-    # services/permissions.can() reads this: {"integrations": "ru", ...} from the role row.
-    object.__setattr__(employee, "_permissions", role_permissions)
-    object.__setattr__(employee, "role_slug", role_slug)
-
-    return employee
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable, please retry in a moment",
+        )
 
 
 def get_tenant_db(current_user: Employee = Depends(get_current_user)):
     """
-    FastAPI dependency — yields a DB Session scoped to the authenticated employee's tenant schema.
+    FastAPI dependency — yields the DB Session already opened by get_current_user.
 
-    Usage in a route:
-        db: Session = Depends(get_tenant_db)
-
-    How it works:
-        1. get_current_user (above) decodes the JWT, reads tenant from the "tenant" claim
-           (e.g. "ventino"), and attaches _tenant_schema to the returned Employee object.
-        2. This dependency opens a connection and runs SET search_path TO ventino so every
-           SQL query in the request automatically hits ventino.contacts, ventino.branches, etc.
-
-    Why not get_db():
-        get_db() opens a plain session with NO search_path override — it queries the DB
-        user's default schema (usually public), which does NOT have contacts or branches.
+    get_current_user (a generator dependency) keeps the tenant session open for the
+    entire request lifetime. This function simply passes through that session so
+    routes can depend on get_tenant_db without opening a second connection.
     """
-    with get_session_for_schema(current_user._tenant_schema) as db:
-        yield db
+    yield current_user._db
 
 
 # Roles that can manage employees, settings, and other admin tasks.

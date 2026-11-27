@@ -22,7 +22,6 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
 from auth import get_current_user, require_roles
-from database import get_session_for_schema
 from models.employee import Employee
 from models.lead import Lead
 from models.lead_status import LeadStatus
@@ -74,13 +73,12 @@ class StatusUpdate(BaseModel):
 
 @router.get("", summary="List lead statuses")
 def list_statuses(current_user: Employee = Depends(get_current_user)):
-    schema = current_user._tenant_schema
+    db = current_user._db
     try:
-        with get_session_for_schema(schema) as db:
-            rows = db.scalars(
-                select(LeadStatus).order_by(LeadStatus.sort_order, LeadStatus.id)
-            ).all()
-            return [_to_dict(r) for r in rows]
+        rows = db.scalars(
+            select(LeadStatus).order_by(LeadStatus.sort_order, LeadStatus.id)
+        ).all()
+        return [_to_dict(r) for r in rows]
     except OperationalError as exc:
         logger.error("list_statuses — DB error: %s", exc)
         raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
@@ -91,29 +89,28 @@ def create_status(
     body: StatusCreate,
     current_user: Employee = Depends(require_roles("admin")),
 ):
-    schema = current_user._tenant_schema
+    db = current_user._db
     try:
-        with get_session_for_schema(schema) as db:
-            # Max 20 active
-            active_count = db.scalar(
-                select(func.count()).select_from(LeadStatus).where(LeadStatus.is_active == True)  # noqa: E712
-            ) or 0
-            if active_count >= MAX_ACTIVE:
-                raise HTTPException(400, detail=f"Maximum {MAX_ACTIVE} active lead statuses allowed")
+        # Max 20 active
+        active_count = db.scalar(
+            select(func.count()).select_from(LeadStatus).where(LeadStatus.is_active == True)  # noqa: E712
+        ) or 0
+        if active_count >= MAX_ACTIVE:
+            raise HTTPException(400, detail=f"Maximum {MAX_ACTIVE} active lead statuses allowed")
 
-            slug = _checked_slug(body.name)
-            # Case-insensitive unique check
-            existing = db.scalar(
-                select(LeadStatus).where(func.lower(LeadStatus.slug) == slug.lower())
-            )
-            if existing:
-                raise HTTPException(409, detail=f"A status with the name '{body.name}' already exists")
+        slug = _checked_slug(body.name)
+        # Case-insensitive unique check
+        existing = db.scalar(
+            select(LeadStatus).where(func.lower(LeadStatus.slug) == slug.lower())
+        )
+        if existing:
+            raise HTTPException(409, detail=f"A status with the name '{body.name}' already exists")
 
-            row = LeadStatus(slug=slug, name=body.name.strip(), sort_order=body.sort_order)
-            db.add(row)
-            db.commit()
-            db.refresh(row)
-            return _to_dict(row)
+        row = LeadStatus(slug=slug, name=body.name.strip(), sort_order=body.sort_order)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return _to_dict(row)
     except OperationalError as exc:
         logger.error("create_status — DB error: %s", exc)
         raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
@@ -125,44 +122,43 @@ def update_status(
     body: StatusUpdate,
     current_user: Employee = Depends(require_roles("admin")),
 ):
-    schema = current_user._tenant_schema
+    db = current_user._db
     try:
-        with get_session_for_schema(schema) as db:
-            row = db.scalar(select(LeadStatus).where(LeadStatus.id == status_id))
-            if not row:
-                raise HTTPException(404, detail="Status not found")
-            if body.name is not None:
-                name = body.name.strip()
-                if not name:
-                    raise HTTPException(422, detail="Name must not be empty")
-                new_slug = _checked_slug(name)
-                # Check uniqueness if slug would change
-                if new_slug != row.slug:
-                    conflict = db.scalar(
-                        select(LeadStatus)
-                        .where(func.lower(LeadStatus.slug) == new_slug.lower())
-                        .where(LeadStatus.id != status_id)
-                    )
-                    if conflict:
-                        raise HTTPException(409, detail=f"A status with the name '{name}' already exists")
-                    if row.slug not in LOCKED_SLUGS:
-                        row.slug = new_slug
-                row.name = name
-            if body.sort_order is not None:
-                row.sort_order = body.sort_order
-            if body.is_active is not None:
-                if not body.is_active and row.slug in LOCKED_SLUGS:
-                    raise HTTPException(400, detail=f"The '{row.slug}' status cannot be deactivated")
-                if body.is_active and not row.is_active:
-                    active_count = db.scalar(
-                        select(func.count()).select_from(LeadStatus).where(LeadStatus.is_active == True)  # noqa: E712
-                    ) or 0
-                    if active_count >= MAX_ACTIVE:
-                        raise HTTPException(400, detail=f"Maximum {MAX_ACTIVE} active lead statuses allowed")
-                row.is_active = body.is_active
-            db.commit()
-            db.refresh(row)
-            return _to_dict(row)
+        row = db.scalar(select(LeadStatus).where(LeadStatus.id == status_id))
+        if not row:
+            raise HTTPException(404, detail="Status not found")
+        if body.name is not None:
+            name = body.name.strip()
+            if not name:
+                raise HTTPException(422, detail="Name must not be empty")
+            new_slug = _checked_slug(name)
+            # Check uniqueness if slug would change
+            if new_slug != row.slug:
+                conflict = db.scalar(
+                    select(LeadStatus)
+                    .where(func.lower(LeadStatus.slug) == new_slug.lower())
+                    .where(LeadStatus.id != status_id)
+                )
+                if conflict:
+                    raise HTTPException(409, detail=f"A status with the name '{name}' already exists")
+                if row.slug not in LOCKED_SLUGS:
+                    row.slug = new_slug
+            row.name = name
+        if body.sort_order is not None:
+            row.sort_order = body.sort_order
+        if body.is_active is not None:
+            if not body.is_active and row.slug in LOCKED_SLUGS:
+                raise HTTPException(400, detail=f"The '{row.slug}' status cannot be deactivated")
+            if body.is_active and not row.is_active:
+                active_count = db.scalar(
+                    select(func.count()).select_from(LeadStatus).where(LeadStatus.is_active == True)  # noqa: E712
+                ) or 0
+                if active_count >= MAX_ACTIVE:
+                    raise HTTPException(400, detail=f"Maximum {MAX_ACTIVE} active lead statuses allowed")
+            row.is_active = body.is_active
+        db.commit()
+        db.refresh(row)
+        return _to_dict(row)
     except OperationalError as exc:
         logger.error("update_status — DB error: %s", exc)
         raise HTTPException(503, detail="Server unavailable, please retry in a moment.")
@@ -173,24 +169,23 @@ def delete_status(
     status_id: int,
     current_user: Employee = Depends(require_roles("admin")),
 ):
-    schema = current_user._tenant_schema
+    db = current_user._db
     try:
-        with get_session_for_schema(schema) as db:
-            row = db.scalar(select(LeadStatus).where(LeadStatus.id == status_id))
-            if not row:
-                raise HTTPException(404, detail="Status not found")
-            if row.slug in LOCKED_SLUGS:
-                raise HTTPException(400, detail=f"The '{row.slug}' status cannot be deleted")
-            # 409 if in use
-            in_use = db.scalar(
-                select(func.count()).select_from(Lead)
-                .where(Lead.status == row.slug)
-                .where(Lead.deleted_at.is_(None))
-            ) or 0
-            if in_use:
-                raise HTTPException(409, detail=f"{in_use} lead(s) are using this status. Reassign them first.")
-            db.delete(row)
-            db.commit()
+        row = db.scalar(select(LeadStatus).where(LeadStatus.id == status_id))
+        if not row:
+            raise HTTPException(404, detail="Status not found")
+        if row.slug in LOCKED_SLUGS:
+            raise HTTPException(400, detail=f"The '{row.slug}' status cannot be deleted")
+        # 409 if in use
+        in_use = db.scalar(
+            select(func.count()).select_from(Lead)
+            .where(Lead.status == row.slug)
+            .where(Lead.deleted_at.is_(None))
+        ) or 0
+        if in_use:
+            raise HTTPException(409, detail=f"{in_use} lead(s) are using this status. Reassign them first.")
+        db.delete(row)
+        db.commit()
     except OperationalError as exc:
         logger.error("delete_status — DB error: %s", exc)
         raise HTTPException(503, detail="Server unavailable, please retry in a moment.")

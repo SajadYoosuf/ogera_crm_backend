@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import BackgroundTasks
 from sqlalchemy import and_, event, func as sqlfunc, or_, select
 from sqlalchemy.orm import Session
-from database import SessionLocal
+from database import SessionLocal, get_session_for_schema
 from models.notification import Notification
 from models.employee import Employee
 from models.role import Role
@@ -145,6 +145,10 @@ def create_notification(
         )
         db.add(notif)
 
+        # Read the tenant schema stored by get_session_for_schema so FCM can open
+        # its own schema-scoped session after the HTTP response is sent.
+        tenant_schema: str | None = db.info.get("_tenant_schema")
+
         if background_tasks is not None:
             background_tasks.add_task(
                 dispatch_notification_push,
@@ -154,10 +158,11 @@ def create_notification(
                 message,
                 entity_type,
                 entity_id,
+                tenant_schema,
             )
         else:
             db.info.setdefault(PENDING_PUSHES_KEY, []).append(
-                (recipient_id, notif_type, title, message, entity_type, entity_id)
+                (recipient_id, notif_type, title, message, entity_type, entity_id, tenant_schema)
             )
         return notif
     except Exception as exc:
@@ -172,23 +177,28 @@ def dispatch_notification_push(
     message: str,
     entity_type: str | None = None,
     entity_id: int | None = None,
+    tenant_schema: str | None = None,
 ) -> None:
     """Send FCM after commit without holding a database transaction during I/O."""
-    db = SessionLocal()
+    if not tenant_schema:
+        logger.warning("FCM skipped for recipient_id=%s: no tenant_schema provided", recipient_id)
+        return
+    from firebase_init import is_ready
+    if not is_ready():
+        return
+
     try:
-        recipient = db.get(Employee, recipient_id)
-        devices = db.query(FcmDevice).filter(
-            FcmDevice.employee_id == recipient_id
-        ).all()
-        tokens = {device.token for device in devices}
-        if recipient and recipient.fcm_token:
-            tokens.add(recipient.fcm_token)
+        with get_session_for_schema(tenant_schema) as db:
+            recipient = db.get(Employee, recipient_id)
+            devices = db.query(FcmDevice).filter(
+                FcmDevice.employee_id == recipient_id
+            ).all()
+            tokens = {device.token for device in devices}
+            if recipient and recipient.fcm_token:
+                tokens.add(recipient.fcm_token)
     except Exception as exc:
-        db.rollback()
         logger.error("FCM recipient lookup failed for recipient_id=%s: %s", recipient_id, exc)
         return
-    finally:
-        db.close()
 
     payload = {
         "type": notif_type,
@@ -206,16 +216,13 @@ def dispatch_notification_push(
         )
 
     if invalid_tokens:
-        cleanup_db = SessionLocal()
         try:
-            for token in invalid_tokens:
-                _remove_invalid_token(cleanup_db, token)
-            cleanup_db.commit()
+            with get_session_for_schema(tenant_schema) as cleanup_db:
+                for token in invalid_tokens:
+                    _remove_invalid_token(cleanup_db, token)
+                cleanup_db.commit()
         except Exception as exc:
-            cleanup_db.rollback()
             logger.error("Invalid FCM token cleanup failed: %s", exc)
-        finally:
-            cleanup_db.close()
 
 
 PENDING_PUSHES_KEY = "pending_pushes"

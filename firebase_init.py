@@ -43,6 +43,14 @@ def init_firebase() -> None:
             cred = credentials.Certificate(json.loads(raw))
         else:
             # Option A: value is a file path
+            if not os.path.exists(raw):
+                logger.warning(
+                    "FIREBASE_SERVICE_ACCOUNT_JSON looks like a file path but the file does not "
+                    "exist on this host: %s — FCM push notifications disabled. "
+                    "On cloud deployments, set the variable to the JSON contents directly (Option B).",
+                    raw,
+                )
+                return
             cred = credentials.Certificate(raw)
         firebase_admin.initialize_app(cred)
         _firebase_ready = True

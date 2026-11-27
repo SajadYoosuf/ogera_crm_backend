@@ -64,4 +64,6 @@ class Interaction(Base):
         Index("idx_interactions_assigned", "assigned_to"),
         Index("idx_interactions_kind", "kind"),
         Index("idx_interactions_status", "status"),
+        Index("idx_interactions_kind_done_by_at", "kind", "done_by", "logged_at"),
+        Index("idx_interactions_kind_assigned_due", "kind", "assigned_to", "due_at"),
     )

@@ -24,4 +24,5 @@ class RecordLog(Base):
 
     __table_args__ = (
         Index("idx_record_logs_entity", "entity_type", "entity_id", "created_at"),
+        Index("idx_record_logs_action_actor", "entity_type", "action", "actor_id", "created_at"),
     )
