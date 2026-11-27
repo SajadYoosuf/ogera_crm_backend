@@ -98,16 +98,16 @@ def get_current_user(credentials=Depends(security)):
 
     try:
         with get_session_for_schema(tenant_schema) as db:
-            employee = db.scalar(select(Employee).where(Employee.id == employee_id))
-            role_slug: Optional[str] = None
-            role_permissions: dict = {}
-            if employee:
-                role = db.scalar(select(Role).where(Role.id == employee.role_id))
-                role_slug = role.slug if role else None
-                role_permissions = dict(role.permissions or {}) if role else {}
-
-            if employee is None or employee.deleted_at is not None:
+            row = db.execute(
+                select(Employee, Role.slug.label("role_slug"), Role.permissions.label("role_permissions"))
+                .outerjoin(Role, Role.id == Employee.role_id)
+                .where(Employee.id == employee_id)
+            ).first()
+            if row is None or row.Employee.deleted_at is not None:
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            employee = row.Employee
+            role_slug: Optional[str] = row.role_slug
+            role_permissions: dict = dict(row.role_permissions or {}) if row.role_permissions else {}
 
             if not employee.is_active:
                 raise HTTPException(

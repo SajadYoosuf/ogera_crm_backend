@@ -231,15 +231,20 @@ def _followups(db: Session, employee_id: int | None, period: Period) -> dict:
     if employee_id is not None:
         base.append(Interaction.assigned_to == employee_id)
 
-    def count(*extra) -> int:
-        return db.scalar(select(func.count(Interaction.id)).where(*base, *extra)) or 0
-
     done = [*_activity_in(db, period), Interaction.parent_task_id.is_not(None),
             _on_live_record(Interaction.entity_type, Interaction.entity_id)]
     if employee_id is not None:
         done.append(Interaction.done_by == employee_id)
 
     due_now = or_(conditions["overdue"], conditions["today"])
+    cnt = db.execute(
+        select(
+            func.count(Interaction.id).filter(conditions["overdue"]).label("overdue"),
+            func.count(Interaction.id).filter(conditions["today"]).label("today"),
+            func.count(Interaction.id).filter(conditions["upcoming"]).label("upcoming"),
+            func.count(Interaction.id).filter(due_now).label("due_total"),
+        ).where(*base)
+    ).one()
     rows = db.scalars(
         select(Interaction).where(*base, due_now)
         .order_by(Interaction.due_at.asc(), Interaction.id.asc()).limit(QUEUE_LIMIT)
@@ -259,13 +264,13 @@ def _followups(db: Session, employee_id: int | None, period: Period) -> dict:
         })
 
     return {
-        "overdue": count(conditions["overdue"]),
-        "today": count(conditions["today"]),
-        "upcoming": count(conditions["upcoming"]),
+        "overdue": cnt.overdue or 0,
+        "today": cnt.today or 0,
+        "upcoming": cnt.upcoming or 0,
         "completed_in_period": db.scalar(
             select(func.count(func.distinct(Interaction.parent_task_id))).where(*done)
         ) or 0,
-        "due_total": count(due_now),
+        "due_total": cnt.due_total or 0,
         "queue": queue,
     }
 
@@ -307,14 +312,34 @@ def _leads(db: Session, employee_id: int | None, period: Period) -> dict:
     created = [*live, Lead.created_at >= period.start, Lead.created_at < period.end]
     is_converted = or_(Lead.status == "converted", Lead.converted_at.is_not(None))
 
-    def count(*conditions) -> int:
-        return db.scalar(select(func.count(Lead.id)).where(*conditions)) or 0
+    _contacted = select(Interaction.entity_id).where(
+        Interaction.entity_type == "lead", Interaction.kind == "log"
+    )
+    _lead_selects = [
+        func.count(Lead.id).filter(_open_lead()).label("open"),
+        func.count(Lead.id).filter(
+            and_(Lead.created_at >= period.start, Lead.created_at < period.end)
+        ).label("new_in_period"),
+        func.count(Lead.id).filter(
+            and_(Lead.created_at >= period.start, Lead.created_at < period.end, is_converted)
+        ).label("cohort_converted"),
+        func.count(Lead.id).filter(
+            and_(_open_lead(), Lead.id.notin_(_contacted))
+        ).label("uncontacted"),
+    ]
+    if employee_id is None:
+        _lead_selects.append(
+            func.count(Lead.id).filter(
+                and_(Lead.converted_at >= period.start, Lead.converted_at < period.end)
+            ).label("converted_in_period")
+        )
+    lcnt = db.execute(select(*_lead_selects).where(*live)).one()
 
-    new_in_period = count(*created)
-    cohort_converted = count(*created, is_converted)
+    new_in_period = lcnt.new_in_period or 0
+    cohort_converted = lcnt.cohort_converted or 0
 
     if employee_id is None:
-        converted_in_period = count(*live, Lead.converted_at >= period.start, Lead.converted_at < period.end)
+        converted_in_period = lcnt.converted_in_period or 0
     else:
         converted_in_period = db.scalar(
             select(func.count(func.distinct(RecordLog.entity_id))).where(*_conversion_logs(employee_id, period))
@@ -373,7 +398,7 @@ def _leads(db: Session, employee_id: int | None, period: Period) -> dict:
 
     uncontacted = _uncontacted(employee_id)
     return {
-        "open": count(*live, _open_lead()),
+        "open": lcnt.open or 0,
         "new_in_period": new_in_period,
         "converted_in_period": converted_in_period,
         "cohort_converted": cohort_converted,
@@ -382,7 +407,7 @@ def _leads(db: Session, employee_id: int | None, period: Period) -> dict:
         "by_source": by_source,
         "trend": trend,
         "trend_days_per_point": size,
-        "uncontacted": count(*uncontacted),
+        "uncontacted": lcnt.uncontacted or 0,
         "uncontacted_items": _lead_items(db, uncontacted, (Lead.created_at.asc(), Lead.id.asc())),
     }
 
@@ -511,8 +536,11 @@ def _contacts(db: Session, employee_id: int | None, period: Period) -> dict:
             ),
         )
     )
-    needs_total = db.scalar(select(func.count()).select_from(needs_action.subquery())) or 0
-    needs_rows = db.execute(needs_action.order_by(Contact.created_at.asc(), Contact.id.asc()).limit(LIST_LIMIT)).all()
+    _needs = needs_action.add_columns(func.count().over().label("_total"))
+    needs_rows = db.execute(
+        _needs.order_by(Contact.created_at.asc(), Contact.id.asc()).limit(LIST_LIMIT)
+    ).all()
+    needs_total = needs_rows[0]._total if needs_rows else 0
 
     labels = _enum_labels(db, "loss_reason")
     loss_rows = db.execute(
@@ -652,11 +680,22 @@ def _team(db: Session, employee_id: int | None, period: Period) -> list[dict]:
 
     live_interaction = _on_live_record(Interaction.entity_type, Interaction.entity_id)
     open_leads = grouped(Lead.assigned_to, Lead.id, Lead.deleted_at.is_(None), _open_lead())
-    activities = grouped(Interaction.done_by, Interaction.id, live_interaction, *_activity_in(db, period))
-    calls = grouped(Interaction.done_by, Interaction.id, live_interaction, *_activity_in(db, period),
-                    Interaction.activity_type.in_(CALL_TYPES))
-    completed = grouped(Interaction.done_by, func.distinct(Interaction.parent_task_id), live_interaction,
-                        *_activity_in(db, period), Interaction.parent_task_id.is_not(None))
+    _team_act = db.execute(
+        select(
+            Interaction.done_by,
+            func.count(Interaction.id).label("activities"),
+            func.count(Interaction.id).filter(
+                Interaction.activity_type.in_(CALL_TYPES)
+            ).label("calls"),
+            func.count(func.distinct(Interaction.parent_task_id)).filter(
+                Interaction.parent_task_id.is_not(None)
+            ).label("completed"),
+        ).where(live_interaction, *_activity_in(db, period))
+        .group_by(Interaction.done_by)
+    ).all()
+    activities = {r.done_by: r.activities for r in _team_act}
+    calls = {r.done_by: r.calls for r in _team_act}
+    completed = {r.done_by: r.completed for r in _team_act}
     overdue = grouped(Interaction.assigned_to, Interaction.id, live_interaction, Interaction.kind == "task",
                       _conditions(db)["overdue"])
     converted = grouped(
@@ -709,15 +748,19 @@ def _whatsapp_messages(db: Session, employee_id: int | None, period: Period) -> 
     ]
     if employee_id is not None:
         sent.append(WhatsAppMessage.sent_by == employee_id)
+    wa_cnt = db.execute(
+        select(
+            func.count(func.distinct(WhatsAppMessage.lead_id)).filter(and_(*unread)).label("unread_conversations"),
+            func.count(WhatsAppMessage.id).filter(and_(*sent)).label("sent_in_period"),
+        ).select_from(WhatsAppMessage)
+    ).one()
     return {
-        "unread_conversations": db.scalar(
-            select(func.count(func.distinct(WhatsAppMessage.lead_id))).where(*unread)
-        ) or 0,
+        "unread_conversations": wa_cnt.unread_conversations or 0,
         "unread_items": [
             {"lead_id": lead_id, "name": records[("lead", lead_id)][0], "unread": total, "last_at": _iso(last)}
             for lead_id, total, last in rows
         ],
-        "sent_in_period": db.scalar(select(func.count(WhatsAppMessage.id)).where(*sent)) or 0,
+        "sent_in_period": wa_cnt.sent_in_period or 0,
     }
 
 
