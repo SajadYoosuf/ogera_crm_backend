@@ -66,9 +66,36 @@ def app():
     return main.app
 
 
+class _V1Client:
+    """Wraps TestClient and prepends /api/v1 to every path so tests stay short."""
+
+    _PREFIX = "/api/v1"
+
+    def __init__(self, app):
+        self._c = TestClient(app)
+
+    def _url(self, path: str) -> str:
+        return self._PREFIX + path
+
+    def get(self, path, **kwargs):
+        return self._c.get(self._url(path), **kwargs)
+
+    def post(self, path, **kwargs):
+        return self._c.post(self._url(path), **kwargs)
+
+    def put(self, path, **kwargs):
+        return self._c.put(self._url(path), **kwargs)
+
+    def patch(self, path, **kwargs):
+        return self._c.patch(self._url(path), **kwargs)
+
+    def delete(self, path, **kwargs):
+        return self._c.delete(self._url(path), **kwargs)
+
+
 @pytest.fixture()
 def client(app):
-    return TestClient(app)
+    return _V1Client(app)
 
 
 @pytest.fixture()

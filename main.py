@@ -44,7 +44,14 @@ async def lifespan(_app: FastAPI):
     logger.info("FastAPI is shutting down...")
 
 
-app = FastAPI(title="Ogera CRM API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Ogera CRM API",
+    version="1.0.0",
+    lifespan=lifespan,
+    openapi_url="/api/v1/openapi.json",
+    docs_url="/api/v1/docs",
+    redoc_url="/api/v1/redoc",
+)
 
 
 def _friendly_validation_message(error: dict) -> str:
@@ -175,35 +182,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(auth_router)
-app.include_router(password_reset_router)
-app.include_router(recent_activity_router)
-app.include_router(contacts_router)
-app.include_router(contact_interactions_router)
-app.include_router(employees_router)
-app.include_router(lead_sources_router)
-app.include_router(pipeline_router)
-app.include_router(roles_router)
-app.include_router(settings_router)
-app.include_router(notifications_router)
-app.include_router(staff_locations_router)
-app.include_router(diagnostics_router)
-app.include_router(leads_router)
-app.include_router(lead_interactions_router)
-app.include_router(lead_statuses_router)
-app.include_router(lead_whatsapp_router)
-app.include_router(lead_tasks_router)
-app.include_router(lead_inbound_router)
-app.include_router(webhooks_router)
-app.include_router(api_keys_router)
-app.include_router(branches_router)
-app.include_router(contact_fields_router)
-app.include_router(followup_settings_router)
-app.include_router(whatsapp_inbox_router)
-app.include_router(whatsapp_config_router)
-app.include_router(whatsapp_templates_router)
-app.include_router(dashboard_router)
+# Include routers — all under /api/v1
+_V1 = "/api/v1"
+app.include_router(auth_router, prefix=_V1)
+app.include_router(password_reset_router, prefix=_V1)
+app.include_router(recent_activity_router, prefix=_V1)
+app.include_router(contacts_router, prefix=_V1)
+app.include_router(contact_interactions_router, prefix=_V1)
+app.include_router(employees_router, prefix=_V1)
+app.include_router(lead_sources_router, prefix=_V1)
+app.include_router(pipeline_router, prefix=_V1)
+app.include_router(roles_router, prefix=_V1)
+app.include_router(settings_router, prefix=_V1)
+app.include_router(notifications_router, prefix=_V1)
+app.include_router(staff_locations_router, prefix=_V1)
+app.include_router(diagnostics_router, prefix=_V1)
+app.include_router(leads_router, prefix=_V1)
+app.include_router(lead_interactions_router, prefix=_V1)
+app.include_router(lead_statuses_router, prefix=_V1)
+app.include_router(lead_whatsapp_router, prefix=_V1)
+app.include_router(lead_tasks_router, prefix=_V1)
+app.include_router(lead_inbound_router, prefix=_V1)
+app.include_router(webhooks_router, prefix=_V1)
+app.include_router(api_keys_router, prefix=_V1)
+app.include_router(branches_router, prefix=_V1)
+app.include_router(contact_fields_router, prefix=_V1)
+app.include_router(followup_settings_router, prefix=_V1)
+app.include_router(whatsapp_inbox_router, prefix=_V1)
+app.include_router(whatsapp_config_router, prefix=_V1)
+app.include_router(whatsapp_templates_router, prefix=_V1)
+app.include_router(dashboard_router, prefix=_V1)
 
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
