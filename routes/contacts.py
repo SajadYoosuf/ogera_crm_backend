@@ -688,8 +688,15 @@ def contact_type_counts(
     db: Session = Depends(get_tenant_db),
     current_user: Employee = Depends(get_current_user),
 ):
-    """A live count of the contacts per type (consumer, partner), for the tab badges."""
+    """
+    A live count of the contacts per type (consumer, partner), for the tab badges.
+
+    Uses the same ownership scope as GET /contacts: non-head staff only count contacts
+    assigned to or created by them, so the tab numbers match what the list can show.
+    """
     q = db.query(Contact.contact_type, func.count(Contact.id)).filter(Contact.deleted_at.is_(None))
+    if not is_head(current_user):
+        q = q.filter(or_(Contact.assigned_to == current_user.id, Contact.created_by == current_user.id))
     rows = q.group_by(Contact.contact_type).all()
     counts = {"consumer": 0, "partner": 0}
     for kind, total in rows:
